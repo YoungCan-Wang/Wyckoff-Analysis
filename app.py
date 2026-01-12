@@ -18,6 +18,26 @@ st.set_page_config(
     layout="wide"
 )
 
+# Initialize session state for search history
+if "search_history" not in st.session_state:
+    st.session_state.search_history = []
+if "current_symbol" not in st.session_state:
+    st.session_state.current_symbol = "300364"
+if "should_run" not in st.session_state:
+    st.session_state.should_run = False
+
+def add_to_history(symbol, name):
+    item = {"symbol": symbol, "name": name}
+    # Remove if exists to move to top
+    st.session_state.search_history = [x for x in st.session_state.search_history if x["symbol"] != symbol]
+    st.session_state.search_history.insert(0, item)
+    # Keep only last 10
+    st.session_state.search_history = st.session_state.search_history[:10]
+
+def set_symbol_from_history(symbol):
+    st.session_state.current_symbol = symbol
+    st.session_state.should_run = True
+
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 
@@ -27,8 +47,9 @@ with st.sidebar:
     
     symbol_input = st.text_input(
         "股票代码 (必填)",
-        value="300364",
-        help="请输入 6 位股票代码，例如 300364"
+        value=st.session_state.current_symbol,
+        help="请输入 6 位股票代码，例如 300364",
+        key="symbol_input_widget"
     )
     
     symbol_name_input = st.text_input(
@@ -62,13 +83,30 @@ with st.sidebar:
 
     run_btn = st.button("🚀 开始获取数据", type="primary")
 
+    if st.session_state.search_history:
+        st.markdown("---")
+        st.header("🕒 搜索历史")
+        for item in st.session_state.search_history:
+            label = f"{item['symbol']} {item['name']}"
+            if st.button(label, key=f"hist_{item['symbol']}", use_container_width=True):
+                set_symbol_from_history(item['symbol'])
+                st.rerun()
+
+# Sync widget value back to session state if changed manually
+if symbol_input != st.session_state.current_symbol:
+    st.session_state.current_symbol = symbol_input
+
 # Main content
-if run_btn:
-    if not symbol_input or not symbol_input.isdigit() or len(symbol_input) != 6:
+if run_btn or st.session_state.should_run:
+    # Reset trigger
+    if st.session_state.should_run:
+        st.session_state.should_run = False
+        
+    if not st.session_state.current_symbol or not st.session_state.current_symbol.isdigit() or len(st.session_state.current_symbol) != 6:
         st.error("请输入有效的 6 位数字股票代码！")
     else:
         try:
-            with st.spinner(f"正在获取 {symbol_input} 的数据..."):
+            with st.spinner(f"正在获取 {st.session_state.current_symbol} 的数据..."):
                 # 1. Resolve trading window
                 end_calendar = date.today() - timedelta(days=int(end_offset))
                 window = _resolve_trading_window(end_calendar, int(trading_days))
@@ -76,20 +114,23 @@ if run_btn:
                 # 2. Get name if not provided
                 if not symbol_name_input:
                     try:
-                        name = _stock_name_from_code(symbol_input)
+                        name = _stock_name_from_code(st.session_state.current_symbol)
                     except Exception as e:
                         st.warning(f"无法自动获取名称: {e}")
                         name = "Unknown"
                 else:
                     name = symbol_name_input
                 
-                st.info(f"股票: **{symbol_input} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
+                # Add to history
+                add_to_history(st.session_state.current_symbol, name)
+                
+                st.info(f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
 
                 # 3. Fetch data
-                df_hist = _fetch_hist(symbol_input, window, adjust)
+                df_hist = _fetch_hist(st.session_state.current_symbol, window, adjust)
                 
                 # 4. Get sector info
-                sector = _stock_sector_em(symbol_input)
+                sector = _stock_sector_em(st.session_state.current_symbol)
                 
                 # 5. Build export dataframe
                 df_export = _build_export(df_hist, sector)
@@ -102,10 +143,10 @@ if run_btn:
                 col1, col2 = st.columns(2)
                 
                 csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                file_name_export = f"{symbol_input}_{name}_ohlcv.csv"
+                file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
                 
                 csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                file_name_hist = f"{symbol_input}_{name}_hist_data.csv"
+                file_name_hist = f"{st.session_state.current_symbol}_{name}_hist_data.csv"
 
                 with col1:
                     st.download_button(
@@ -127,7 +168,4 @@ if run_btn:
         except Exception as e:
             st.error(f"发生错误: {str(e)}")
             st.exception(e)
-
-else:
-    st.info("👈 请在左侧输入参数并点击“开始获取数据”")
 
