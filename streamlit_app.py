@@ -219,7 +219,7 @@ with st.sidebar:
         with st.spinner("正在加载股票列表..."):
             all_stocks = load_stock_list()
         stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
-    
+
     if stock_options:
         default_index = 0
         if st.session_state.current_symbol:
