@@ -19,6 +19,7 @@ htmlcov/
 
 pip-wheel-metadata/
 
+data/*.csv
 *.csv
 *.xlsx
 *.xls

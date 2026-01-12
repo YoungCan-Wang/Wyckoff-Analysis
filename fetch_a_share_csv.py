@@ -59,6 +59,23 @@ def _stock_name_from_code(symbol: str) -> str:
     return str(row.iloc[0])
 
 
+def get_all_stocks() -> list[dict[str, str]]:
+    """
+    Get all A-share stock codes and names.
+    Returns:
+        list of dict: [{"code": "000001", "name": "平安银行"}, ...]
+    """
+    try:
+        info = ak.stock_info_a_code_name()
+        # Ensure columns are strings
+        info["code"] = info["code"].astype(str)
+        info["name"] = info["name"].astype(str)
+        return info.to_dict("records")
+    except Exception as e:
+        print(f"Error fetching stock list: {e}")
+        return []
+
+
 def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame:
     start = window.start_trade_date.strftime("%Y%m%d")
     end = window.end_trade_date.strftime("%Y%m%d")
@@ -232,7 +249,7 @@ def main() -> int:
         choices=["", "qfq", "hfq"],
         help="复权类型：空字符串=不复权，qfq=前复权，hfq=后复权",
     )
-    parser.add_argument("--out-dir", default=".", help="输出目录，默认当前目录")
+    parser.add_argument("--out-dir", default="data", help="输出目录，默认 data 目录")
     args = parser.parse_args()
 
     info = ak.stock_info_a_code_name()

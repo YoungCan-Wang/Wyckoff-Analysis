@@ -211,3 +211,9 @@ streamlit run streamlit_app.py
 4. 系统会自动识别 `streamlit_app.py`，点击 "Deploy"，等待几分钟即可访问。
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/)
+
+### 3) 在线访问 (Demo)
+
+你可以直接访问以下链接使用本工具（基于 main 分支热更新）：
+
+👉 **[https://wyckoff-analysis-youngcanphoenix.streamlit.app/](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
