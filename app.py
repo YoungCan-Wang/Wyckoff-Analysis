@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 import akshare as ak
+import zipfile
+import io
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _stock_name_from_code,
@@ -135,34 +137,62 @@ if run_btn or st.session_state.should_run:
                 # 5. Build export dataframe
                 df_export = _build_export(df_hist, sector)
                 
-                # Display data
+                # Display data with Tabs
                 st.subheader("📊 数据预览")
-                st.dataframe(df_export, use_container_width=True)
+                tab1, tab2 = st.tabs(["📈 OHLCV (增强版)", "📄 原始数据 (Hist Data)"])
                 
-                # Download buttons
-                col1, col2 = st.columns(2)
+                with tab1:
+                    st.dataframe(df_export, use_container_width=True)
                 
+                with tab2:
+                    st.dataframe(df_hist, use_container_width=True)
+                
+                # Prepare files
                 csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                 file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
                 
                 csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                 file_name_hist = f"{st.session_state.current_symbol}_{name}_hist_data.csv"
 
+                # Create ZIP for "Download All"
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr(file_name_export, csv_export)
+                    zf.writestr(file_name_hist, csv_hist)
+                zip_data = zip_buffer.getvalue()
+                file_name_zip = f"{st.session_state.current_symbol}_{name}_all.zip"
+
+                # Download buttons
+                st.markdown("### 📥 下载数据")
+                col1, col2, col3 = st.columns(3)
+
                 with col1:
                     st.download_button(
-                        label="📥 下载 OHLCV (增强版)",
+                        label="下载 OHLCV (增强版)",
                         data=csv_export,
                         file_name=file_name_export,
                         mime="text/csv",
-                        type="primary"
+                        type="primary",
+                        use_container_width=True
                     )
                 
                 with col2:
                     st.download_button(
-                        label="📥 下载原始数据 (Hist Data)",
+                        label="下载原始数据 (Hist Data)",
                         data=csv_hist,
                         file_name=file_name_hist,
-                        mime="text/csv"
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+
+                with col3:
+                    st.download_button(
+                        label="📦 全部下载 (.zip)",
+                        data=zip_data,
+                        file_name=file_name_zip,
+                        mime="application/zip",
+                        type="primary",
+                        use_container_width=True
                     )
                     
         except Exception as e:
