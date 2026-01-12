@@ -1,7 +1,5 @@
 import streamlit as st
-import pandas as pd
 from datetime import date, timedelta
-import akshare as ak
 import zipfile
 import io
 from fetch_a_share_csv import (
@@ -10,8 +8,7 @@ from fetch_a_share_csv import (
     _fetch_hist,
     _stock_sector_em,
     _build_export,
-    get_all_stocks,
-    TradingWindow
+    get_all_stocks
 )
 
 # Page configuration
@@ -207,13 +204,22 @@ def show_right_nav():
 
 show_right_nav()
 
-all_stocks = load_stock_list()
-stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
-
 # Sidebar for inputs
 with st.sidebar:
     st.header("参数配置")
-    
+
+    enable_stock_search = st.toggle(
+        "启用股票名称搜索",
+        value=True,
+        help="开启后会加载全量股票列表用于搜索（首次加载可能较慢）。关闭则直接输入股票代码。"
+    )
+
+    stock_options = []
+    if enable_stock_search:
+        with st.spinner("正在加载股票列表..."):
+            all_stocks = load_stock_list()
+        stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
+
     if stock_options:
         default_index = 0
         if st.session_state.current_symbol:
@@ -235,10 +241,11 @@ with st.sidebar:
         if current_code != st.session_state.current_symbol:
             st.session_state.current_symbol = current_code
     else:
-        st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
-        if st.button("🔄 重试加载股票列表", use_container_width=True):
-            load_stock_list.clear()
-            st.rerun()
+        if enable_stock_search:
+            st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
+            if st.button("🔄 重试加载股票列表", use_container_width=True):
+                load_stock_list.clear()
+                st.rerun()
 
         symbol_input = st.text_input(
             "股票代码 (必填)",
