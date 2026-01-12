@@ -199,3 +199,5 @@ if run_btn or st.session_state.should_run:
             st.error(f"发生错误: {str(e)}")
             st.exception(e)
 
+else:
+    st.info("👈 请在左侧输入参数并点击“开始获取数据”")
