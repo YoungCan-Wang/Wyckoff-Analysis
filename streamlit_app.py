@@ -10,6 +10,7 @@ from fetch_a_share_csv import (
     _fetch_hist,
     _stock_sector_em,
     _build_export,
+    get_all_stocks,
     TradingWindow
 )
 
@@ -28,6 +29,10 @@ if "current_symbol" not in st.session_state:
 if "should_run" not in st.session_state:
     st.session_state.should_run = False
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_stock_list():
+    return get_all_stocks()
+
 def add_to_history(symbol, name):
     item = {"symbol": symbol, "name": name}
     # Remove if exists to move to top
@@ -43,20 +48,55 @@ def set_symbol_from_history(symbol):
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 
+# Load stocks
+all_stocks = load_stock_list()
+# Format as "code name" for display
+stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
+
 # Sidebar for inputs
 with st.sidebar:
     st.header("参数配置")
     
-    symbol_input = st.text_input(
-        "股票代码 (必填)",
-        value=st.session_state.current_symbol,
-        help="请输入 6 位股票代码，例如 300364",
-        key="symbol_input_widget"
+    # Smart search box
+    # Try to find index of current symbol
+    default_index = 0
+    if st.session_state.current_symbol and stock_options:
+        for i, opt in enumerate(stock_options):
+            if opt.startswith(st.session_state.current_symbol):
+                default_index = i
+                break
+    
+    selected_stock = st.selectbox(
+        "选择股票 (支持代码或名称搜索)",
+        options=stock_options,
+        index=default_index,
+        help="输入代码（如 300364）或名称（如 中文在线）进行搜索",
+        key="stock_selector"
     )
+    
+    # Extract code from selection
+    if selected_stock:
+        current_code = selected_stock.split(" ")[0]
+        current_name_from_select = selected_stock.split(" ")[1] if len(selected_stock.split(" ")) > 1 else ""
+        # Update session state if changed via selectbox
+        if current_code != st.session_state.current_symbol:
+            st.session_state.current_symbol = current_code
+    else:
+        # Fallback if list is empty (e.g. network error)
+        symbol_input = st.text_input(
+            "股票代码 (必填)",
+            value=st.session_state.current_symbol,
+            help="请输入 6 位股票代码，例如 300364",
+            key="symbol_input_widget"
+        )
+        if symbol_input != st.session_state.current_symbol:
+            st.session_state.current_symbol = symbol_input
+        current_name_from_select = ""
+
     
     symbol_name_input = st.text_input(
         "股票名称 (选填)",
-        value="",
+        value=current_name_from_select,
         help="仅用于展示或文件名，留空则自动从 akshare 获取"
     )
     
