@@ -47,6 +47,7 @@ def set_symbol_from_history(symbol):
 
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
+st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
 
 # Load stocks
 all_stocks = load_stock_list()
