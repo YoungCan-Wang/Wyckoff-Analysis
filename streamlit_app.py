@@ -1,7 +1,5 @@
 import streamlit as st
-import pandas as pd
 from datetime import date, timedelta
-import akshare as ak
 import zipfile
 import io
 from fetch_a_share_csv import (
@@ -10,8 +8,7 @@ from fetch_a_share_csv import (
     _fetch_hist,
     _stock_sector_em,
     _build_export,
-    get_all_stocks,
-    TradingWindow
+    get_all_stocks
 )
 
 # Page configuration
@@ -207,41 +204,49 @@ def show_right_nav():
 
 show_right_nav()
 
-# Load stocks
-all_stocks = load_stock_list()
-# Format as "code name" for display
-stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
-
 # Sidebar for inputs
 with st.sidebar:
     st.header("参数配置")
-    
-    # Smart search box
-    # Try to find index of current symbol
-    default_index = 0
-    if st.session_state.current_symbol and stock_options:
-        for i, opt in enumerate(stock_options):
-            if opt.startswith(st.session_state.current_symbol):
-                default_index = i
-                break
-    
-    selected_stock = st.selectbox(
-        "选择股票 (支持代码或名称搜索)",
-        options=stock_options,
-        index=default_index,
-        help="输入代码（如 300364）或名称（如 中文在线）进行搜索",
-        key="stock_selector"
+
+    enable_stock_search = st.toggle(
+        "启用股票名称搜索",
+        value=True,
+        help="开启后会加载全量股票列表用于搜索（首次加载可能较慢）。关闭则直接输入股票代码。"
     )
+
+    stock_options = []
+    if enable_stock_search:
+        with st.spinner("正在加载股票列表..."):
+            all_stocks = load_stock_list()
+        stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
     
-    # Extract code from selection
-    if selected_stock:
+    if stock_options:
+        default_index = 0
+        if st.session_state.current_symbol:
+            for i, opt in enumerate(stock_options):
+                if opt.startswith(st.session_state.current_symbol):
+                    default_index = i
+                    break
+
+        selected_stock = st.selectbox(
+            "选择股票 (支持代码或名称搜索)",
+            options=stock_options,
+            index=default_index,
+            help="输入代码（如 300364）或名称（如 中文在线）进行搜索",
+            key="stock_selector"
+        )
+
         current_code = selected_stock.split(" ")[0]
         current_name_from_select = selected_stock.split(" ")[1] if len(selected_stock.split(" ")) > 1 else ""
-        # Update session state if changed via selectbox
         if current_code != st.session_state.current_symbol:
             st.session_state.current_symbol = current_code
     else:
-        # Fallback if list is empty (e.g. network error)
+        if enable_stock_search:
+            st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
+            if st.button("🔄 重试加载股票列表", use_container_width=True):
+                load_stock_list.clear()
+                st.rerun()
+
         symbol_input = st.text_input(
             "股票代码 (必填)",
             value=st.session_state.current_symbol,

@@ -1,9 +1,12 @@
 import argparse
+import json
 import os
 import re
+import time
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, timedelta
+from pathlib import Path
 
 import akshare as ak
 import pandas as pd
@@ -65,13 +68,45 @@ def get_all_stocks() -> list[dict[str, str]]:
     Returns:
         list of dict: [{"code": "000001", "name": "平安银行"}, ...]
     """
+    cache_dir = Path(__file__).resolve().parent / "data"
+    cache_path = cache_dir / "stock_list_cache.json"
+    cache_ttl_seconds = 24 * 60 * 60
+
+    def _read_cache() -> list[dict[str, str]]:
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [{"code": str(x.get("code", "")), "name": str(x.get("name", ""))} for x in data if isinstance(x, dict)]
+        except Exception:
+            return []
+        return []
+
     try:
+        if cache_path.exists():
+            age = time.time() - cache_path.stat().st_mtime
+            if age <= cache_ttl_seconds:
+                cached = _read_cache()
+                if cached:
+                    return cached
+
         info = ak.stock_info_a_code_name()
-        # Ensure columns are strings
         info["code"] = info["code"].astype(str)
         info["name"] = info["name"].astype(str)
-        return info.to_dict("records")
+        records = info.to_dict("records")
+
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+        return records
     except Exception as e:
+        cached = _read_cache()
+        if cached:
+            return cached
         print(f"Error fetching stock list: {e}")
         return []
 
