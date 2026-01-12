@@ -182,3 +182,32 @@ python fetch_a_share_csv.py --symbol 300364 --adjust qfq
 ### 3) 网络/数据源不稳定
 
 akshare 依赖公开数据源，偶尔会有失败/限流/字段变动。脚本会逐只股票打印 `OK/FAIL`，失败不会影响其它股票继续导出。
+
+---
+
+## Web 可视化工具 (Streamlit)
+
+我们提供了一个 Web 界面，可以直接在浏览器中查询、预览数据并一键下载 CSV。
+
+### 1) 本地运行
+
+```bash
+# 激活虚拟环境
+source .venv/bin/activate
+
+# 启动 Streamlit
+streamlit run streamlit_app.py
+```
+
+浏览器会自动打开 `http://localhost:8501`。
+
+### 2) 公网部署 (Streamlit Community Cloud)
+
+推荐使用官方免费的 Streamlit Community Cloud 进行一键部署：
+
+1. Fork 本仓库到你的 GitHub。
+2. 访问 [share.streamlit.io](https://share.streamlit.io/) 并使用 GitHub 登录。
+3. 点击 "New app"，选择你的仓库、分支 (main)。
+4. 系统会自动识别 `streamlit_app.py`，点击 "Deploy"，等待几分钟即可访问。
+
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/)
