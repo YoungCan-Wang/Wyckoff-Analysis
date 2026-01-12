@@ -134,10 +134,6 @@ with st.sidebar:
                 set_symbol_from_history(item['symbol'])
                 st.rerun()
 
-# Sync widget value back to session state if changed manually
-if symbol_input != st.session_state.current_symbol:
-    st.session_state.current_symbol = symbol_input
-
 # Main content
 if run_btn or st.session_state.should_run:
     # Reset trigger
