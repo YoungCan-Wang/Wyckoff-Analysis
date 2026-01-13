@@ -368,10 +368,16 @@ if run_btn or st.session_state.should_run:
                 tab1, tab2 = st.tabs(["📈 OHLCV (增强版)", "📄 原始数据 (Hist Data)"])
                 
                 with tab1:
-                    st.dataframe(df_export, use_container_width=True, height=420 if is_mobile else None)
+                    if is_mobile:
+                        st.dataframe(df_export, use_container_width=True, height=420)
+                    else:
+                        st.dataframe(df_export, use_container_width=True)
                 
                 with tab2:
-                    st.dataframe(df_hist, use_container_width=True, height=420 if is_mobile else None)
+                    if is_mobile:
+                        st.dataframe(df_hist, use_container_width=True, height=420)
+                    else:
+                        st.dataframe(df_hist, use_container_width=True)
                 
                 # Prepare files
                 csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
