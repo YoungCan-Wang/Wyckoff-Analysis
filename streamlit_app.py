@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import date, timedelta
 import zipfile
 import io
+from typing import Any
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _stock_name_from_code,
@@ -10,6 +11,11 @@ from fetch_a_share_csv import (
     _build_export,
     get_all_stocks
 )
+
+try:
+    from streamlit_javascript import st_javascript
+except Exception:
+    st_javascript = None
 
 # Page configuration
 st.set_page_config(
@@ -25,6 +31,32 @@ if "current_symbol" not in st.session_state:
     st.session_state.current_symbol = "300364"
 if "should_run" not in st.session_state:
     st.session_state.should_run = False
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        s = str(value).strip()
+        if not s:
+            return None
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def detect_is_mobile() -> bool:
+    width = None
+    if st_javascript is not None:
+        try:
+            width = _to_int(st_javascript("window.innerWidth"))
+        except Exception:
+            width = None
+    if width is None:
+        return False
+    return width <= 768
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def load_stock_list():
@@ -46,10 +78,20 @@ st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
 
+is_mobile_detected = detect_is_mobile()
+if "mobile_mode" not in st.session_state:
+    st.session_state.mobile_mode = is_mobile_detected
+
 def show_right_nav():
     """Injects a floating navigation bar on the right side with collapse/expand support"""
     style = """
     <style>
+    @media (max-width: 768px) {
+        .nav-wrapper {
+            right: 8px;
+        }
+    }
+
     .nav-wrapper {
         position: fixed;
         right: 20px;
@@ -208,6 +250,12 @@ show_right_nav()
 with st.sidebar:
     st.header("参数配置")
 
+    st.session_state.mobile_mode = st.toggle(
+        "手机模式",
+        value=bool(st.session_state.mobile_mode),
+        help="自动检测不一定准确，可手动切换。手机模式会优化按钮布局与表格展示。"
+    )
+
     enable_stock_search = st.toggle(
         "启用股票名称搜索",
         value=True,
@@ -317,6 +365,7 @@ if run_btn or st.session_state.should_run:
         st.error("请输入有效的 6 位数字股票代码！")
     else:
         try:
+            is_mobile = bool(st.session_state.get("mobile_mode"))
             with st.spinner(f"正在获取 {st.session_state.current_symbol} 的数据..."):
                 # 1. Resolve trading window
                 end_calendar = date.today() - timedelta(days=int(end_offset))
@@ -351,10 +400,10 @@ if run_btn or st.session_state.should_run:
                 tab1, tab2 = st.tabs(["📈 OHLCV (增强版)", "📄 原始数据 (Hist Data)"])
                 
                 with tab1:
-                    st.dataframe(df_export, use_container_width=True)
+                    st.dataframe(df_export, use_container_width=True, height=420 if is_mobile else None)
                 
                 with tab2:
-                    st.dataframe(df_hist, use_container_width=True)
+                    st.dataframe(df_hist, use_container_width=True, height=420 if is_mobile else None)
                 
                 # Prepare files
                 csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
@@ -373,28 +422,7 @@ if run_btn or st.session_state.should_run:
 
                 # Download buttons
                 st.markdown("### 📥 下载数据")
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.download_button(
-                        label="下载 OHLCV (增强版)",
-                        data=csv_export,
-                        file_name=file_name_export,
-                        mime="text/csv",
-                        type="primary",
-                        use_container_width=True
-                    )
-                
-                with col2:
-                    st.download_button(
-                        label="下载原始数据 (Hist Data)",
-                        data=csv_hist,
-                        file_name=file_name_hist,
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-
-                with col3:
+                if is_mobile:
                     st.download_button(
                         label="📦 全部下载 (.zip)",
                         data=zip_data,
@@ -403,6 +431,50 @@ if run_btn or st.session_state.should_run:
                         type="primary",
                         use_container_width=True
                     )
+                    st.download_button(
+                        label="下载 OHLCV (增强版)",
+                        data=csv_export,
+                        file_name=file_name_export,
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    st.download_button(
+                        label="下载原始数据 (Hist Data)",
+                        data=csv_hist,
+                        file_name=file_name_hist,
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.download_button(
+                            label="下载 OHLCV (增强版)",
+                            data=csv_export,
+                            file_name=file_name_export,
+                            mime="text/csv",
+                            type="primary",
+                            use_container_width=True
+                        )
+                    
+                    with col2:
+                        st.download_button(
+                            label="下载原始数据 (Hist Data)",
+                            data=csv_hist,
+                            file_name=file_name_hist,
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+
+                    with col3:
+                        st.download_button(
+                            label="📦 全部下载 (.zip)",
+                            data=zip_data,
+                            file_name=file_name_zip,
+                            mime="application/zip",
+                            type="primary",
+                            use_container_width=True
+                        )
                     
         except Exception as e:
             st.error(f"发生错误: {str(e)}")

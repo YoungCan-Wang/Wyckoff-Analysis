@@ -1,3 +1,4 @@
 akshare>=1.18.9
 pandas>=2.3.3
 streamlit>=1.52.2
+streamlit-javascript>=0.1.5
