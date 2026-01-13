@@ -2,7 +2,6 @@ import streamlit as st
 from datetime import date, timedelta
 import zipfile
 import io
-from typing import Any
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _stock_name_from_code,
@@ -11,11 +10,6 @@ from fetch_a_share_csv import (
     _build_export,
     get_all_stocks
 )
-
-try:
-    from streamlit_javascript import st_javascript
-except Exception:
-    st_javascript = None
 
 # Page configuration
 st.set_page_config(
@@ -32,82 +26,8 @@ if "current_symbol" not in st.session_state:
 if "should_run" not in st.session_state:
     st.session_state.should_run = False
 
-
-def _to_int(value: Any) -> int | None:
-    try:
-        if value is None:
-            return None
-        if isinstance(value, (int, float)):
-            return int(value)
-        s = str(value).strip()
-        if not s:
-            return None
-        return int(float(s))
-    except Exception:
-        return None
-
-
-def _to_bool(value: Any) -> bool | None:
-    try:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return value
-        s = str(value).strip().lower()
-        if s in {"true", "1", "yes"}:
-            return True
-        if s in {"false", "0", "no"}:
-            return False
-        return None
-    except Exception:
-        return None
-
-
-def _to_str(value: Any) -> str | None:
-    try:
-        if value is None:
-            return None
-        s = str(value)
-        return s if s else None
-    except Exception:
-        return None
-
-
-def detect_is_mobile() -> bool:
-    width = None
-    ua = None
-    ua_data_mobile = None
-    if st_javascript is not None:
-        try:
-            width = _to_int(st_javascript("window.innerWidth"))
-        except Exception:
-            width = None
-        try:
-            ua = _to_str(st_javascript("navigator.userAgent"))
-        except Exception:
-            ua = None
-        try:
-            ua_data_mobile = _to_bool(st_javascript("navigator.userAgentData ? navigator.userAgentData.mobile : null"))
-        except Exception:
-            ua_data_mobile = None
-
-    if ua_data_mobile is True:
-        return True
-
-    if ua:
-        ua_l = ua.lower()
-        if (
-            "android" in ua_l
-            or "iphone" in ua_l
-            or "ipod" in ua_l
-            or "ipad" in ua_l
-            or "windows phone" in ua_l
-            or "mobi" in ua_l
-        ):
-            return True
-    if width is None:
-        return False
-    return width <= 768
+if "mobile_mode" not in st.session_state:
+    st.session_state.mobile_mode = False
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_stock_list():
@@ -128,19 +48,6 @@ def set_symbol_from_history(symbol):
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
-def _on_mobile_mode_change():
-    st.session_state.mobile_mode_user_set = True
-    st.session_state.mobile_mode = bool(st.session_state.mobile_mode_widget)
-
-
-is_mobile_detected = detect_is_mobile()
-if "mobile_mode" not in st.session_state:
-    st.session_state.mobile_mode = is_mobile_detected
-if "mobile_mode_user_set" not in st.session_state:
-    st.session_state.mobile_mode_user_set = False
-
-if not st.session_state.mobile_mode_user_set and is_mobile_detected:
-    st.session_state.mobile_mode = True
 
 def show_right_nav():
     """Injects a floating navigation bar on the right side with collapse/expand support"""
@@ -313,9 +220,8 @@ with st.sidebar:
     st.toggle(
         "手机模式",
         value=bool(st.session_state.get("mobile_mode", False)),
-        key="mobile_mode_widget",
-        on_change=_on_mobile_mode_change,
-        help="自动检测不一定准确，可手动切换。手机模式会优化按钮布局与表格展示。"
+        key="mobile_mode",
+        help="手机模式会优化按钮布局与表格展示。"
     )
 
     enable_stock_search = st.toggle(
