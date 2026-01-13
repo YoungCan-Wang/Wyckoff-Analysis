@@ -78,9 +78,28 @@ st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
 
+st.toggle(
+    "手机模式",
+    value=bool(st.session_state.mobile_mode),
+    key="mobile_mode_widget",
+    on_change=_on_mobile_mode_change,
+    help="自动检测不一定准确，可手动切换。手机模式会优化按钮布局与表格展示。"
+)
+
 is_mobile_detected = detect_is_mobile()
 if "mobile_mode" not in st.session_state:
     st.session_state.mobile_mode = is_mobile_detected
+if "mobile_mode_user_set" not in st.session_state:
+    st.session_state.mobile_mode_user_set = False
+
+
+def _on_mobile_mode_change():
+    st.session_state.mobile_mode_user_set = True
+    st.session_state.mobile_mode = bool(st.session_state.mobile_mode_widget)
+
+
+if not st.session_state.mobile_mode_user_set and is_mobile_detected:
+    st.session_state.mobile_mode = True
 
 def show_right_nav():
     """Injects a floating navigation bar on the right side with collapse/expand support"""
@@ -249,12 +268,6 @@ show_right_nav()
 # Sidebar for inputs
 with st.sidebar:
     st.header("参数配置")
-
-    st.session_state.mobile_mode = st.toggle(
-        "手机模式",
-        value=bool(st.session_state.mobile_mode),
-        help="自动检测不一定准确，可手动切换。手机模式会优化按钮布局与表格展示。"
-    )
 
     enable_stock_search = st.toggle(
         "启用股票名称搜索",
