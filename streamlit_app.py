@@ -26,7 +26,10 @@ if "current_symbol" not in st.session_state:
 if "should_run" not in st.session_state:
     st.session_state.should_run = False
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+if "mobile_mode" not in st.session_state:
+    st.session_state.mobile_mode = False
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_stock_list():
     return get_all_stocks()
 
@@ -50,6 +53,12 @@ def show_right_nav():
     """Injects a floating navigation bar on the right side with collapse/expand support"""
     style = """
     <style>
+    @media (max-width: 768px) {
+        .nav-wrapper {
+            right: 8px;
+        }
+    }
+
     .nav-wrapper {
         position: fixed;
         right: 20px;
@@ -208,6 +217,13 @@ show_right_nav()
 with st.sidebar:
     st.header("参数配置")
 
+    st.toggle(
+        "手机模式",
+        value=bool(st.session_state.get("mobile_mode", False)),
+        key="mobile_mode",
+        help="手机模式会优化按钮布局与表格展示。"
+    )
+
     enable_stock_search = st.toggle(
         "启用股票名称搜索",
         value=True,
@@ -317,6 +333,7 @@ if run_btn or st.session_state.should_run:
         st.error("请输入有效的 6 位数字股票代码！")
     else:
         try:
+            is_mobile = bool(st.session_state.get("mobile_mode"))
             with st.spinner(f"正在获取 {st.session_state.current_symbol} 的数据..."):
                 # 1. Resolve trading window
                 end_calendar = date.today() - timedelta(days=int(end_offset))
@@ -351,10 +368,10 @@ if run_btn or st.session_state.should_run:
                 tab1, tab2 = st.tabs(["📈 OHLCV (增强版)", "📄 原始数据 (Hist Data)"])
                 
                 with tab1:
-                    st.dataframe(df_export, use_container_width=True)
+                    st.dataframe(df_export, use_container_width=True, height=420 if is_mobile else None)
                 
                 with tab2:
-                    st.dataframe(df_hist, use_container_width=True)
+                    st.dataframe(df_hist, use_container_width=True, height=420 if is_mobile else None)
                 
                 # Prepare files
                 csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
@@ -373,28 +390,7 @@ if run_btn or st.session_state.should_run:
 
                 # Download buttons
                 st.markdown("### 📥 下载数据")
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.download_button(
-                        label="下载 OHLCV (增强版)",
-                        data=csv_export,
-                        file_name=file_name_export,
-                        mime="text/csv",
-                        type="primary",
-                        use_container_width=True
-                    )
-                
-                with col2:
-                    st.download_button(
-                        label="下载原始数据 (Hist Data)",
-                        data=csv_hist,
-                        file_name=file_name_hist,
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-
-                with col3:
+                if is_mobile:
                     st.download_button(
                         label="📦 全部下载 (.zip)",
                         data=zip_data,
@@ -403,6 +399,50 @@ if run_btn or st.session_state.should_run:
                         type="primary",
                         use_container_width=True
                     )
+                    st.download_button(
+                        label="下载 OHLCV (增强版)",
+                        data=csv_export,
+                        file_name=file_name_export,
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    st.download_button(
+                        label="下载原始数据 (Hist Data)",
+                        data=csv_hist,
+                        file_name=file_name_hist,
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.download_button(
+                            label="下载 OHLCV (增强版)",
+                            data=csv_export,
+                            file_name=file_name_export,
+                            mime="text/csv",
+                            type="primary",
+                            use_container_width=True
+                        )
+                    
+                    with col2:
+                        st.download_button(
+                            label="下载原始数据 (Hist Data)",
+                            data=csv_hist,
+                            file_name=file_name_hist,
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+
+                    with col3:
+                        st.download_button(
+                            label="📦 全部下载 (.zip)",
+                            data=zip_data,
+                            file_name=file_name_zip,
+                            mime="application/zip",
+                            type="primary",
+                            use_container_width=True
+                        )
                     
         except Exception as e:
             st.error(f"发生错误: {str(e)}")
