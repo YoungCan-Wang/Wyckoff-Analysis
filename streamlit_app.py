@@ -58,7 +58,7 @@ def detect_is_mobile() -> bool:
         return False
     return width <= 768
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_stock_list():
     return get_all_stocks()
 
