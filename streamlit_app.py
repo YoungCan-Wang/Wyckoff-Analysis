@@ -47,13 +47,64 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _to_bool(value: Any) -> bool | None:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        s = str(value).strip().lower()
+        if s in {"true", "1", "yes"}:
+            return True
+        if s in {"false", "0", "no"}:
+            return False
+        return None
+    except Exception:
+        return None
+
+
+def _to_str(value: Any) -> str | None:
+    try:
+        if value is None:
+            return None
+        s = str(value)
+        return s if s else None
+    except Exception:
+        return None
+
+
 def detect_is_mobile() -> bool:
     width = None
+    ua = None
+    ua_data_mobile = None
     if st_javascript is not None:
         try:
             width = _to_int(st_javascript("window.innerWidth"))
         except Exception:
             width = None
+        try:
+            ua = _to_str(st_javascript("navigator.userAgent"))
+        except Exception:
+            ua = None
+        try:
+            ua_data_mobile = _to_bool(st_javascript("navigator.userAgentData ? navigator.userAgentData.mobile : null"))
+        except Exception:
+            ua_data_mobile = None
+
+    if ua_data_mobile is True:
+        return True
+
+    if ua:
+        ua_l = ua.lower()
+        if (
+            "android" in ua_l
+            or "iphone" in ua_l
+            or "ipod" in ua_l
+            or "ipad" in ua_l
+            or "windows phone" in ua_l
+            or "mobi" in ua_l
+        ):
+            return True
     if width is None:
         return False
     return width <= 768
@@ -90,14 +141,6 @@ if "mobile_mode_user_set" not in st.session_state:
 
 if not st.session_state.mobile_mode_user_set and is_mobile_detected:
     st.session_state.mobile_mode = True
-
-st.toggle(
-    "手机模式",
-    value=bool(st.session_state.get("mobile_mode", False)),
-    key="mobile_mode_widget",
-    on_change=_on_mobile_mode_change,
-    help="自动检测不一定准确，可手动切换。手机模式会优化按钮布局与表格展示。"
-)
 
 def show_right_nav():
     """Injects a floating navigation bar on the right side with collapse/expand support"""
@@ -266,6 +309,14 @@ show_right_nav()
 # Sidebar for inputs
 with st.sidebar:
     st.header("参数配置")
+
+    st.toggle(
+        "手机模式",
+        value=bool(st.session_state.get("mobile_mode", False)),
+        key="mobile_mode_widget",
+        on_change=_on_mobile_mode_change,
+        help="自动检测不一定准确，可手动切换。手机模式会优化按钮布局与表格展示。"
+    )
 
     enable_stock_search = st.toggle(
         "启用股票名称搜索",
