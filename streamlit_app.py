@@ -2,13 +2,16 @@ import streamlit as st
 from datetime import date, timedelta
 import zipfile
 import io
+import re
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _stock_name_from_code,
     _fetch_hist,
     _stock_sector_em,
     _build_export,
-    get_all_stocks
+    get_all_stocks,
+    _extract_symbols_from_text,
+    _normalize_symbols,
 )
 
 # Page configuration
@@ -44,6 +47,14 @@ def add_to_history(symbol, name):
 def set_symbol_from_history(symbol):
     st.session_state.current_symbol = symbol
     st.session_state.should_run = True
+
+def _safe_filename_part(value: str) -> str:
+    s = str(value).strip()
+    if not s:
+        return "Unknown"
+    s = re.sub(r"[\\/:*?\"<>|]+", "_", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
@@ -224,61 +235,83 @@ with st.sidebar:
         help="手机模式会优化按钮布局与表格展示。"
     )
 
-    enable_stock_search = st.toggle(
-        "启用股票名称搜索",
-        value=True,
-        help="开启后会加载全量股票列表用于搜索（首次加载可能较慢）。关闭则直接输入股票代码。"
+    batch_mode = st.toggle(
+        "批量生成（最多 6 个）",
+        value=False,
+        help="支持从混合文本中提取 6 位股票代码，一次最多生成 6 个。"
     )
+    st.caption("提醒：开超市不是一个好的行为呦（一次最多 6 个）。")
 
-    stock_options = []
-    if enable_stock_search:
-        with st.spinner("正在加载股票列表..."):
-            all_stocks = load_stock_list()
-        stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
+    enable_stock_search = False
+    batch_symbols_text = ""
+    current_name_from_select = ""
 
-    if stock_options:
-        default_index = 0
-        if st.session_state.current_symbol:
-            for i, opt in enumerate(stock_options):
-                if opt.startswith(st.session_state.current_symbol):
-                    default_index = i
-                    break
-
-        selected_stock = st.selectbox(
-            "选择股票 (支持代码或名称搜索)",
-            options=stock_options,
-            index=default_index,
-            help="输入代码（如 300364）或名称（如 中文在线）进行搜索",
-            key="stock_selector"
+    if batch_mode:
+        batch_symbols_text = st.text_area(
+            "股票代码列表（支持粘贴混合文本）",
+            value="",
+            placeholder="例如：300364 000001 600519\n或粘贴包含代码的混合文本",
+            help="系统会提取其中的 6 位数字作为股票代码（自动去重）。"
         )
-
-        current_code = selected_stock.split(" ")[0]
-        current_name_from_select = selected_stock.split(" ")[1] if len(selected_stock.split(" ")) > 1 else ""
-        if current_code != st.session_state.current_symbol:
-            st.session_state.current_symbol = current_code
+        st.caption("示例：000973 佛塑科技 600798 鲁抗医药 300459 汤姆猫")
     else:
-        if enable_stock_search:
-            st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
-            if st.button("🔄 重试加载股票列表", use_container_width=True):
-                load_stock_list.clear()
-                st.rerun()
-
-        symbol_input = st.text_input(
-            "股票代码 (必填)",
-            value=st.session_state.current_symbol,
-            help="请输入 6 位股票代码，例如 300364",
-            key="symbol_input_widget"
+        enable_stock_search = st.toggle(
+            "启用股票名称搜索",
+            value=True,
+            help="开启后会加载全量股票列表用于搜索（首次加载可能较慢）。关闭则直接输入股票代码。"
         )
-        if symbol_input != st.session_state.current_symbol:
-            st.session_state.current_symbol = symbol_input
-        current_name_from_select = ""
+
+        stock_options = []
+        if enable_stock_search:
+            with st.spinner("正在加载股票列表..."):
+                all_stocks = load_stock_list()
+            stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
+
+        if stock_options:
+            default_index = 0
+            if st.session_state.current_symbol:
+                for i, opt in enumerate(stock_options):
+                    if opt.startswith(st.session_state.current_symbol):
+                        default_index = i
+                        break
+
+            selected_stock = st.selectbox(
+                "选择股票 (支持代码或名称搜索)",
+                options=stock_options,
+                index=default_index,
+                help="输入代码（如 300364）或名称（如 中文在线）进行搜索",
+                key="stock_selector"
+            )
+
+            current_code = selected_stock.split(" ")[0]
+            current_name_from_select = selected_stock.split(" ")[1] if len(selected_stock.split(" ")) > 1 else ""
+            if current_code != st.session_state.current_symbol:
+                st.session_state.current_symbol = current_code
+        else:
+            if enable_stock_search:
+                st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
+                if st.button("🔄 重试加载股票列表", use_container_width=True):
+                    load_stock_list.clear()
+                    st.rerun()
+
+            symbol_input = st.text_input(
+                "股票代码 (必填)",
+                value=st.session_state.current_symbol,
+                help="请输入 6 位股票代码，例如 300364",
+                key="symbol_input_widget"
+            )
+            if symbol_input != st.session_state.current_symbol:
+                st.session_state.current_symbol = symbol_input
+            current_name_from_select = ""
 
     
-    symbol_name_input = st.text_input(
-        "股票名称 (选填)",
-        value=current_name_from_select,
-        help="仅用于展示或文件名，留空则自动从 akshare 获取"
-    )
+    symbol_name_input = ""
+    if not batch_mode:
+        symbol_name_input = st.text_input(
+            "股票名称 (选填)",
+            value=current_name_from_select,
+            help="仅用于展示或文件名，留空则自动从 akshare 获取"
+        )
     
     trading_days = st.number_input(
         "回溯交易日数量",
@@ -329,74 +362,172 @@ if run_btn or st.session_state.should_run:
     if st.session_state.should_run:
         st.session_state.should_run = False
         
-    if not st.session_state.current_symbol or not st.session_state.current_symbol.isdigit() or len(st.session_state.current_symbol) != 6:
-        st.error("请输入有效的 6 位数字股票代码！")
-    else:
-        try:
-            is_mobile = bool(st.session_state.get("mobile_mode"))
-            with st.spinner(f"正在获取 {st.session_state.current_symbol} 的数据..."):
-                # 1. Resolve trading window
-                end_calendar = date.today() - timedelta(days=int(end_offset))
-                window = _resolve_trading_window(end_calendar, int(trading_days))
-                
-                # 2. Get name if not provided
-                if not symbol_name_input:
+    try:
+        is_mobile = bool(st.session_state.get("mobile_mode"))
+
+        if batch_mode:
+            candidates: list[str] = []
+            candidates.extend(_extract_symbols_from_text(batch_symbols_text, valid_codes=None))
+            candidates.extend(re.findall(r"\b\d{6}\b", batch_symbols_text or ""))
+            symbols = _normalize_symbols(candidates)
+
+            if not symbols:
+                st.error("请提供至少 1 个 6 位数字股票代码。")
+                st.stop()
+            if len(symbols) > 6:
+                st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
+                st.stop()
+
+            end_calendar = date.today() - timedelta(days=int(end_offset))
+            window = _resolve_trading_window(end_calendar, int(trading_days))
+
+            zip_buffer = io.BytesIO()
+            results: list[dict[str, str]] = []
+            progress = st.progress(0)
+
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for idx, symbol in enumerate(symbols, start=1):
                     try:
-                        name = _stock_name_from_code(st.session_state.current_symbol)
+                        try:
+                            name = _stock_name_from_code(symbol)
+                        except Exception:
+                            name = "Unknown"
+
+                        df_hist = _fetch_hist(symbol, window, adjust)
+                        sector = _stock_sector_em(symbol)
+                        df_export = _build_export(df_hist, sector)
+
+                        safe_symbol = _safe_filename_part(symbol)
+                        safe_name = _safe_filename_part(name)
+                        file_name_export = f"{safe_symbol}_{safe_name}_ohlcv.csv"
+                        file_name_hist = f"{safe_symbol}_{safe_name}_hist_data.csv"
+
+                        csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                        csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+                        zf.writestr(file_name_export, csv_export)
+                        zf.writestr(file_name_hist, csv_hist)
+
+                        add_to_history(symbol, name)
+                        results.append({"symbol": symbol, "name": name, "status": "ok", "error": ""})
                     except Exception as e:
-                        st.warning(f"无法自动获取名称: {e}")
-                        name = "Unknown"
-                else:
-                    name = symbol_name_input
-                
-                # Add to history
-                add_to_history(st.session_state.current_symbol, name)
-                
-                st.info(f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
+                        results.append({"symbol": symbol, "name": "", "status": "failed", "error": str(e)})
+                    progress.progress(idx / len(symbols))
 
-                # 3. Fetch data
-                df_hist = _fetch_hist(st.session_state.current_symbol, window, adjust)
-                
-                # 4. Get sector info
-                sector = _stock_sector_em(st.session_state.current_symbol)
-                
-                # 5. Build export dataframe
-                df_export = _build_export(df_hist, sector)
-                
-                # Display data with Tabs
-                st.subheader("📊 数据预览")
-                tab1, tab2 = st.tabs(["📈 OHLCV (增强版)", "📄 原始数据 (Hist Data)"])
-                
-                with tab1:
-                    if is_mobile:
-                        st.dataframe(df_export, use_container_width=True, height=420)
-                    else:
-                        st.dataframe(df_export, use_container_width=True)
-                
-                with tab2:
-                    if is_mobile:
-                        st.dataframe(df_hist, use_container_width=True, height=420)
-                    else:
-                        st.dataframe(df_hist, use_container_width=True)
-                
-                # Prepare files
-                csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
-                
-                csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                file_name_hist = f"{st.session_state.current_symbol}_{name}_hist_data.csv"
+            zip_data = zip_buffer.getvalue()
+            file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
 
-                # Create ZIP for "Download All"
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    zf.writestr(file_name_export, csv_export)
-                    zf.writestr(file_name_hist, csv_hist)
-                zip_data = zip_buffer.getvalue()
-                file_name_zip = f"{st.session_state.current_symbol}_{name}_all.zip"
+            st.subheader("📦 批量生成结果")
+            st.dataframe(results, use_container_width=True)
+            st.download_button(
+                label="📦 下载全部 (.zip)",
+                data=zip_data,
+                file_name=file_name_zip,
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+            )
+            st.stop()
 
-                # Download buttons
-                st.markdown("### 📥 下载数据")
+        if not st.session_state.current_symbol or not st.session_state.current_symbol.isdigit() or len(st.session_state.current_symbol) != 6:
+            st.error("请输入有效的 6 位数字股票代码！")
+            st.stop()
+
+        with st.spinner(f"正在获取 {st.session_state.current_symbol} 的数据..."):
+            end_calendar = date.today() - timedelta(days=int(end_offset))
+            window = _resolve_trading_window(end_calendar, int(trading_days))
+            
+            if not symbol_name_input:
+                try:
+                    name = _stock_name_from_code(st.session_state.current_symbol)
+                except Exception as e:
+                    st.warning(f"无法自动获取名称: {e}")
+                    name = "Unknown"
+            else:
+                name = symbol_name_input
+            
+            add_to_history(st.session_state.current_symbol, name)
+            
+            st.info(f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
+
+            df_hist = _fetch_hist(st.session_state.current_symbol, window, adjust)
+            sector = _stock_sector_em(st.session_state.current_symbol)
+            df_export = _build_export(df_hist, sector)
+            
+            st.subheader("📊 数据预览")
+            tab1, tab2 = st.tabs(["📈 OHLCV (增强版)", "📄 原始数据 (Hist Data)"])
+            
+            with tab1:
                 if is_mobile:
+                    st.dataframe(df_export, use_container_width=True, height=420)
+                else:
+                    st.dataframe(df_export, use_container_width=True)
+            
+            with tab2:
+                if is_mobile:
+                    st.dataframe(df_hist, use_container_width=True, height=420)
+                else:
+                    st.dataframe(df_hist, use_container_width=True)
+            
+            csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
+            
+            csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            file_name_hist = f"{st.session_state.current_symbol}_{name}_hist_data.csv"
+
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(file_name_export, csv_export)
+                zf.writestr(file_name_hist, csv_hist)
+            zip_data = zip_buffer.getvalue()
+            file_name_zip = f"{st.session_state.current_symbol}_{name}_all.zip"
+
+            st.markdown("### 📥 下载数据")
+            if is_mobile:
+                st.download_button(
+                    label="📦 全部下载 (.zip)",
+                    data=zip_data,
+                    file_name=file_name_zip,
+                    mime="application/zip",
+                    type="primary",
+                    use_container_width=True
+                )
+                st.download_button(
+                    label="下载 OHLCV (增强版)",
+                    data=csv_export,
+                    file_name=file_name_export,
+                    mime="text/csv",
+                    use_container_width=True
+                )
+                st.download_button(
+                    label="下载原始数据 (Hist Data)",
+                    data=csv_hist,
+                    file_name=file_name_hist,
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            else:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.download_button(
+                        label="下载 OHLCV (增强版)",
+                        data=csv_export,
+                        file_name=file_name_export,
+                        mime="text/csv",
+                        type="primary",
+                        use_container_width=True
+                    )
+                
+                with col2:
+                    st.download_button(
+                        label="下载原始数据 (Hist Data)",
+                        data=csv_hist,
+                        file_name=file_name_hist,
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+
+                with col3:
                     st.download_button(
                         label="📦 全部下载 (.zip)",
                         data=zip_data,
@@ -405,54 +536,10 @@ if run_btn or st.session_state.should_run:
                         type="primary",
                         use_container_width=True
                     )
-                    st.download_button(
-                        label="下载 OHLCV (增强版)",
-                        data=csv_export,
-                        file_name=file_name_export,
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                    st.download_button(
-                        label="下载原始数据 (Hist Data)",
-                        data=csv_hist,
-                        file_name=file_name_hist,
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                else:
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.download_button(
-                            label="下载 OHLCV (增强版)",
-                            data=csv_export,
-                            file_name=file_name_export,
-                            mime="text/csv",
-                            type="primary",
-                            use_container_width=True
-                        )
-                    
-                    with col2:
-                        st.download_button(
-                            label="下载原始数据 (Hist Data)",
-                            data=csv_hist,
-                            file_name=file_name_hist,
-                            mime="text/csv",
-                            use_container_width=True
-                        )
-
-                    with col3:
-                        st.download_button(
-                            label="📦 全部下载 (.zip)",
-                            data=zip_data,
-                            file_name=file_name_zip,
-                            mime="application/zip",
-                            type="primary",
-                            use_container_width=True
-                        )
-                    
-        except Exception as e:
-            st.error(f"发生错误: {str(e)}")
-            st.exception(e)
+                
+    except Exception as e:
+        st.error(f"发生错误: {str(e)}")
+        st.exception(e)
 
 else:
     st.info("👈 请在左侧输入参数并点击“开始获取数据”")
