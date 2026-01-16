@@ -3,15 +3,15 @@ from datetime import date, timedelta
 import zipfile
 import io
 import re
+import akshare as ak
 from fetch_a_share_csv import (
     _resolve_trading_window,
-    _stock_name_from_code,
     _fetch_hist,
-    _stock_sector_em,
     _build_export,
     get_all_stocks,
     _normalize_symbols,
 )
+from download_history import add_download_history
 
 # Page configuration
 st.set_page_config(
@@ -64,6 +64,23 @@ def _parse_batch_symbols(text: str) -> list[str]:
             continue
         candidates.extend(re.findall(r"\d{6}", part))
     return _normalize_symbols(candidates)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _stock_name_map():
+    stocks = load_stock_list()
+    return {s.get("code"): s.get("name") for s in stocks if s.get("code")}
+
+def _stock_sector_em_timeout(symbol: str, timeout: float):
+    try:
+        df = ak.stock_individual_info_em(symbol=symbol, timeout=timeout)
+        if df is None or df.empty:
+            return ""
+        row = df.loc[df["item"] == "行业", "value"]
+        if row.empty:
+            return ""
+        return str(row.iloc[0]).strip()
+    except Exception:
+        return ""
 
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
@@ -221,6 +238,9 @@ def show_right_nav():
             </a>
             <a href="/CustomExport" target="_self" class="nav-item" data-title="自定义导出 Custom Export">
                 <span>🧰</span>
+            </a>
+            <a href="/DownloadHistory" target="_self" class="nav-item" data-title="下载历史 Download History">
+                <span>🕘</span>
             </a>
             <a href="/Changelog" target="_self" class="nav-item" data-title="更新日志 Changelog">
                 <span>📢</span>
@@ -388,6 +408,7 @@ if run_btn or st.session_state.should_run:
             progress_ph = st.empty()
             status_ph = st.empty()
             progress_bar = progress_ph.progress(0)
+            results_ph = st.empty()
 
             with st.spinner(f"正在批量生成（{len(symbols)} 个）..."):
                 end_calendar = date.today() - timedelta(days=int(end_offset))
@@ -395,18 +416,28 @@ if run_btn or st.session_state.should_run:
 
                 zip_buffer = io.BytesIO()
                 results: list[dict[str, str]] = []
+                name_map = _stock_name_map()
+                start = window.start_trade_date.strftime("%Y%m%d")
+                end = window.end_trade_date.strftime("%Y%m%d")
 
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                     for idx, symbol in enumerate(symbols, start=1):
                         status_ph.caption(f"({idx}/{len(symbols)}) 正在处理：{symbol}")
                         try:
-                            try:
-                                name = _stock_name_from_code(symbol)
-                            except Exception:
-                                name = "Unknown"
+                            name = name_map.get(symbol) or "Unknown"
 
-                            df_hist = _fetch_hist(symbol, window, adjust)
-                            sector = _stock_sector_em(symbol)
+                            df_hist = ak.stock_zh_a_hist(
+                                symbol=symbol,
+                                period="daily",
+                                start_date=start,
+                                end_date=end,
+                                adjust=adjust,
+                                timeout=60,
+                            )
+                            if df_hist is None or df_hist.empty:
+                                raise RuntimeError("empty data returned")
+
+                            sector = _stock_sector_em_timeout(symbol, timeout=60)
                             df_export = _build_export(df_hist, sector)
 
                             safe_symbol = _safe_filename_part(symbol)
@@ -423,18 +454,23 @@ if run_btn or st.session_state.should_run:
                             add_to_history(symbol, name)
                             results.append({"symbol": symbol, "name": name, "status": "ok", "error": ""})
                         except Exception as e:
-                            results.append({"symbol": symbol, "name": "", "status": "failed", "error": str(e)})
+                            msg = str(e)
+                            if "ReadTimeout" in msg or "timed out" in msg or "timeout" in msg.lower():
+                                msg = "timeout(60s)"
+                            results.append({"symbol": symbol, "name": "", "status": "failed", "error": msg})
                         progress_bar.progress(idx / len(symbols))
+                        results_ph.dataframe(results, use_container_width=True, height=260)
 
                 zip_data = zip_buffer.getvalue()
                 file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
 
             status_ph.empty()
             progress_ph.empty()
+            results_ph.empty()
 
             st.subheader("📦 批量生成结果")
             st.dataframe(results, use_container_width=True)
-            st.download_button(
+            clicked = st.download_button(
                 label="📦 下载全部 (.zip)",
                 data=zip_data,
                 file_name=file_name_zip,
@@ -442,6 +478,15 @@ if run_btn or st.session_state.should_run:
                 type="primary",
                 use_container_width=True,
             )
+            if clicked:
+                add_download_history(
+                    page="Home",
+                    source="批量生成",
+                    title="批量生成 ZIP",
+                    file_name=file_name_zip,
+                    mime="application/zip",
+                    data=zip_data,
+                )
             st.stop()
 
         if not st.session_state.current_symbol or not st.session_state.current_symbol.isdigit() or len(st.session_state.current_symbol) != 6:
@@ -466,7 +511,7 @@ if run_btn or st.session_state.should_run:
             st.info(f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
 
             df_hist = _fetch_hist(st.session_state.current_symbol, window, adjust)
-            sector = _stock_sector_em(st.session_state.current_symbol)
+            sector = _stock_sector_em_timeout(st.session_state.current_symbol, timeout=60)
             df_export = _build_export(df_hist, sector)
             
             st.subheader("📊 数据预览")
@@ -499,7 +544,7 @@ if run_btn or st.session_state.should_run:
 
             st.markdown("### 📥 下载数据")
             if is_mobile:
-                st.download_button(
+                clicked_zip = st.download_button(
                     label="📦 全部下载 (.zip)",
                     data=zip_data,
                     file_name=file_name_zip,
@@ -507,24 +552,30 @@ if run_btn or st.session_state.should_run:
                     type="primary",
                     use_container_width=True
                 )
-                st.download_button(
+                clicked_ohlcv = st.download_button(
                     label="下载 OHLCV (增强版)",
                     data=csv_export,
                     file_name=file_name_export,
                     mime="text/csv",
                     use_container_width=True
                 )
-                st.download_button(
+                clicked_hist = st.download_button(
                     label="下载原始数据 (Hist Data)",
                     data=csv_hist,
                     file_name=file_name_hist,
                     mime="text/csv",
                     use_container_width=True
                 )
+                if clicked_zip:
+                    add_download_history(page="Home", source="单只导出", title="全部 ZIP", file_name=file_name_zip, mime="application/zip", data=zip_data)
+                if clicked_ohlcv:
+                    add_download_history(page="Home", source="单只导出", title="OHLCV", file_name=file_name_export, mime="text/csv", data=csv_export)
+                if clicked_hist:
+                    add_download_history(page="Home", source="单只导出", title="Hist", file_name=file_name_hist, mime="text/csv", data=csv_hist)
             else:
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.download_button(
+                    clicked_ohlcv = st.download_button(
                         label="下载 OHLCV (增强版)",
                         data=csv_export,
                         file_name=file_name_export,
@@ -534,7 +585,7 @@ if run_btn or st.session_state.should_run:
                     )
                 
                 with col2:
-                    st.download_button(
+                    clicked_hist = st.download_button(
                         label="下载原始数据 (Hist Data)",
                         data=csv_hist,
                         file_name=file_name_hist,
@@ -543,7 +594,7 @@ if run_btn or st.session_state.should_run:
                     )
 
                 with col3:
-                    st.download_button(
+                    clicked_zip = st.download_button(
                         label="📦 全部下载 (.zip)",
                         data=zip_data,
                         file_name=file_name_zip,
@@ -551,6 +602,12 @@ if run_btn or st.session_state.should_run:
                         type="primary",
                         use_container_width=True
                     )
+                if clicked_zip:
+                    add_download_history(page="Home", source="单只导出", title="全部 ZIP", file_name=file_name_zip, mime="application/zip", data=zip_data)
+                if clicked_ohlcv:
+                    add_download_history(page="Home", source="单只导出", title="OHLCV", file_name=file_name_export, mime="text/csv", data=csv_export)
+                if clicked_hist:
+                    add_download_history(page="Home", source="单只导出", title="Hist", file_name=file_name_hist, mime="text/csv", data=csv_hist)
                 
     except Exception as e:
         st.error(f"发生错误: {str(e)}")

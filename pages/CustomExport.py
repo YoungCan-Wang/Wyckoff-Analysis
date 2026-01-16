@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import date, timedelta
 import akshare as ak
+from download_history import add_download_history
 
 
 st.set_page_config(
@@ -157,6 +158,9 @@ def show_right_nav():
             <a href="/CustomExport" target="_self" class="nav-item" data-title="自定义导出 Custom Export">
                 <span>🧰</span>
             </a>
+            <a href="/DownloadHistory" target="_self" class="nav-item" data-title="下载历史 Download History">
+                <span>🕘</span>
+            </a>
             <a href="/Changelog" target="_self" class="nav-item" data-title="更新日志 Changelog">
                 <span>📢</span>
             </a>
@@ -210,9 +214,15 @@ SOURCES = [
 
 source_labels = {s["label"]: s for s in SOURCES}
 
-selected_label = st.selectbox("数据源", options=[s["label"] for s in SOURCES])
+source_select_key = "custom_export::selected_label"
+prev_selected_label = st.session_state.get(source_select_key, "")
+selected_label = st.selectbox("数据源", options=[s["label"] for s in SOURCES], key=source_select_key)
 source = source_labels[selected_label]
 st.caption(source["help"])
+
+if prev_selected_label and prev_selected_label != selected_label:
+    st.session_state.custom_export_df = None
+    st.session_state.custom_export_source_id = ""
 
 
 today = date.today()
@@ -336,7 +346,7 @@ if source["id"] != "macro_china_cpi_monthly":
     file_prefix = f"{source_key}_{symbol}"
 
 st.markdown("### 📥 导出")
-st.download_button(
+clicked_selected = st.download_button(
     label="下载所选字段 CSV",
     data=csv_selected,
     file_name=f"{file_prefix}_selected.csv",
@@ -344,10 +354,28 @@ st.download_button(
     type="primary",
     use_container_width=True,
 )
-st.download_button(
+clicked_all = st.download_button(
     label="下载全部字段 CSV",
     data=csv_all,
     file_name=f"{file_prefix}_all.csv",
     mime="text/csv",
     use_container_width=True,
 )
+if clicked_selected:
+    add_download_history(
+        page="CustomExport",
+        source=source_key,
+        title="所选字段 CSV",
+        file_name=f"{file_prefix}_selected.csv",
+        mime="text/csv",
+        data=csv_selected,
+    )
+if clicked_all:
+    add_download_history(
+        page="CustomExport",
+        source=source_key,
+        title="全部字段 CSV",
+        file_name=f"{file_prefix}_all.csv",
+        mime="text/csv",
+        data=csv_all,
+    )
