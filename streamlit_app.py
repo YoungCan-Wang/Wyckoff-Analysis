@@ -382,44 +382,52 @@ if run_btn or st.session_state.should_run:
                 st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
                 st.stop()
 
-            end_calendar = date.today() - timedelta(days=int(end_offset))
-            window = _resolve_trading_window(end_calendar, int(trading_days))
+            progress_ph = st.empty()
+            status_ph = st.empty()
+            progress_bar = progress_ph.progress(0)
 
-            zip_buffer = io.BytesIO()
-            results: list[dict[str, str]] = []
-            progress = st.progress(0)
+            with st.spinner(f"正在批量生成（{len(symbols)} 个）..."):
+                end_calendar = date.today() - timedelta(days=int(end_offset))
+                window = _resolve_trading_window(end_calendar, int(trading_days))
 
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for idx, symbol in enumerate(symbols, start=1):
-                    try:
+                zip_buffer = io.BytesIO()
+                results: list[dict[str, str]] = []
+
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for idx, symbol in enumerate(symbols, start=1):
+                        status_ph.caption(f"({idx}/{len(symbols)}) 正在处理：{symbol}")
                         try:
-                            name = _stock_name_from_code(symbol)
-                        except Exception:
-                            name = "Unknown"
+                            try:
+                                name = _stock_name_from_code(symbol)
+                            except Exception:
+                                name = "Unknown"
 
-                        df_hist = _fetch_hist(symbol, window, adjust)
-                        sector = _stock_sector_em(symbol)
-                        df_export = _build_export(df_hist, sector)
+                            df_hist = _fetch_hist(symbol, window, adjust)
+                            sector = _stock_sector_em(symbol)
+                            df_export = _build_export(df_hist, sector)
 
-                        safe_symbol = _safe_filename_part(symbol)
-                        safe_name = _safe_filename_part(name)
-                        file_name_export = f"{safe_symbol}_{safe_name}_ohlcv.csv"
-                        file_name_hist = f"{safe_symbol}_{safe_name}_hist_data.csv"
+                            safe_symbol = _safe_filename_part(symbol)
+                            safe_name = _safe_filename_part(name)
+                            file_name_export = f"{safe_symbol}_{safe_name}_ohlcv.csv"
+                            file_name_hist = f"{safe_symbol}_{safe_name}_hist_data.csv"
 
-                        csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                        csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                            csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                            csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
-                        zf.writestr(file_name_export, csv_export)
-                        zf.writestr(file_name_hist, csv_hist)
+                            zf.writestr(file_name_export, csv_export)
+                            zf.writestr(file_name_hist, csv_hist)
 
-                        add_to_history(symbol, name)
-                        results.append({"symbol": symbol, "name": name, "status": "ok", "error": ""})
-                    except Exception as e:
-                        results.append({"symbol": symbol, "name": "", "status": "failed", "error": str(e)})
-                    progress.progress(idx / len(symbols))
+                            add_to_history(symbol, name)
+                            results.append({"symbol": symbol, "name": name, "status": "ok", "error": ""})
+                        except Exception as e:
+                            results.append({"symbol": symbol, "name": "", "status": "failed", "error": str(e)})
+                        progress_bar.progress(idx / len(symbols))
 
-            zip_data = zip_buffer.getvalue()
-            file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
+                zip_data = zip_buffer.getvalue()
+                file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
+
+            status_ph.empty()
+            progress_ph.empty()
 
             st.subheader("📦 批量生成结果")
             st.dataframe(results, use_container_width=True)
