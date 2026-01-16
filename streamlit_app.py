@@ -10,7 +10,6 @@ from fetch_a_share_csv import (
     _stock_sector_em,
     _build_export,
     get_all_stocks,
-    _extract_symbols_from_text,
     _normalize_symbols,
 )
 
@@ -55,6 +54,16 @@ def _safe_filename_part(value: str) -> str:
     s = re.sub(r"[\\/:*?\"<>|]+", "_", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+def _parse_batch_symbols(text: str) -> list[str]:
+    parts = re.split(r"[;；\s,，\n]+", str(text or ""))
+    candidates: list[str] = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        candidates.extend(re.findall(r"\d{6}", part))
+    return _normalize_symbols(candidates)
 
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
@@ -236,11 +245,10 @@ with st.sidebar:
     )
 
     batch_mode = st.toggle(
-        "批量生成（最多 6 个）",
+        "批量生成",
         value=False,
-        help="支持从混合文本中提取 6 位股票代码，一次最多生成 6 个。"
+        help="用分号分隔：000973;600798;300459（; 或 ；均可），一次最多 6 个。提醒：开超市不是一个好的行为呦。"
     )
-    st.caption("提醒：开超市不是一个好的行为呦（一次最多 6 个）。")
 
     enable_stock_search = False
     batch_symbols_text = ""
@@ -250,10 +258,9 @@ with st.sidebar:
         batch_symbols_text = st.text_area(
             "股票代码列表（支持粘贴混合文本）",
             value="",
-            placeholder="例如：300364 000001 600519\n或粘贴包含代码的混合文本",
-            help="系统会提取其中的 6 位数字作为股票代码（自动去重）。"
+            placeholder="例如：000973;600798;300459（; 或 ；均可）",
+            help="用分号（; 或 ；）分隔，系统会提取其中的 6 位数字作为股票代码（自动去重）。"
         )
-        st.caption("示例：000973 佛塑科技 600798 鲁抗医药 300459 汤姆猫")
     else:
         enable_stock_search = st.toggle(
             "启用股票名称搜索",
@@ -366,13 +373,10 @@ if run_btn or st.session_state.should_run:
         is_mobile = bool(st.session_state.get("mobile_mode"))
 
         if batch_mode:
-            candidates: list[str] = []
-            candidates.extend(_extract_symbols_from_text(batch_symbols_text, valid_codes=None))
-            candidates.extend(re.findall(r"\b\d{6}\b", batch_symbols_text or ""))
-            symbols = _normalize_symbols(candidates)
+            symbols = _parse_batch_symbols(batch_symbols_text)
 
             if not symbols:
-                st.error("请提供至少 1 个 6 位数字股票代码。")
+                st.error("请用分号分隔输入至少 1 个 6 位数字股票代码（; 或 ；均可）。")
                 st.stop()
             if len(symbols) > 6:
                 st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
