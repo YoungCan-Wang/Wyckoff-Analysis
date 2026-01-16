@@ -219,6 +219,9 @@ def show_right_nav():
             <a href="/" target="_self" class="nav-item" data-title="首页 Home">
                 <span>🏠</span>
             </a>
+            <a href="/CustomExport" target="_self" class="nav-item" data-title="自定义导出 Custom Export">
+                <span>🧰</span>
+            </a>
             <a href="/Changelog" target="_self" class="nav-item" data-title="更新日志 Changelog">
                 <span>📢</span>
             </a>
