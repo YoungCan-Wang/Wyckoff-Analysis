@@ -233,7 +233,7 @@ if source["id"] != "macro_china_cpi_monthly":
         st.session_state[end_key] = today
 
     with col_b:
-        end_date = st.date_input("结束日期", value=st.session_state[end_key], key=end_key)
+        end_date = st.date_input("结束日期", key=end_key)
 
     desired_start = end_date - timedelta(days=365)
     if start_key not in st.session_state:
@@ -246,7 +246,7 @@ if source["id"] != "macro_china_cpi_monthly":
     st.session_state[prev_end_key] = end_date
 
     with col_a:
-        start_date = st.date_input("开始日期", value=st.session_state[start_key], key=start_key)
+        start_date = st.date_input("开始日期", key=start_key)
 
     if source["has_adjust"]:
         adjust = st.selectbox(
