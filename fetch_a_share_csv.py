@@ -7,9 +7,11 @@ from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from functools import lru_cache
 
 import akshare as ak
 import pandas as pd
+import requests
 
 
 @dataclass(frozen=True)
@@ -33,17 +35,99 @@ def _safe_filename_part(value: str) -> str:
 
 
 def _trade_dates() -> list[date]:
-    df = ak.tool_trade_date_hist_sina()
-    s = pd.to_datetime(df["trade_date"]).dt.date
-    dates = s.tolist()
-    dates.sort()
-    return dates
+    cache_dir = Path(__file__).resolve().parent / "data"
+    cache_path = cache_dir / "trade_dates_cache.json"
+    cache_ttl_seconds = 7 * 24 * 60 * 60
+
+    def _read_cache() -> list[date]:
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, list):
+                return []
+            out: list[date] = []
+            for x in raw:
+                try:
+                    out.append(pd.to_datetime(x).date())
+                except Exception:
+                    continue
+            out.sort()
+            return out
+        except Exception:
+            return []
+
+    def _write_cache(dates: list[date]) -> None:
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump([d.strftime("%Y-%m-%d") for d in dates], f, ensure_ascii=False)
+        except Exception:
+            return
+
+    def _fetch_with_timeout(timeout: float) -> list[date]:
+        try:
+            import py_mini_racer
+            from akshare.stock.cons import hk_js_decode
+        except Exception as e:
+            raise RuntimeError(f"missing dependency for trade calendar decode: {e}")
+        url = "https://finance.sina.com.cn/realstock/company/klc_td_sh.txt"
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        payload = r.text.split("=")[1].split(";")[0].replace('"', "")
+        js_code = py_mini_racer.MiniRacer()
+        js_code.eval(hk_js_decode)
+        dict_list = js_code.call("d", payload)
+        df = pd.DataFrame(dict_list)
+        df.columns = ["trade_date"]
+        s = pd.to_datetime(df["trade_date"]).dt.date
+        dates = s.tolist()
+        dates.append(date(year=1992, month=5, day=4))
+        dates.sort()
+        return dates
+
+    try:
+        if cache_path.exists():
+            age = time.time() - cache_path.stat().st_mtime
+            if age <= cache_ttl_seconds:
+                cached = _read_cache()
+                if cached:
+                    return cached
+    except Exception:
+        pass
+
+    last_err: Exception | None = None
+    for _ in range(3):
+        try:
+            dates = _fetch_with_timeout(timeout=10)
+            if dates:
+                _write_cache(dates)
+                return dates
+        except Exception as e:
+            last_err = e
+            time.sleep(0.6)
+
+    cached = _read_cache()
+    if cached:
+        return cached
+
+    end = date.today() + timedelta(days=366)
+    start = date(1990, 1, 1)
+    approx = pd.bdate_range(start=start, end=end).date.tolist()
+    approx.sort()
+    if not approx:
+        raise RuntimeError(f"failed to build trade calendar: {last_err}")
+    return approx
+
+
+@lru_cache(maxsize=1)
+def _trade_dates_cached() -> tuple[date, ...]:
+    return tuple(_trade_dates())
 
 
 def _resolve_trading_window(end_calendar_day: date, trading_days: int) -> TradingWindow:
     if trading_days <= 0:
         raise ValueError("trading_days must be > 0")
-    dates = _trade_dates()
+    dates = list(_trade_dates_cached())
     idx = bisect_right(dates, end_calendar_day) - 1
     if idx < 0:
         raise RuntimeError("trade calendar has no date <= end_calendar_day")
