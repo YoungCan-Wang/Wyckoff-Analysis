@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import date, timedelta
 import akshare as ak
 from download_history import add_download_history
+from fetch_a_share_csv import get_all_stocks
 
 
 st.set_page_config(
@@ -191,8 +192,8 @@ SOURCES = [
         "label": "指数历史（日线，东方财富）",
         "fn": ak.index_zh_a_hist,
         "has_adjust": False,
-        "help": "返回指数日线；symbol 为指数代码（例如 000001）。",
-        "default_symbol": "000001",
+        "help": "返回指数日线；支持上证、深证、创业板、北证等常用指数。",
+        "default_symbol": "",
     },
     {
         "id": "fund_etf_hist_em",
@@ -232,9 +233,45 @@ adjust = ""
 end_date = today
 start_date = end_date - timedelta(days=365)
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _stock_name_map() -> dict[str, str]:
+    items = get_all_stocks()
+    return {x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _etf_name_map() -> dict[str, str]:
+    try:
+        df = ak.fund_etf_spot_em()
+        return {str(c): str(n) for c, n in zip(df["代码"], df["名称"])}
+    except Exception:
+        return {}
+
+INDEX_CHOICES = [
+    {"label": "上证指数", "code": "000001"},
+    {"label": "深证成指", "code": "399001"},
+    {"label": "创业板指", "code": "399006"},
+    {"label": "北证50", "code": "899050"},
+]
+
 if source["id"] != "macro_china_cpi_monthly":
-    symbol = st.text_input("代码", value=source.get("default_symbol", "")).strip()
     col_a, col_b = st.columns(2)
+    if source["id"] == "index_zh_a_hist":
+        idx_labels = [x["label"] for x in INDEX_CHOICES]
+        sel = st.selectbox("指数", options=idx_labels)
+        sel_code = next((x["code"] for x in INDEX_CHOICES if x["label"] == sel), "")
+        symbol = sel_code
+        st.caption(f"指数：{sel}（{symbol}）")
+    else:
+        symbol = st.text_input("代码", value=source.get("default_symbol", "")).strip()
+        if source["id"] == "stock_zh_a_hist":
+            name = _stock_name_map().get(symbol, "")
+            if name:
+                st.caption(f"名称：{name}")
+        elif source["id"] == "fund_etf_hist_em":
+            etf_name = _etf_name_map().get(symbol, "")
+            if etf_name:
+                st.caption(f"ETF 名称：{etf_name}")
+
     end_key = f"custom_export::{source['id']}::end_date"
     start_key = f"custom_export::{source['id']}::start_date"
     prev_end_key = f"custom_export::{source['id']}::prev_end_date"
