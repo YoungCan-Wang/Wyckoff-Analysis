@@ -181,7 +181,7 @@ show_right_nav()
 SOURCES = [
     {
         "id": "stock_zh_a_hist",
-        "label": "A股个股历史（日线，东方财富）",
+        "label": "A股个股历史（日线）",
         "fn": ak.stock_zh_a_hist,
         "has_adjust": True,
         "help": "返回日频 K 线数据；symbol 为 6 位股票代码。",
@@ -189,7 +189,7 @@ SOURCES = [
     },
     {
         "id": "index_zh_a_hist",
-        "label": "指数历史（日线，东方财富）",
+        "label": "指数历史（日线）",
         "fn": ak.index_zh_a_hist,
         "has_adjust": False,
         "help": "返回指数日线；支持上证、深证、创业板、北证等常用指数。",
@@ -197,7 +197,7 @@ SOURCES = [
     },
     {
         "id": "fund_etf_hist_em",
-        "label": "ETF 历史（日线，东方财富）",
+        "label": "ETF 历史（日线）",
         "fn": ak.fund_etf_hist_em,
         "has_adjust": True,
         "help": "返回 ETF 日线；symbol 为 ETF 代码（例如 510300 / 159707）。",
@@ -260,17 +260,17 @@ if source["id"] != "macro_china_cpi_monthly":
         sel = st.selectbox("指数", options=idx_labels)
         sel_code = next((x["code"] for x in INDEX_CHOICES if x["label"] == sel), "")
         symbol = sel_code
-        st.caption(f"指数：{sel}（{symbol}）")
+        st.info(f"指数：{sel}（{symbol}）")
     else:
         symbol = st.text_input("代码", value=source.get("default_symbol", "")).strip()
         if source["id"] == "stock_zh_a_hist":
             name = _stock_name_map().get(symbol, "")
             if name:
-                st.caption(f"名称：{name}")
+                st.info(f"股票：{name}（{symbol}）")
         elif source["id"] == "fund_etf_hist_em":
             etf_name = _etf_name_map().get(symbol, "")
             if etf_name:
-                st.caption(f"ETF 名称：{etf_name}")
+                st.info(f"ETF：{etf_name}（{symbol}）")
 
     end_key = f"custom_export::{source['id']}::end_date"
     start_key = f"custom_export::{source['id']}::start_date"
