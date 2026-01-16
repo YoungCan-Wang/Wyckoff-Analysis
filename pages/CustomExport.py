@@ -216,20 +216,37 @@ st.caption(source["help"])
 
 
 today = date.today()
-default_start = today - timedelta(days=365)
 
 symbol = ""
 adjust = ""
-start_date = default_start
 end_date = today
+start_date = end_date - timedelta(days=365)
 
 if source["id"] != "macro_china_cpi_monthly":
     symbol = st.text_input("代码", value=source.get("default_symbol", "")).strip()
     col_a, col_b = st.columns(2)
-    with col_a:
-        start_date = st.date_input("开始日期", value=default_start)
+    end_key = f"custom_export::{source['id']}::end_date"
+    start_key = f"custom_export::{source['id']}::start_date"
+    prev_end_key = f"custom_export::{source['id']}::prev_end_date"
+
+    if end_key not in st.session_state:
+        st.session_state[end_key] = today
+
     with col_b:
-        end_date = st.date_input("结束日期", value=today)
+        end_date = st.date_input("结束日期", value=st.session_state[end_key], key=end_key)
+
+    desired_start = end_date - timedelta(days=365)
+    if start_key not in st.session_state:
+        st.session_state[start_key] = desired_start
+    else:
+        prev_end = st.session_state.get(prev_end_key, end_date)
+        prev_desired_start = prev_end - timedelta(days=365)
+        if end_date != prev_end and st.session_state[start_key] == prev_desired_start:
+            st.session_state[start_key] = desired_start
+    st.session_state[prev_end_key] = end_date
+
+    with col_a:
+        start_date = st.date_input("开始日期", value=st.session_state[start_key], key=start_key)
 
     if source["has_adjust"]:
         adjust = st.selectbox(
@@ -252,6 +269,9 @@ if run:
             if source["id"] == "macro_china_cpi_monthly":
                 df = source["fn"]()
             else:
+                if start_date > end_date:
+                    st.error("开始日期不能晚于结束日期。")
+                    st.stop()
                 sd = start_date.strftime("%Y%m%d")
                 ed = end_date.strftime("%Y%m%d")
                 if source["id"] == "index_zh_a_hist":
@@ -331,4 +351,3 @@ st.download_button(
     mime="text/csv",
     use_container_width=True,
 )
-
