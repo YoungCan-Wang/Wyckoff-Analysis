@@ -1,16 +1,18 @@
 import streamlit as st
-import os
+from download_history import get_download_history
+
 
 st.set_page_config(
-    page_title="版本更新日志",
-    page_icon="📢",
-    layout="wide"
+    page_title="下载历史",
+    page_icon="🕘",
+    layout="wide",
 )
 
-st.title("📢 版本更新日志")
+
+st.title("🕘 下载历史（最近 10 条）")
+
 
 def show_right_nav():
-    """Injects a floating navigation bar on the right side with collapse/expand support"""
     style = """
     <style>
     .nav-wrapper {
@@ -44,7 +46,6 @@ def show_right_nav():
         transform: translateX(0);
     }
     
-    /* Collapsed state: hidden and moved right */
     .nav-toggle-checkbox:not(:checked) ~ .nav-content {
         opacity: 0;
         transform: translateX(100px);
@@ -78,7 +79,6 @@ def show_right_nav():
         border-color: #FF4B4B;
     }
     
-    /* Icon rotation/switching */
     .nav-toggle-checkbox:checked ~ .nav-toggle-btn .icon-collapse {
         display: inline-block;
     }
@@ -116,7 +116,6 @@ def show_right_nav():
         text-decoration: none;
     }
     
-    /* Tooltip text */
     .nav-item::after {
         content: attr(data-title);
         position: absolute;
@@ -139,7 +138,7 @@ def show_right_nav():
     }
     </style>
     """
-    
+
     content = """
     <div class="nav-wrapper">
         <input type="checkbox" id="nav-toggle" class="nav-toggle-checkbox" checked>
@@ -168,24 +167,41 @@ def show_right_nav():
         </div>
     </div>
     """
-    
+
     st.html(style + content)
+
 
 show_right_nav()
 
-def show_changelog():
-    """Reads and displays the changelog from CHANGELOG.md"""
-    try:
-        # Go up one level to find CHANGELOG.md since we are in pages/
-        changelog_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CHANGELOG.md")
-        
-        if os.path.exists(changelog_path):
-            with open(changelog_path, "r", encoding="utf-8") as f:
-                changelog_content = f.read()
-            st.markdown(changelog_content)
-        else:
-            st.warning("CHANGELOG.md not found.")
-    except Exception as e:
-        st.error(f"无法加载更新日志: {e}")
 
-show_changelog()
+history = get_download_history()
+if not history:
+    st.info("暂无下载记录。")
+    st.stop()
+
+rows = []
+for item in history:
+    rows.append(
+        {
+            "时间": item.get("ts", ""),
+            "页面": item.get("page", ""),
+            "数据源": item.get("source", ""),
+            "文件名": item.get("file_name", ""),
+            "大小(KB)": item.get("size_kb", 0),
+        }
+    )
+
+st.dataframe(rows, use_container_width=True, height=320)
+
+st.markdown("### 📥 重新下载")
+for item in history:
+    label = f"{item.get('ts','')} | {item.get('page','')} | {item.get('file_name','')}"
+    st.download_button(
+        label=label,
+        data=item.get("data", b""),
+        file_name=item.get("file_name", "download.bin"),
+        mime=item.get("mime", "application/octet-stream"),
+        use_container_width=True,
+        key=f"rehit::{item.get('id','')}",
+    )
+
