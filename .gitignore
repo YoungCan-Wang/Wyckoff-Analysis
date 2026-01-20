@@ -25,3 +25,4 @@ data/trade_dates_cache.json
 *.csv
 *.xlsx
 *.xls
+.env

@@ -1,8 +1,13 @@
 import streamlit as st
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import zipfile
 import io
 import re
+import json
+import requests
+import time
+import os
+from dotenv import load_dotenv
 import akshare as ak
 from fetch_a_share_csv import (
     _resolve_trading_window,
@@ -12,6 +17,11 @@ from fetch_a_share_csv import (
     _normalize_symbols,
 )
 from download_history import add_download_history
+from auth_component import check_auth, login_form, logout
+from navigation import show_right_nav
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Page configuration
 st.set_page_config(
@@ -20,6 +30,22 @@ st.set_page_config(
     layout="wide"
 )
 
+# === Auth Check ===
+if not check_auth():
+    # 使用空布局，避免显示侧边栏和其他干扰元素
+    empty_container = st.empty()
+    with empty_container.container():
+        login_form()
+    st.stop()
+
+# === Logged In User Info ===
+with st.sidebar:
+    if st.session_state.get("user"):
+        st.caption(f"当前用户: {st.session_state.user.email}")
+        if st.button("退出登录"):
+            logout()
+    st.divider()
+
 # Initialize session state for search history
 if "search_history" not in st.session_state:
     st.session_state.search_history = []
@@ -27,6 +53,12 @@ if "current_symbol" not in st.session_state:
     st.session_state.current_symbol = "300364"
 if "should_run" not in st.session_state:
     st.session_state.should_run = False
+if "feishu_webhook" not in st.session_state:
+    st.session_state.feishu_webhook = os.getenv("FEISHU_WEBHOOK_URL", "")
+
+# 如果是从 .env 自动加载的，确保是空字符串而不是None
+if st.session_state.feishu_webhook is None:
+    st.session_state.feishu_webhook = ""
 
 if "mobile_mode" not in st.session_state:
     st.session_state.mobile_mode = False
@@ -82,177 +114,43 @@ def _stock_sector_em_timeout(symbol: str, timeout: float):
     except Exception:
         return ""
 
+def send_feishu_notification(webhook_url: str, title: str, content: str):
+    """发送飞书卡片消息"""
+    if not webhook_url:
+        return False
+    
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                }
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": content
+                    }
+                }
+            ]
+        }
+    }
+    
+    try:
+        resp = requests.post(webhook_url, headers=headers, json=payload, timeout=10)
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"Feishu notification failed: {e}")
+        return False
+
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
-
-def show_right_nav():
-    """Injects a floating navigation bar on the right side with collapse/expand support"""
-    style = """
-    <style>
-    @media (max-width: 768px) {
-        .nav-wrapper {
-            right: 8px;
-        }
-    }
-
-    .nav-wrapper {
-        position: fixed;
-        right: 20px;
-        top: 50%;
-        transform: translateY(-50%);
-        z-index: 99999;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 8px;
-    }
-
-    .nav-toggle-checkbox {
-        display: none;
-    }
-
-    .nav-content {
-        background-color: var(--secondary-background-color);
-        padding: 12px 8px;
-        border-radius: 16px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        transform-origin: right center;
-        opacity: 1;
-        transform: translateX(0);
-    }
-    
-    /* Collapsed state: hidden and moved right */
-    .nav-toggle-checkbox:not(:checked) ~ .nav-content {
-        opacity: 0;
-        transform: translateX(100px);
-        pointer-events: none;
-        height: 0;
-        padding: 0;
-        margin: 0;
-        overflow: hidden;
-    }
-
-    .nav-toggle-btn {
-        width: 24px;
-        height: 24px;
-        background-color: var(--secondary-background-color);
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        transition: all 0.3s ease;
-        color: var(--text-color);
-        font-size: 12px;
-        user-select: none;
-    }
-
-    .nav-toggle-btn:hover {
-        background-color: #FF4B4B;
-        color: white;
-        border-color: #FF4B4B;
-    }
-    
-    /* Icon rotation/switching */
-    .nav-toggle-checkbox:checked ~ .nav-toggle-btn .icon-collapse {
-        display: inline-block;
-    }
-    .nav-toggle-checkbox:checked ~ .nav-toggle-btn .icon-expand {
-        display: none;
-    }
-    
-    .nav-toggle-checkbox:not(:checked) ~ .nav-toggle-btn .icon-collapse {
-        display: none;
-    }
-    .nav-toggle-checkbox:not(:checked) ~ .nav-toggle-btn .icon-expand {
-        display: inline-block;
-    }
-    
-    .nav-item {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 44px;
-        height: 44px;
-        border-radius: 12px;
-        background-color: var(--background-color);
-        color: var(--text-color);
-        text-decoration: none;
-        transition: all 0.2s ease;
-        font-size: 20px;
-        border: 1px solid transparent;
-    }
-    
-    .nav-item:hover {
-        transform: scale(1.1);
-        background-color: #FF4B4B;
-        color: white;
-        border-color: #FF4B4B;
-        text-decoration: none;
-    }
-    
-    /* Tooltip text */
-    .nav-item::after {
-        content: attr(data-title);
-        position: absolute;
-        right: 60px;
-        background: #333;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-        opacity: 0;
-        visibility: hidden;
-        transition: opacity 0.2s;
-        white-space: nowrap;
-        pointer-events: none;
-    }
-    
-    .nav-item:hover::after {
-        opacity: 1;
-        visibility: visible;
-    }
-    </style>
-    """
-    
-    content = """
-    <div class="nav-wrapper">
-        <input type="checkbox" id="nav-toggle" class="nav-toggle-checkbox" checked>
-        
-        <label for="nav-toggle" class="nav-toggle-btn" title="Toggle Navigation">
-            <span class="icon-collapse">▶</span>
-            <span class="icon-expand">◀</span>
-        </label>
-        
-        <div class="nav-content">
-            <a href="/" target="_self" class="nav-item" data-title="首页 Home">
-                <span>🏠</span>
-            </a>
-            <a href="/CustomExport" target="_self" class="nav-item" data-title="自定义导出 Custom Export">
-                <span>🧰</span>
-            </a>
-            <a href="/DownloadHistory" target="_self" class="nav-item" data-title="下载历史 Download History">
-                <span>🕘</span>
-            </a>
-            <a href="/Changelog" target="_self" class="nav-item" data-title="更新日志 Changelog">
-                <span>📢</span>
-            </a>
-            <a href="https://github.com/YoungCan-Wang/Wyckoff-Analysis" target="_blank" class="nav-item" data-title="辛苦各位点个star，欢迎提各种issue">
-                <span>⭐</span>
-            </a>
-        </div>
-    </div>
-    """
-    
-    st.html(style + content)
 
 show_right_nav()
 
@@ -374,6 +272,8 @@ with st.sidebar:
     st.caption(
         "复权用于处理分红送转等导致的价格跳变：前复权更常用于看趋势；后复权更常用于还原历史价位对比。"
     )
+    
+    st.markdown("---")
 
     run_btn = st.button("🚀 开始获取数据", type="primary")
 
@@ -401,9 +301,9 @@ if run_btn or st.session_state.should_run:
             if not symbols:
                 st.error("请用分号分隔输入至少 1 个 6 位数字股票代码（; 或 ；均可）。")
                 st.stop()
-            if len(symbols) > 6:
-                st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
-                st.stop()
+            # if len(symbols) > 6:
+            #     st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
+            #     st.stop()
 
             progress_ph = st.empty()
             status_ph = st.empty()
@@ -463,6 +363,24 @@ if run_btn or st.session_state.should_run:
 
                 zip_data = zip_buffer.getvalue()
                 file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
+            
+            # Send Feishu notification
+            if st.session_state.feishu_webhook:
+                success_count = len([r for r in results if r["status"] == "ok"])
+                failed_count = len(results) - success_count
+                notify_title = f"📦 批量下载完成 ({success_count}/{len(symbols)})"
+                notify_text = (
+                    f"**任务状态**: 已完成\n"
+                    f"**成功**: {success_count} 个\n"
+                    f"**失败**: {failed_count} 个\n"
+                    f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"**文件**: {file_name_zip}"
+                )
+                if failed_count > 0:
+                    failed_details = "\\n".join([f"- {r['symbol']}: {r['error']}" for r in results if r["status"] != "ok"])
+                    notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
+                
+                send_feishu_notification(st.session_state.feishu_webhook, notify_title, notify_text)
 
             status_ph.empty()
             progress_ph.empty()
