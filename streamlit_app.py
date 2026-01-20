@@ -148,6 +148,8 @@ def send_feishu_notification(webhook_url: str, title: str, content: str):
         print(f"Feishu notification failed: {e}")
         return False
 
+
+
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
@@ -363,6 +365,23 @@ if run_btn or st.session_state.should_run:
 
                 zip_data = zip_buffer.getvalue()
                 file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
+
+            # === 自动记录批量下载历史 ===
+            # 只要任务完成，就记录一次
+            symbols_str = "_".join(symbols[:3]) + (f"_etc_{len(symbols)}" if len(symbols) > 3 else "")
+            current_batch_key = f"batch_{symbols_str}_{datetime.now().strftime('%H%M')}"
+            last_batch_key = st.session_state.get("last_home_batch_key")
+            
+            if current_batch_key != last_batch_key:
+                add_download_history(
+                    page="Home",
+                    source="批量生成",
+                    title=f"批量 ({len(symbols)} 只)",
+                    file_name=file_name_zip,
+                    mime="application/zip",
+                    data=None
+                )
+                st.session_state["last_home_batch_key"] = current_batch_key
             
             # Send Feishu notification
             if st.session_state.feishu_webhook:
@@ -397,15 +416,6 @@ if run_btn or st.session_state.should_run:
                 type="primary",
                 use_container_width=True,
             )
-            if clicked:
-                add_download_history(
-                    page="Home",
-                    source="批量生成",
-                    title="批量生成 ZIP",
-                    file_name=file_name_zip,
-                    mime="application/zip",
-                    data=zip_data,
-                )
             st.stop()
 
         if not st.session_state.current_symbol or not st.session_state.current_symbol.isdigit() or len(st.session_state.current_symbol) != 6:
@@ -461,72 +471,75 @@ if run_btn or st.session_state.should_run:
             zip_data = zip_buffer.getvalue()
             file_name_zip = f"{st.session_state.current_symbol}_{name}_all.zip"
 
+            # === 自动记录单只下载历史 ===
+            current_single_key = f"single_{st.session_state.current_symbol}_{datetime.now().strftime('%H%M')}"
+            last_single_key = st.session_state.get("last_home_single_key")
+
+            if current_single_key != last_single_key:
+                add_download_history(
+                    page="Home",
+                    source="单只导出",
+                    title=f"{st.session_state.current_symbol} {name}",
+                    file_name=file_name_zip,
+                    mime="application/zip",
+                    data=None
+                )
+                st.session_state["last_home_single_key"] = current_single_key
+
             st.markdown("### 📥 下载数据")
             if is_mobile:
-                clicked_zip = st.download_button(
+                st.download_button(
                     label="📦 全部下载 (.zip)",
                     data=zip_data,
                     file_name=file_name_zip,
                     mime="application/zip",
                     type="primary",
-                    use_container_width=True
+                    use_container_width=True,
                 )
-                clicked_ohlcv = st.download_button(
+                st.download_button(
                     label="下载 OHLCV (增强版)",
                     data=csv_export,
                     file_name=file_name_export,
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
                 )
-                clicked_hist = st.download_button(
+                st.download_button(
                     label="下载原始数据 (Hist Data)",
                     data=csv_hist,
                     file_name=file_name_hist,
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
                 )
-                if clicked_zip:
-                    add_download_history(page="Home", source="单只导出", title="全部 ZIP", file_name=file_name_zip, mime="application/zip", data=zip_data)
-                if clicked_ohlcv:
-                    add_download_history(page="Home", source="单只导出", title="OHLCV", file_name=file_name_export, mime="text/csv", data=csv_export)
-                if clicked_hist:
-                    add_download_history(page="Home", source="单只导出", title="Hist", file_name=file_name_hist, mime="text/csv", data=csv_hist)
             else:
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    clicked_ohlcv = st.download_button(
+                    st.download_button(
                         label="下载 OHLCV (增强版)",
                         data=csv_export,
                         file_name=file_name_export,
                         mime="text/csv",
                         type="primary",
-                        use_container_width=True
+                        use_container_width=True,
                     )
                 
                 with col2:
-                    clicked_hist = st.download_button(
+                    st.download_button(
                         label="下载原始数据 (Hist Data)",
                         data=csv_hist,
                         file_name=file_name_hist,
                         mime="text/csv",
-                        use_container_width=True
+                        use_container_width=True,
                     )
 
                 with col3:
-                    clicked_zip = st.download_button(
+                    st.download_button(
                         label="📦 全部下载 (.zip)",
                         data=zip_data,
                         file_name=file_name_zip,
                         mime="application/zip",
                         type="primary",
-                        use_container_width=True
+                        use_container_width=True,
                     )
-                if clicked_zip:
-                    add_download_history(page="Home", source="单只导出", title="全部 ZIP", file_name=file_name_zip, mime="application/zip", data=zip_data)
-                if clicked_ohlcv:
-                    add_download_history(page="Home", source="单只导出", title="OHLCV", file_name=file_name_export, mime="text/csv", data=csv_export)
-                if clicked_hist:
-                    add_download_history(page="Home", source="单只导出", title="Hist", file_name=file_name_hist, mime="text/csv", data=csv_hist)
                 
     except Exception as e:
         st.error(f"发生错误: {str(e)}")

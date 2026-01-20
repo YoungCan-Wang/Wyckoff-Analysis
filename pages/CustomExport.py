@@ -173,6 +173,23 @@ if run:
                     df = source["fn"](symbol=symbol, period="daily", start_date=sd, end_date=ed, adjust=adjust)
         st.session_state.custom_export_df = df
         st.session_state.custom_export_source_id = source["id"]
+
+        # === 自动记录查询历史 ===
+        # 生成一个唯一的 query_key 来防止重复记录
+        current_query_key = f"{source['id']}_{symbol}_{start_date}_{end_date}"
+        last_query_key = st.session_state.get("last_custom_export_query")
+        
+        if current_query_key != last_query_key:
+            add_download_history(
+                page="CustomExport",
+                source=source["id"],
+                title=f"{symbol} ({start_date}~{end_date})",
+                file_name=f"{symbol}_{start_date}_{end_date}.csv",
+                mime="text/csv",
+                data=None
+            )
+            st.session_state["last_custom_export_query"] = current_query_key
+
     except Exception as e:
         st.error(f"获取失败：{e}")
         st.stop()
@@ -229,7 +246,7 @@ if source["id"] != "macro_china_cpi_monthly":
     file_prefix = f"{source_key}_{symbol}"
 
 st.markdown("### 📥 导出")
-clicked_selected = st.download_button(
+st.download_button(
     label="下载所选字段 CSV",
     data=csv_selected,
     file_name=f"{file_prefix}_selected.csv",
@@ -237,28 +254,10 @@ clicked_selected = st.download_button(
     type="primary",
     use_container_width=True,
 )
-clicked_all = st.download_button(
+st.download_button(
     label="下载全部字段 CSV",
     data=csv_all,
     file_name=f"{file_prefix}_all.csv",
     mime="text/csv",
     use_container_width=True,
 )
-if clicked_selected:
-    add_download_history(
-        page="CustomExport",
-        source=source_key,
-        title="所选字段 CSV",
-        file_name=f"{file_prefix}_selected.csv",
-        mime="text/csv",
-        data=csv_selected,
-    )
-if clicked_all:
-    add_download_history(
-        page="CustomExport",
-        source=source_key,
-        title="全部字段 CSV",
-        file_name=f"{file_prefix}_all.csv",
-        mime="text/csv",
-        data=csv_all,
-    )

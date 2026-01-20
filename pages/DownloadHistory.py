@@ -1,10 +1,11 @@
-import sys
+import streamlit as st
 import os
+import sys
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import streamlit as st
+from auth_component import check_auth, login_form
 from download_history import get_download_history
 from navigation import show_right_nav
 
@@ -15,8 +16,15 @@ st.set_page_config(
     layout="wide",
 )
 
+# === Auth Check ===
+if not check_auth():
+    # 使用空布局，避免显示侧边栏和其他干扰元素
+    empty_container = st.empty()
+    with empty_container.container():
+        login_form()
+    st.stop()
 
-st.title("🕘 下载历史（最近 10 条）")
+st.title("🕘 下载历史（最近 20 条）")
 
 
 show_right_nav()
@@ -29,9 +37,11 @@ if not history:
 
 rows = []
 for item in history:
+    # Supabase stored 'ts' as ISO string, format it if needed or just use slice
+    ts_str = item.get("created_at", "")[:19].replace("T", " ")
     rows.append(
         {
-            "时间": item.get("ts", ""),
+            "时间": ts_str,
             "页面": item.get("page", ""),
             "数据源": item.get("source", ""),
             "文件名": item.get("file_name", ""),
@@ -39,17 +49,7 @@ for item in history:
         }
     )
 
-st.dataframe(rows, use_container_width=True, height=320)
+st.dataframe(rows, use_container_width=True, height=500, hide_index=True)
 
-st.markdown("### 📥 重新下载")
-for item in history:
-    label = f"{item.get('ts','')} | {item.get('page','')} | {item.get('file_name','')}"
-    st.download_button(
-        label=label,
-        data=item.get("data", b""),
-        file_name=item.get("file_name", "download.bin"),
-        mime=item.get("mime", "application/octet-stream"),
-        use_container_width=True,
-        key=f"rehit::{item.get('id','')}",
-    )
+st.caption("注：出于节省存储成本考虑，目前仅保留下载记录元数据，不支持直接重新下载历史文件。如需文件请重新执行查询。")
 
