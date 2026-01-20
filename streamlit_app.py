@@ -381,6 +381,7 @@ if run_btn or st.session_state.should_run:
                     notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
                 
                 send_feishu_notification(st.session_state.feishu_webhook, notify_title, notify_text)
+                st.toast("✅ 飞书通知已发送", icon="🔔")
 
             status_ph.empty()
             progress_ph.empty()

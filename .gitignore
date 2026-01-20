@@ -20,7 +20,7 @@ htmlcov/
 pip-wheel-metadata/
 
 data/*.csv
-data/stock_list_cache.json
+# data/stock_list_cache.json
 data/trade_dates_cache.json
 *.csv
 *.xlsx

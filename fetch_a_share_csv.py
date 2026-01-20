@@ -166,32 +166,29 @@ def get_all_stocks() -> list[dict[str, str]]:
             return []
         return []
 
+    # 1. 尝试从网络获取最新数据
     try:
-        if cache_path.exists():
-            age = time.time() - cache_path.stat().st_mtime
-            if age <= cache_ttl_seconds:
-                cached = _read_cache()
-                if cached:
-                    return cached
-
         info = ak.stock_info_a_code_name()
         info["code"] = info["code"].astype(str)
         info["name"] = info["name"].astype(str)
         records = info.to_dict("records")
 
+        # 网络获取成功，更新本地缓存
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(records, f, ensure_ascii=False)
         except Exception:
             pass
-
+            
         return records
     except Exception as e:
+        print(f"Network error fetching stock list: {e}. Trying cache...")
+        # 2. 网络失败，尝试读取缓存
         cached = _read_cache()
         if cached:
             return cached
-        print(f"Error fetching stock list: {e}")
+        # 3. 缓存也没数据，返回空
         return []
 
 
