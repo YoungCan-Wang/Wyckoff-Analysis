@@ -1,17 +1,29 @@
 import streamlit as st
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import zipfile
 import io
 import re
+import json
+import requests
+import time
+import os
+import pandas as pd
+from dotenv import load_dotenv
 import akshare as ak
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
     _build_export,
     get_all_stocks,
+    get_stocks_by_board,
     _normalize_symbols,
 )
 from download_history import add_download_history
+from auth_component import check_auth, login_form, logout
+from navigation import show_right_nav
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Page configuration
 st.set_page_config(
@@ -20,6 +32,22 @@ st.set_page_config(
     layout="wide"
 )
 
+# === Auth Check ===
+if not check_auth():
+    # 使用空布局，避免显示侧边栏和其他干扰元素
+    empty_container = st.empty()
+    with empty_container.container():
+        login_form()
+    st.stop()
+
+# === Logged In User Info ===
+with st.sidebar:
+    if st.session_state.get("user"):
+        st.caption(f"当前用户: {st.session_state.user.email}")
+        if st.button("退出登录"):
+            logout()
+    st.divider()
+
 # Initialize session state for search history
 if "search_history" not in st.session_state:
     st.session_state.search_history = []
@@ -27,6 +55,12 @@ if "current_symbol" not in st.session_state:
     st.session_state.current_symbol = "300364"
 if "should_run" not in st.session_state:
     st.session_state.should_run = False
+if "feishu_webhook" not in st.session_state:
+    st.session_state.feishu_webhook = os.getenv("FEISHU_WEBHOOK_URL", "")
+
+# 如果是从 .env 自动加载的，确保是空字符串而不是None
+if st.session_state.feishu_webhook is None:
+    st.session_state.feishu_webhook = ""
 
 if "mobile_mode" not in st.session_state:
     st.session_state.mobile_mode = False
@@ -82,177 +116,45 @@ def _stock_sector_em_timeout(symbol: str, timeout: float):
     except Exception:
         return ""
 
+def send_feishu_notification(webhook_url: str, title: str, content: str):
+    """发送飞书卡片消息"""
+    if not webhook_url:
+        return False
+    
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": title
+                }
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": content
+                    }
+                }
+            ]
+        }
+    }
+    
+    try:
+        resp = requests.post(webhook_url, headers=headers, json=payload, timeout=10)
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"Feishu notification failed: {e}")
+        return False
+
+
+
 st.title("📈 A股历史行情导出工具")
 st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
 st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
-
-def show_right_nav():
-    """Injects a floating navigation bar on the right side with collapse/expand support"""
-    style = """
-    <style>
-    @media (max-width: 768px) {
-        .nav-wrapper {
-            right: 8px;
-        }
-    }
-
-    .nav-wrapper {
-        position: fixed;
-        right: 20px;
-        top: 50%;
-        transform: translateY(-50%);
-        z-index: 99999;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 8px;
-    }
-
-    .nav-toggle-checkbox {
-        display: none;
-    }
-
-    .nav-content {
-        background-color: var(--secondary-background-color);
-        padding: 12px 8px;
-        border-radius: 16px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        transform-origin: right center;
-        opacity: 1;
-        transform: translateX(0);
-    }
-    
-    /* Collapsed state: hidden and moved right */
-    .nav-toggle-checkbox:not(:checked) ~ .nav-content {
-        opacity: 0;
-        transform: translateX(100px);
-        pointer-events: none;
-        height: 0;
-        padding: 0;
-        margin: 0;
-        overflow: hidden;
-    }
-
-    .nav-toggle-btn {
-        width: 24px;
-        height: 24px;
-        background-color: var(--secondary-background-color);
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        transition: all 0.3s ease;
-        color: var(--text-color);
-        font-size: 12px;
-        user-select: none;
-    }
-
-    .nav-toggle-btn:hover {
-        background-color: #FF4B4B;
-        color: white;
-        border-color: #FF4B4B;
-    }
-    
-    /* Icon rotation/switching */
-    .nav-toggle-checkbox:checked ~ .nav-toggle-btn .icon-collapse {
-        display: inline-block;
-    }
-    .nav-toggle-checkbox:checked ~ .nav-toggle-btn .icon-expand {
-        display: none;
-    }
-    
-    .nav-toggle-checkbox:not(:checked) ~ .nav-toggle-btn .icon-collapse {
-        display: none;
-    }
-    .nav-toggle-checkbox:not(:checked) ~ .nav-toggle-btn .icon-expand {
-        display: inline-block;
-    }
-    
-    .nav-item {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 44px;
-        height: 44px;
-        border-radius: 12px;
-        background-color: var(--background-color);
-        color: var(--text-color);
-        text-decoration: none;
-        transition: all 0.2s ease;
-        font-size: 20px;
-        border: 1px solid transparent;
-    }
-    
-    .nav-item:hover {
-        transform: scale(1.1);
-        background-color: #FF4B4B;
-        color: white;
-        border-color: #FF4B4B;
-        text-decoration: none;
-    }
-    
-    /* Tooltip text */
-    .nav-item::after {
-        content: attr(data-title);
-        position: absolute;
-        right: 60px;
-        background: #333;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-        opacity: 0;
-        visibility: hidden;
-        transition: opacity 0.2s;
-        white-space: nowrap;
-        pointer-events: none;
-    }
-    
-    .nav-item:hover::after {
-        opacity: 1;
-        visibility: visible;
-    }
-    </style>
-    """
-    
-    content = """
-    <div class="nav-wrapper">
-        <input type="checkbox" id="nav-toggle" class="nav-toggle-checkbox" checked>
-        
-        <label for="nav-toggle" class="nav-toggle-btn" title="Toggle Navigation">
-            <span class="icon-collapse">▶</span>
-            <span class="icon-expand">◀</span>
-        </label>
-        
-        <div class="nav-content">
-            <a href="/" target="_self" class="nav-item" data-title="首页 Home">
-                <span>🏠</span>
-            </a>
-            <a href="/CustomExport" target="_self" class="nav-item" data-title="自定义导出 Custom Export">
-                <span>🧰</span>
-            </a>
-            <a href="/DownloadHistory" target="_self" class="nav-item" data-title="下载历史 Download History">
-                <span>🕘</span>
-            </a>
-            <a href="/Changelog" target="_self" class="nav-item" data-title="更新日志 Changelog">
-                <span>📢</span>
-            </a>
-            <a href="https://github.com/YoungCan-Wang/Wyckoff-Analysis" target="_blank" class="nav-item" data-title="辛苦各位点个star，欢迎提各种issue">
-                <span>⭐</span>
-            </a>
-        </div>
-    </div>
-    """
-    
-    st.html(style + content)
 
 show_right_nav()
 
@@ -270,20 +172,55 @@ with st.sidebar:
     batch_mode = st.toggle(
         "批量生成",
         value=False,
-        help="用分号分隔：000973;600798;300459（; 或 ；均可），一次最多 6 个。提醒：开超市不是一个好的行为呦。"
+        help=(
+            "开启后支持手动输入多个代码或按板块全量添加。\\n"
+            "注意：按板块添加可能涉及数千只股票，耗时较长且受数据源限流影响，请谨慎操作。"
+        )
     )
 
-    enable_stock_search = False
     batch_symbols_text = ""
-    current_name_from_select = ""
-
+    selected_boards_codes = []
+    
     if batch_mode:
+        st.markdown("##### 📌 1. 手动输入代码")
         batch_symbols_text = st.text_area(
             "股票代码列表（支持粘贴混合文本）",
             value="",
             placeholder="例如：000973;600798;300459（; 或 ；均可）",
             help="用分号（; 或 ；）分隔，系统会提取其中的 6 位数字作为股票代码（自动去重）。"
         )
+        
+        board_help = (
+            "**💡 各板块交易规则速览**：\\n"
+            "- **主板**: 门槛无特殊要求；涨跌幅限制 ±10%（ST股±5%）。\\n"
+            "- **创业板**: 10万资产 + 2年经验；涨跌幅限制 ±20%。\\n"
+            "- **科创板**: 50万资产 + 2年经验；涨跌幅限制 ±20%。\\n"
+            "- **北交所**: 50万资产 + 2年经验；涨跌幅限制 ±30%。"
+        )
+        
+        st.markdown("##### 📌 2. 按板块批量添加 (可选)", help=board_help)
+        col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+        with col_b1:
+            check_main = st.checkbox("主板", key="check_board_main", help=board_help)
+        with col_b2:
+            check_chinext = st.checkbox("创业板", key="check_board_chinext")
+        with col_b3:
+            check_star = st.checkbox("科创板", key="check_board_star")
+        with col_b4:
+            check_bse = st.checkbox("北交所", key="check_board_bse")
+            
+        if check_main:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("main")])
+        if check_chinext:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("chinext")])
+        if check_star:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("star")])
+        if check_bse:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("bse")])
+            
+        if selected_boards_codes:
+            st.info(f"✅ 已从板块选择 {len(selected_boards_codes)} 只股票")
+
     else:
         enable_stock_search = st.toggle(
             "启用股票名称搜索",
@@ -374,6 +311,8 @@ with st.sidebar:
     st.caption(
         "复权用于处理分红送转等导致的价格跳变：前复权更常用于看趋势；后复权更常用于还原历史价位对比。"
     )
+    
+    st.markdown("---")
 
     run_btn = st.button("🚀 开始获取数据", type="primary")
 
@@ -397,13 +336,20 @@ if run_btn or st.session_state.should_run:
 
         if batch_mode:
             symbols = _parse_batch_symbols(batch_symbols_text)
+            
+            # Merge with selected boards
+            if selected_boards_codes:
+                symbols.extend(selected_boards_codes)
+            
+            # De-duplicate
+            symbols = _normalize_symbols(symbols)
 
             if not symbols:
-                st.error("请用分号分隔输入至少 1 个 6 位数字股票代码（; 或 ；均可）。")
+                st.error("请至少输入 1 个股票代码，或勾选至少 1 个板块。")
                 st.stop()
-            if len(symbols) > 6:
-                st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
-                st.stop()
+            # if len(symbols) > 6:
+            #     st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
+            #     st.stop()
 
             progress_ph = st.empty()
             status_ph = st.empty()
@@ -464,6 +410,42 @@ if run_btn or st.session_state.should_run:
                 zip_data = zip_buffer.getvalue()
                 file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
 
+            # === 自动记录批量下载历史 ===
+            # 只要任务完成，就记录一次
+            symbols_str = "_".join(symbols[:3]) + (f"_etc_{len(symbols)}" if len(symbols) > 3 else "")
+            current_batch_key = f"batch_{symbols_str}_{datetime.now().strftime('%H%M')}"
+            last_batch_key = st.session_state.get("last_home_batch_key")
+            
+            if current_batch_key != last_batch_key:
+                add_download_history(
+                    page="Home",
+                    source="批量生成",
+                    title=f"批量 ({len(symbols)} 只)",
+                    file_name=file_name_zip,
+                    mime="application/zip",
+                    data=None
+                )
+                st.session_state["last_home_batch_key"] = current_batch_key
+            
+            # Send Feishu notification
+            if st.session_state.feishu_webhook:
+                success_count = len([r for r in results if r["status"] == "ok"])
+                failed_count = len(results) - success_count
+                notify_title = f"📦 批量下载完成 ({success_count}/{len(symbols)})"
+                notify_text = (
+                    f"**任务状态**: 已完成\n"
+                    f"**成功**: {success_count} 个\n"
+                    f"**失败**: {failed_count} 个\n"
+                    f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"**文件**: {file_name_zip}"
+                )
+                if failed_count > 0:
+                    failed_details = "\\n".join([f"- {r['symbol']}: {r['error']}" for r in results if r["status"] != "ok"])
+                    notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
+                
+                send_feishu_notification(st.session_state.feishu_webhook, notify_title, notify_text)
+                st.toast("✅ 飞书通知已发送", icon="🔔")
+
             status_ph.empty()
             progress_ph.empty()
             results_ph.empty()
@@ -478,15 +460,6 @@ if run_btn or st.session_state.should_run:
                 type="primary",
                 use_container_width=True,
             )
-            if clicked:
-                add_download_history(
-                    page="Home",
-                    source="批量生成",
-                    title="批量生成 ZIP",
-                    file_name=file_name_zip,
-                    mime="application/zip",
-                    data=zip_data,
-                )
             st.stop()
 
         if not st.session_state.current_symbol or not st.session_state.current_symbol.isdigit() or len(st.session_state.current_symbol) != 6:
@@ -542,72 +515,75 @@ if run_btn or st.session_state.should_run:
             zip_data = zip_buffer.getvalue()
             file_name_zip = f"{st.session_state.current_symbol}_{name}_all.zip"
 
+            # === 自动记录单只下载历史 ===
+            current_single_key = f"single_{st.session_state.current_symbol}_{datetime.now().strftime('%H%M')}"
+            last_single_key = st.session_state.get("last_home_single_key")
+
+            if current_single_key != last_single_key:
+                add_download_history(
+                    page="Home",
+                    source="单只导出",
+                    title=f"{st.session_state.current_symbol} {name}",
+                    file_name=file_name_zip,
+                    mime="application/zip",
+                    data=None
+                )
+                st.session_state["last_home_single_key"] = current_single_key
+
             st.markdown("### 📥 下载数据")
             if is_mobile:
-                clicked_zip = st.download_button(
+                st.download_button(
                     label="📦 全部下载 (.zip)",
                     data=zip_data,
                     file_name=file_name_zip,
                     mime="application/zip",
                     type="primary",
-                    use_container_width=True
+                    use_container_width=True,
                 )
-                clicked_ohlcv = st.download_button(
+                st.download_button(
                     label="下载 OHLCV (增强版)",
                     data=csv_export,
                     file_name=file_name_export,
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
                 )
-                clicked_hist = st.download_button(
+                st.download_button(
                     label="下载原始数据 (Hist Data)",
                     data=csv_hist,
                     file_name=file_name_hist,
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
                 )
-                if clicked_zip:
-                    add_download_history(page="Home", source="单只导出", title="全部 ZIP", file_name=file_name_zip, mime="application/zip", data=zip_data)
-                if clicked_ohlcv:
-                    add_download_history(page="Home", source="单只导出", title="OHLCV", file_name=file_name_export, mime="text/csv", data=csv_export)
-                if clicked_hist:
-                    add_download_history(page="Home", source="单只导出", title="Hist", file_name=file_name_hist, mime="text/csv", data=csv_hist)
             else:
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    clicked_ohlcv = st.download_button(
+                    st.download_button(
                         label="下载 OHLCV (增强版)",
                         data=csv_export,
                         file_name=file_name_export,
                         mime="text/csv",
                         type="primary",
-                        use_container_width=True
+                        use_container_width=True,
                     )
                 
                 with col2:
-                    clicked_hist = st.download_button(
+                    st.download_button(
                         label="下载原始数据 (Hist Data)",
                         data=csv_hist,
                         file_name=file_name_hist,
                         mime="text/csv",
-                        use_container_width=True
+                        use_container_width=True,
                     )
 
                 with col3:
-                    clicked_zip = st.download_button(
+                    st.download_button(
                         label="📦 全部下载 (.zip)",
                         data=zip_data,
                         file_name=file_name_zip,
                         mime="application/zip",
                         type="primary",
-                        use_container_width=True
+                        use_container_width=True,
                     )
-                if clicked_zip:
-                    add_download_history(page="Home", source="单只导出", title="全部 ZIP", file_name=file_name_zip, mime="application/zip", data=zip_data)
-                if clicked_ohlcv:
-                    add_download_history(page="Home", source="单只导出", title="OHLCV", file_name=file_name_export, mime="text/csv", data=csv_export)
-                if clicked_hist:
-                    add_download_history(page="Home", source="单只导出", title="Hist", file_name=file_name_hist, mime="text/csv", data=csv_hist)
                 
     except Exception as e:
         st.error(f"发生错误: {str(e)}")

@@ -1,5 +1,7 @@
 # A 股历史行情 CSV 导出脚本（akshare）
 
+> **Context for AI Agents:** This project is a Python-based tool for fetching and exporting Chinese A-Share stock data. It uses `akshare` for data, `streamlit` for the UI, and `supabase` for authentication.
+
 用 Python + [akshare](https://github.com/akfamily/akshare) 拉取指定 A 股近 N 个交易日的日线数据，并生成两份 CSV：
 
 - `{股票代码}_{股票名}_hist_data.csv`：akshare 返回的原始字段
@@ -16,65 +18,93 @@
 
 ```text
 .
-├── fetch_a_share_csv.py
-├── requirements.txt
-└── README.md
+├── fetch_a_share_csv.py    # 核心逻辑：获取数据、处理数据、生成 CSV
+├── streamlit_app.py        # Web UI 入口
+├── supabase_client.py      # Supabase 客户端配置
+├── auth_component.py       # 登录/注册组件
+├── requirements.txt        # 依赖列表
+└── .env.example            # 环境变量示例
 ```
 
 ---
 
-## 环境配置
+## ✨ 功能特性 (Features)
 
-### 1) 依赖
+- 📊 **多维数据导出**: 支持原始行情 (Hist Data) 与 增强型 OHLCV (含换手率/振幅/板块) 双份导出。
+- 🖥️ **可视化交互**: 基于 Streamlit 的 Web 界面，支持移动端适配。
+- 🔐 **用户系统**: 集成 Supabase Auth，支持登录/注册与配置云端同步 (RLS 安全隔离)。
+- 🤖 **通知推送**: 支持飞书 Webhook 消息推送批量下载状态。
+- ⚡️ **批量处理**: 支持单只/批量股票代码解析与导出 (.zip 打包)。
+- 📝 **历史记录**: 自动记录最近查询与批量下载任务。
 
-- macOS / Linux / Windows 均可
-- Python 3.10+（建议用 venv；macOS Homebrew Python 默认启用 PEP 668，不能直接全局 pip install）
+---
 
-### 2) 创建虚拟环境并安装依赖（推荐）
+## 🚀 快速开始 (AI & Humans)
+
+### 1. 环境配置
+
+需要 **Python 3.10+**。
 
 ```bash
-cd /path/to/akshare
+# 1. 进入目录
+cd akshare
 
+# 2. 创建虚拟环境
 python3 -m venv .venv
-source .venv/bin/activate
 
+# 3. 激活虚拟环境
+# macOS / Linux:
+source .venv/bin/activate
+# Windows:
+# .venv\Scripts\activate
+
+# 4. 安装依赖
+# 注意：必须安装 supabase 库，否则无法运行 Streamlit App
 python -m pip install -U pip
 python -m pip install -r requirements.txt
 ```
 
-验证 akshare 可用：
+### 2. 配置文件 (.env)
+
+项目依赖 Supabase 进行用户认证。
+
+1.  复制示例文件：
+    ```bash
+    cp .env.example .env
+    ```
+2.  修改 `.env` 文件，填入你的配置：
+    *   `SUPABASE_URL`: 你的 Supabase 项目 URL
+    *   `SUPABASE_KEY`: 你的 Supabase **anon** Key
+    *   `FEISHU_WEBHOOK_URL`: (可选) 飞书机器人 Webhook 地址
+
+### 3. 运行方式
+
+#### 方式 A: Web 可视化界面 (推荐)
+
+直接在浏览器中查询、预览数据并一键下载 CSV。
 
 ```bash
-python -c "import akshare as ak; print(ak.__version__)"
-```
-
----
-
-## 运行方式
-
-脚本：[fetch_a_share_csv.py](file:///Users/youngcan/akshare/fetch_a_share_csv.py)
-
-### 1) 单只股票
-
-```bash
+# 确保已激活虚拟环境
 source .venv/bin/activate
+
+# 启动 Streamlit
+streamlit run streamlit_app.py
+```
+浏览器会自动打开 `http://localhost:8501`。
+
+#### 方式 B: 命令行脚本 (CLI)
+
+适合批量处理或无界面环境。
+
+```bash
+# 单只股票
 python fetch_a_share_csv.py --symbol 300364
-```
 
-### 2) 多只股票（直接给代码列表）
+# 多只股票（直接给代码列表）
+python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 
-```bash
-source .venv/bin/activate
-python -u fetch_a_share_csv.py --symbols 000973 600798 601390 600362 002186 300459 601698 603885
-```
-
-### 3) 多只股票（从混合文本中提取 6 位股票代码）
-
-适合“代码+中文名混在一起/甚至没空格”的输入：
-
-```bash
-source .venv/bin/activate
-python -u fetch_a_share_csv.py --symbols-text '000973 佛塑科技 600798鲁抗医药 601390中国中诶 600362 江西铜业 002186 全聚德 300459 汤姆猫 601698中国卫通603885 吉祥航空'
+# 多只股票（从混合文本中提取）
+python -u fetch_a_share_csv.py --symbols-text '000973 佛塑科技 600798鲁抗医药'
 ```
 
 ---
@@ -90,14 +120,6 @@ python -u fetch_a_share_csv.py --symbols-text '000973 佛塑科技 600798鲁抗�
 
 - `--trading-days`：交易日数量（默认 500）
 - `--end-offset-days`：结束日的自然日偏移（默认 1）
-
-示例：结束日改为“系统日期-2天”
-
-```bash
-python fetch_a_share_csv.py --symbol 300364 --end-offset-days 2
-```
-
-实现方式：使用 `ak.tool_trade_date_hist_sina()` 获取 A 股历史交易日历，再在该日历里定位结束日并回溯 N 个交易日。
 
 ---
 
@@ -144,76 +166,26 @@ python fetch_a_share_csv.py --symbol 300364 --adjust qfq
 
 ---
 
-## 股票基础知识速览（够用版）
-
-### 1) A 股代码与交易所
-
-国内常见是 6 位数字代码，本脚本直接使用 6 位数字（不需要 `sh`/`sz` 前缀），例如：
-
-- `600xxx / 601xxx / 603xxx`：多数为上交所主板（也有科创板 `688xxx`）
-- `000xxx / 002xxx`：多数为深交所主板/中小板
-- `300xxx`：创业板
-
-### 2) 交易日是什么
-
-“交易日”不是自然日：
-
-- 周六、周日不交易
-- 法定节假日/调休等也可能不交易
-
-所以“最近 500 个交易日”必须借助交易日历计算。本脚本已内置该逻辑。
-
-### 3) 名称以数据源为准
-
-你输入的“代码+中文名”只是辅助阅读，脚本会用 `stock_info_a_code_name()` 反查真实名称并用于文件名。
-
----
-
 ## 常见问题
 
-### 1) macOS 上 pip 报 externally-managed-environment（PEP 668）
+### 1) ImportError: cannot import name 'create_client' from 'supabase'
+这是因为未安装 `supabase` 库。请运行：
+```bash
+pip install supabase>=2.0.0
+```
 
-用 venv 安装依赖即可（见上方“环境配置”）。
+### 2) macOS 上 pip 报 externally-managed-environment
+请使用虚拟环境（venv）安装依赖，参考上文“快速开始”。
 
-### 2) 输出文件名里有空格（比如 `全 聚 德`）
-
+### 3) 输出文件名里有空格
 这是数据源的股票名称本身带空格；脚本会按原样写入文件名（仅替换不允许的文件名字符）。
-
-### 3) 网络/数据源不稳定
-
-akshare 依赖公开数据源，偶尔会有失败/限流/字段变动。脚本会逐只股票打印 `OK/FAIL`，失败不会影响其它股票继续导出。
 
 ---
 
-## Web 可视化工具 (Streamlit)
-
-我们提供了一个 Web 界面，可以直接在浏览器中查询、预览数据并一键下载 CSV。
-
-### 1) 本地运行
-
-```bash
-# 激活虚拟环境
-source .venv/bin/activate
-
-# 启动 Streamlit
-streamlit run streamlit_app.py
-```
-
-浏览器会自动打开 `http://localhost:8501`。
-
-### 2) 公网部署 (Streamlit Community Cloud)
-
-推荐使用官方免费的 Streamlit Community Cloud 进行一键部署：
+## 部署 (Streamlit Community Cloud)
 
 1. Fork 本仓库到你的 GitHub。
-2. 访问 [share.streamlit.io](https://share.streamlit.io/) 并使用 GitHub 登录。
-3. 点击 "New app"，选择你的仓库、分支 (main)。
-4. 系统会自动识别 `streamlit_app.py`，点击 "Deploy"，等待几分钟即可访问。
+2. 访问 [share.streamlit.io](https://share.streamlit.io/) 并部署。
+3. **关键**：在 Streamlit Cloud 的 "Secrets" 设置中配置 `SUPABASE_URL` 和 `SUPABASE_KEY`，格式与 `.env` 文件一致。
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/)
-
-### 3) 在线访问 (Demo)
-
-你可以直接访问以下链接使用本工具（基于 main 分支热更新）：
-
-👉 **[https://wyckoff-analysis-youngcanphoenix.streamlit.app/](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
