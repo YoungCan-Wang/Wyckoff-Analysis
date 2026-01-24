@@ -183,6 +183,7 @@ with st.sidebar:
     
     if batch_mode:
         st.markdown("##### 📌 1. 手动输入代码")
+        st.caption("批量模式：为降低失败率与封禁风险，固定回溯 60 个交易日，且最多 6 只股票。")
         batch_symbols_text = st.text_area(
             "股票代码列表（支持粘贴混合文本）",
             value="",
@@ -283,10 +284,10 @@ with st.sidebar:
     trading_days = st.number_input(
         "回溯交易日数量",
         min_value=1,
-        max_value=5000,
-        value=500,
+        max_value=700,
+        value=min(500, 700),
         step=50,
-        help="从结束日期向前回溯的交易日天数"
+        help="从结束日期向前回溯的交易日天数（上限 700）"
     )
     
     end_offset = st.number_input(
@@ -337,19 +338,16 @@ if run_btn or st.session_state.should_run:
         if batch_mode:
             symbols = _parse_batch_symbols(batch_symbols_text)
             
-            # Merge with selected boards
             if selected_boards_codes:
                 symbols.extend(selected_boards_codes)
-            
-            # De-duplicate
             symbols = _normalize_symbols(symbols)
 
             if not symbols:
                 st.error("请至少输入 1 个股票代码，或勾选至少 1 个板块。")
                 st.stop()
-            # if len(symbols) > 6:
-            #     st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
-            #     st.stop()
+            if len(symbols) > 6:
+                st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。")
+                st.stop()
 
             progress_ph = st.empty()
             status_ph = st.empty()
@@ -358,7 +356,7 @@ if run_btn or st.session_state.should_run:
 
             with st.spinner(f"正在批量生成（{len(symbols)} 个）..."):
                 end_calendar = date.today() - timedelta(days=int(end_offset))
-                window = _resolve_trading_window(end_calendar, int(trading_days))
+                window = _resolve_trading_window(end_calendar, 60)
 
                 zip_buffer = io.BytesIO()
                 results: list[dict[str, str]] = []
