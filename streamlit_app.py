@@ -3,11 +3,9 @@ from datetime import date, timedelta, datetime
 import zipfile
 import io
 import re
-import json
 import requests
-import time
 import os
-import pandas as pd
+import random
 from dotenv import load_dotenv
 import akshare as ak
 from fetch_a_share_csv import (
@@ -361,8 +359,6 @@ if run_btn or st.session_state.should_run:
                 zip_buffer = io.BytesIO()
                 results: list[dict[str, str]] = []
                 name_map = _stock_name_map()
-                start = window.start_trade_date.strftime("%Y%m%d")
-                end = window.end_trade_date.strftime("%Y%m%d")
 
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                     for idx, symbol in enumerate(symbols, start=1):
@@ -370,16 +366,7 @@ if run_btn or st.session_state.should_run:
                         try:
                             name = name_map.get(symbol) or "Unknown"
 
-                            df_hist = ak.stock_zh_a_hist(
-                                symbol=symbol,
-                                period="daily",
-                                start_date=start,
-                                end_date=end,
-                                adjust=adjust,
-                                timeout=60,
-                            )
-                            if df_hist is None or df_hist.empty:
-                                raise RuntimeError("empty data returned")
+                            df_hist = _fetch_hist(symbol, window, adjust)
 
                             sector = _stock_sector_em_timeout(symbol, timeout=60)
                             df_export = _build_export(df_hist, sector)
@@ -398,10 +385,9 @@ if run_btn or st.session_state.should_run:
                             add_to_history(symbol, name)
                             results.append({"symbol": symbol, "name": name, "status": "ok", "error": ""})
                         except Exception as e:
-                            msg = str(e)
-                            if "ReadTimeout" in msg or "timed out" in msg or "timeout" in msg.lower():
-                                msg = "timeout(60s)"
+                            msg = _friendly_error_message(e, symbol, 60)
                             results.append({"symbol": symbol, "name": "", "status": "failed", "error": msg})
+                        time.sleep(random.uniform(0.8, 1.2))
                         progress_bar.progress(idx / len(symbols))
                         results_ph.dataframe(results, use_container_width=True, height=260)
 
