@@ -7,6 +7,7 @@ import json
 import requests
 import time
 import os
+import pandas as pd
 from dotenv import load_dotenv
 import akshare as ak
 from fetch_a_share_csv import (
@@ -14,6 +15,7 @@ from fetch_a_share_csv import (
     _fetch_hist,
     _build_export,
     get_all_stocks,
+    get_stocks_by_board,
     _normalize_symbols,
 )
 from download_history import add_download_history
@@ -170,20 +172,55 @@ with st.sidebar:
     batch_mode = st.toggle(
         "批量生成",
         value=False,
-        help="用分号分隔：000973;600798;300459（; 或 ；均可），一次最多 6 个。提醒：开超市不是一个好的行为呦。"
+        help=(
+            "开启后支持手动输入多个代码或按板块全量添加。\\n"
+            "注意：按板块添加可能涉及数千只股票，耗时较长且受数据源限流影响，请谨慎操作。"
+        )
     )
 
-    enable_stock_search = False
     batch_symbols_text = ""
-    current_name_from_select = ""
-
+    selected_boards_codes = []
+    
     if batch_mode:
+        st.markdown("##### 📌 1. 手动输入代码")
         batch_symbols_text = st.text_area(
             "股票代码列表（支持粘贴混合文本）",
             value="",
             placeholder="例如：000973;600798;300459（; 或 ；均可）",
             help="用分号（; 或 ；）分隔，系统会提取其中的 6 位数字作为股票代码（自动去重）。"
         )
+        
+        board_help = (
+            "**💡 各板块交易规则速览**：\\n"
+            "- **主板**: 门槛无特殊要求；涨跌幅限制 ±10%（ST股±5%）。\\n"
+            "- **创业板**: 10万资产 + 2年经验；涨跌幅限制 ±20%。\\n"
+            "- **科创板**: 50万资产 + 2年经验；涨跌幅限制 ±20%。\\n"
+            "- **北交所**: 50万资产 + 2年经验；涨跌幅限制 ±30%。"
+        )
+        
+        st.markdown("##### 📌 2. 按板块批量添加 (可选)", help=board_help)
+        col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+        with col_b1:
+            check_main = st.checkbox("主板", key="check_board_main", help=board_help)
+        with col_b2:
+            check_chinext = st.checkbox("创业板", key="check_board_chinext")
+        with col_b3:
+            check_star = st.checkbox("科创板", key="check_board_star")
+        with col_b4:
+            check_bse = st.checkbox("北交所", key="check_board_bse")
+            
+        if check_main:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("main")])
+        if check_chinext:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("chinext")])
+        if check_star:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("star")])
+        if check_bse:
+            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("bse")])
+            
+        if selected_boards_codes:
+            st.info(f"✅ 已从板块选择 {len(selected_boards_codes)} 只股票")
+
     else:
         enable_stock_search = st.toggle(
             "启用股票名称搜索",
@@ -299,9 +336,16 @@ if run_btn or st.session_state.should_run:
 
         if batch_mode:
             symbols = _parse_batch_symbols(batch_symbols_text)
+            
+            # Merge with selected boards
+            if selected_boards_codes:
+                symbols.extend(selected_boards_codes)
+            
+            # De-duplicate
+            symbols = _normalize_symbols(symbols)
 
             if not symbols:
-                st.error("请用分号分隔输入至少 1 个 6 位数字股票代码（; 或 ；均可）。")
+                st.error("请至少输入 1 个股票代码，或勾选至少 1 个板块。")
                 st.stop()
             # if len(symbols) > 6:
             #     st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")

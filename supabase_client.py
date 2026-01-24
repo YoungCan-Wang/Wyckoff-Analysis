@@ -1,9 +1,11 @@
 import os
 import streamlit as st
 from supabase import create_client, Client
+from postgrest.exceptions import APIError
+from constants import TABLE_USER_SETTINGS
 
 @st.cache_resource
-def get_supabase_client() -> Client:
+def _get_supabase_client_base() -> Client:
     # 优先尝试从 os.getenv 读取（本地 .env 文件）
     # 其次尝试从 st.secrets 读取（Streamlit Cloud 部署环境）
     url = os.getenv("SUPABASE_URL")
@@ -19,14 +21,38 @@ def get_supabase_client() -> Client:
 
     if not url or not key:
         raise ValueError("Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_KEY in .env or secrets.")
-        
+
     return create_client(url, key)
+
+def _apply_user_session(supabase: Client) -> None:
+    """
+    将当前用户会话绑定到 Supabase 客户端（用于 RLS）
+    """
+    access_token = st.session_state.get("access_token")
+    refresh_token = st.session_state.get("refresh_token")
+
+    if access_token and refresh_token:
+        try:
+            supabase.auth.set_session(access_token, refresh_token)
+        except Exception:
+            pass
+
+    if access_token:
+        supabase.postgrest.auth(access_token)
+    else:
+        # 回退到 anon/service key（未登录场景）
+        supabase.postgrest.auth(supabase.supabase_key)
+
+def get_supabase_client() -> Client:
+    supabase = _get_supabase_client_base()
+    _apply_user_session(supabase)
+    return supabase
 
 def load_user_settings(user_id: str):
     """从 Supabase 加载用户配置到 st.session_state"""
     try:
         supabase = get_supabase_client()
-        response = supabase.table("user_settings").select("*").eq("user_id", user_id).execute()
+        response = supabase.table(TABLE_USER_SETTINGS).select("*").eq("user_id", user_id).execute()
         
         if response.data and len(response.data) > 0:
             settings = response.data[0]
@@ -34,8 +60,10 @@ def load_user_settings(user_id: str):
             st.session_state.feishu_webhook = settings.get("feishu_webhook") or ""
             st.session_state.gemini_api_key = settings.get("gemini_api_key") or ""
             return True
+    except APIError as e:
+        print(f"Supabase API Error in load_user_settings: {e.code} - {e.message}")
     except Exception as e:
-        print(f"Failed to load settings: {e}")
+        print(f"Unexpected error in load_user_settings: {e}")
     return False
 
 def save_user_settings(user_id: str, settings: dict):
@@ -47,8 +75,10 @@ def save_user_settings(user_id: str, settings: dict):
             **settings
         }
         # upsert: 存在则更新，不存在则插入
-        supabase.table("user_settings").upsert(data).execute()
+        supabase.table(TABLE_USER_SETTINGS).upsert(data).execute()
         return True
+    except APIError as e:
+        print(f"Supabase API Error in save_user_settings: {e.code} - {e.message}")
     except Exception as e:
-        print(f"Failed to save settings: {e}")
+        print(f"Unexpected error in save_user_settings: {e}")
         return False

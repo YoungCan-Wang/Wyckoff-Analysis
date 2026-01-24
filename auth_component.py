@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase_client import get_supabase_client, load_user_settings
+from supabase import AuthApiError
 import time
 
 def login_form():
@@ -52,11 +53,14 @@ def login_form():
                             })
                             st.session_state.user = response.user
                             st.session_state.access_token = response.session.access_token
+                            st.session_state.refresh_token = response.session.refresh_token
                             # 登录成功，加载用户配置
                             load_user_settings(response.user.id)
                             st.success("登录成功！")
                             time.sleep(0.5)
                             st.rerun()
+                    except AuthApiError as e:
+                        st.error(f"登录失败: {e.message}")
                     except Exception as e:
                         st.error(f"登录失败: {str(e)}")
 
@@ -80,6 +84,8 @@ def login_form():
                                     "password": new_password
                                 })
                                 st.success("注册成功！请检查邮箱并点击验证链接完成激活。")
+                        except AuthApiError as e:
+                            st.error(f"注册失败: {e.message}")
                         except Exception as e:
                             st.error(f"注册失败: {str(e)}")
 
@@ -99,6 +105,7 @@ def check_auth():
         if session:
             st.session_state.user = session.user
             st.session_state.access_token = session.access_token
+            st.session_state.refresh_token = session.refresh_token
             # 恢复会话成功，加载用户配置
             load_user_settings(session.user.id)
             return True
@@ -116,4 +123,5 @@ def logout():
         pass
     st.session_state.user = None
     st.session_state.access_token = None
+    st.session_state.refresh_token = None
     st.rerun()

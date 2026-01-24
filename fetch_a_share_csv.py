@@ -192,6 +192,36 @@ def get_all_stocks() -> list[dict[str, str]]:
         return []
 
 
+def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
+    """
+    Filter stocks by board.
+    Args:
+        board_name: "all", "main" (主板), "chinext" (创业板), "star" (科创板), "bse" (北交所)
+    """
+    all_stocks = get_all_stocks()
+    if board_name == "all":
+        return all_stocks
+    
+    out = []
+    for s in all_stocks:
+        code = s["code"]
+        if board_name == "star":  # 科创板
+            if code.startswith("688"):
+                out.append(s)
+        elif board_name == "chinext":  # 创业板
+            if code.startswith(("300", "301")):
+                out.append(s)
+        elif board_name == "bse":  # 北交所
+            if code.startswith(("43", "83", "87", "88", "92")):
+                out.append(s)
+        elif board_name == "main":  # 主板 (沪深)
+            # 沪市主板: 600, 601, 603, 605
+            # 深市主板: 000, 001, 002, 003
+            if code.startswith(("600", "601", "603", "605", "000", "001", "002", "003")):
+                out.append(s)
+    return out
+
+
 def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame:
     start = window.start_trade_date.strftime("%Y%m%d")
     end = window.end_trade_date.strftime("%Y%m%d")
