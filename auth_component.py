@@ -42,7 +42,7 @@ def login_form():
             with st.form("login_form", clear_on_submit=False):
                 email = st.text_input("邮箱", key="login_email", placeholder="name@example.com")
                 password = st.text_input("密码", type="password", key="login_password", placeholder="请输入密码")
-                submit = st.form_submit_button("登录", type="primary", use_container_width=True)
+                submit = st.form_submit_button("登录", type="primary", width="stretch")
                 
                 if submit:
                     try:
@@ -69,7 +69,7 @@ def login_form():
                 new_email = st.text_input("邮箱", key="reg_email", placeholder="name@example.com")
                 new_password = st.text_input("密码", type="password", key="reg_password", placeholder="至少 6 位字符")
                 confirm_password = st.text_input("确认密码", type="password", key="reg_confirm", placeholder="请再次输入密码")
-                submit_reg = st.form_submit_button("注册新账号", type="primary", use_container_width=True)
+                submit_reg = st.form_submit_button("注册新账号", type="primary", width="stretch")
                 
                 if submit_reg:
                     if new_password != confirm_password:

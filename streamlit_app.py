@@ -6,6 +6,7 @@ import re
 import requests
 import os
 import random
+import time
 from dotenv import load_dotenv
 import akshare as ak
 from fetch_a_share_csv import (
@@ -256,7 +257,7 @@ with st.sidebar:
         else:
             if enable_stock_search:
                 st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
-                if st.button("🔄 重试加载股票列表", use_container_width=True):
+                if st.button("🔄 重试加载股票列表", width="stretch"):
                     load_stock_list.clear()
                     st.rerun()
 
@@ -320,7 +321,7 @@ with st.sidebar:
         st.header("🕒 搜索历史")
         for item in st.session_state.search_history:
             label = f"{item['symbol']} {item['name']}"
-            if st.button(label, key=f"hist_{item['symbol']}", use_container_width=True):
+            if st.button(label, key=f"hist_{item['symbol']}", width="stretch"):
                 set_symbol_from_history(item['symbol'])
                 st.rerun()
 
@@ -389,7 +390,7 @@ if run_btn or st.session_state.should_run:
                             results.append({"symbol": symbol, "name": "", "status": "failed", "error": msg})
                         time.sleep(random.uniform(0.8, 1.2))
                         progress_bar.progress(idx / len(symbols))
-                        results_ph.dataframe(results, use_container_width=True, height=260)
+                        results_ph.dataframe(results, width="stretch", height=260)
 
                 zip_data = zip_buffer.getvalue()
                 file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
@@ -435,14 +436,14 @@ if run_btn or st.session_state.should_run:
             results_ph.empty()
 
             st.subheader("📦 批量生成结果")
-            st.dataframe(results, use_container_width=True)
+            st.dataframe(results, width="stretch")
             clicked = st.download_button(
                 label="📦 下载全部 (.zip)",
                 data=zip_data,
                 file_name=file_name_zip,
                 mime="application/zip",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             )
             st.stop()
 
@@ -476,15 +477,15 @@ if run_btn or st.session_state.should_run:
             
             with tab1:
                 if is_mobile:
-                    st.dataframe(df_export, use_container_width=True, height=420)
+                    st.dataframe(df_export, width="stretch", height=420)
                 else:
-                    st.dataframe(df_export, use_container_width=True)
+                    st.dataframe(df_export, width="stretch")
             
             with tab2:
                 if is_mobile:
-                    st.dataframe(df_hist, use_container_width=True, height=420)
+                    st.dataframe(df_hist, width="stretch", height=420)
                 else:
-                    st.dataframe(df_hist, use_container_width=True)
+                    st.dataframe(df_hist, width="stretch")
             
             csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
@@ -522,21 +523,21 @@ if run_btn or st.session_state.should_run:
                     file_name=file_name_zip,
                     mime="application/zip",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 st.download_button(
                     label="下载 OHLCV (增强版)",
                     data=csv_export,
                     file_name=file_name_export,
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 st.download_button(
                     label="下载原始数据 (Hist Data)",
                     data=csv_hist,
                     file_name=file_name_hist,
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 col1, col2, col3 = st.columns(3)
@@ -547,7 +548,7 @@ if run_btn or st.session_state.should_run:
                         file_name=file_name_export,
                         mime="text/csv",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 
                 with col2:
@@ -556,7 +557,7 @@ if run_btn or st.session_state.should_run:
                         data=csv_hist,
                         file_name=file_name_hist,
                         mime="text/csv",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                 with col3:
@@ -566,7 +567,7 @@ if run_btn or st.session_state.should_run:
                         file_name=file_name_zip,
                         mime="application/zip",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 
     except Exception as e:
