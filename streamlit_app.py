@@ -7,11 +7,17 @@ import requests
 import os
 import random
 import time
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
 from requests.exceptions import RequestException
 from http.client import RemoteDisconnected
 from dotenv import load_dotenv
 import akshare as ak
+import pandas as pd
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
@@ -24,16 +30,21 @@ from fetch_a_share_csv import (
 from download_history import add_download_history
 from auth_component import check_auth, login_form, logout
 from navigation import show_right_nav
+from stock_cache import (
+    cleanup_cache,
+    denormalize_hist_df,
+    get_cache_meta,
+    load_cached_history,
+    normalize_hist_df,
+    upsert_cache_data,
+    upsert_cache_meta,
+)
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Page configuration
-st.set_page_config(
-    page_title="A股历史行情导出工具",
-    page_icon="📈",
-    layout="wide"
-)
+st.set_page_config(page_title="A股历史行情导出工具", page_icon="📈", layout="wide")
 
 # === Auth Check ===
 if not check_auth():
@@ -68,31 +79,81 @@ if st.session_state.feishu_webhook is None:
 if "mobile_mode" not in st.session_state:
     st.session_state.mobile_mode = False
 
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_stock_list():
     return get_all_stocks()
+
 
 # 增加网络请求重试机制，应对 RemoteDisconnected 等反爬限制
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=3, max=30),
-    retry=retry_if_exception_type(Exception), # 捕获所有异常进行重试，确保稳健
-    reraise=True
+    retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试，确保稳健
+    reraise=True,
 )
 def _fetch_hist_with_retry(symbol, window, adjust):
-    return _fetch_hist(symbol, window, adjust)
+    cache_adjust = adjust or "none"
+    start_date = window.start_trade_date
+    end_date = window.end_trade_date
+
+    meta = get_cache_meta(symbol, cache_adjust)
+    cached_df = None
+    cached_source = None
+    if meta:
+        cached_source = meta.source
+        cached_df = load_cached_history(
+            symbol, cache_adjust, meta.source, meta.start_date, meta.end_date
+        )
+
+    if meta and cached_df is not None and not cached_df.empty:
+        if meta.start_date <= start_date and meta.end_date >= end_date:
+            return denormalize_hist_df(
+                cached_df[
+                    (cached_df["date"] >= start_date.isoformat())
+                    & (cached_df["date"] <= end_date.isoformat())
+                ]
+            )
+
+    df = _fetch_hist(symbol, window, adjust)
+    source = "akshare" if "换手率" in df.columns else "baostock"
+    normalized = normalize_hist_df(df)
+
+    if cached_df is not None and not cached_df.empty:
+        combined = pd.concat([cached_df, normalized], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["date"], keep="last").sort_values(
+            "date"
+        )
+    else:
+        combined = normalized
+
+    upsert_cache_data(symbol, cache_adjust, source, combined)
+    upsert_cache_meta(
+        symbol,
+        cache_adjust,
+        source,
+        start_date=min(start_date, meta.start_date) if meta else start_date,
+        end_date=max(end_date, meta.end_date) if meta else end_date,
+    )
+    cleanup_cache(ttl_days=30)
+    return df
+
 
 def add_to_history(symbol, name):
     item = {"symbol": symbol, "name": name}
     # Remove if exists to move to top
-    st.session_state.search_history = [x for x in st.session_state.search_history if x["symbol"] != symbol]
+    st.session_state.search_history = [
+        x for x in st.session_state.search_history if x["symbol"] != symbol
+    ]
     st.session_state.search_history.insert(0, item)
     # Keep only last 10
     st.session_state.search_history = st.session_state.search_history[:10]
 
+
 def set_symbol_from_history(symbol):
     st.session_state.current_symbol = symbol
     st.session_state.should_run = True
+
 
 def _safe_filename_part(value: str) -> str:
     s = str(value).strip()
@@ -101,6 +162,7 @@ def _safe_filename_part(value: str) -> str:
     s = re.sub(r"[\\/:*?\"<>|]+", "_", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
 
 def _parse_batch_symbols(text: str) -> list[str]:
     parts = re.split(r"[;；\s,，\n]+", str(text or ""))
@@ -112,10 +174,12 @@ def _parse_batch_symbols(text: str) -> list[str]:
         candidates.extend(re.findall(r"\d{6}", part))
     return _normalize_symbols(candidates)
 
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _stock_name_map():
     stocks = load_stock_list()
     return {s.get("code"): s.get("name") for s in stocks if s.get("code")}
+
 
 def _stock_sector_em_timeout(symbol: str, timeout: float):
     try:
@@ -129,6 +193,7 @@ def _stock_sector_em_timeout(symbol: str, timeout: float):
     except Exception:
         return ""
 
+
 def _friendly_error_message(e: Exception, symbol: str, trading_days: int) -> str:
     msg = str(e)
     if "not found in stock list" in msg:
@@ -137,33 +202,23 @@ def _friendly_error_message(e: Exception, symbol: str, trading_days: int) -> str
         return f"数据源返回空 (可能停牌或上市不足 {trading_days} 天)"
     return f"未知错误: {msg}"
 
+
 def send_feishu_notification(webhook_url: str, title: str, content: str):
     """发送飞书卡片消息"""
     if not webhook_url:
         return False
-    
+
     headers = {"Content-Type": "application/json"}
     payload = {
         "msg_type": "interactive",
         "card": {
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": title
-                }
-            },
+            "header": {"title": {"tag": "plain_text", "content": title}},
             "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": content
-                    }
-                }
-            ]
-        }
+                {"tag": "div", "text": {"tag": "lark_md", "content": content}}
+            ],
+        },
     }
-    
+
     try:
         resp = requests.post(webhook_url, headers=headers, json=payload, timeout=10)
         return resp.status_code == 200
@@ -172,9 +227,10 @@ def send_feishu_notification(webhook_url: str, title: str, content: str):
         return False
 
 
-
 st.title("📈 A股历史行情导出工具")
-st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
+st.markdown(
+    "基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。"
+)
 st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
 
 show_right_nav()
@@ -187,7 +243,7 @@ with st.sidebar:
         "手机模式",
         value=bool(st.session_state.get("mobile_mode", False)),
         key="mobile_mode",
-        help="手机模式会优化按钮布局与表格展示。"
+        help="手机模式会优化按钮布局与表格展示。",
     )
 
     batch_mode = st.toggle(
@@ -196,22 +252,24 @@ with st.sidebar:
         help=(
             "开启后支持手动输入多个代码或按板块全量添加。\\n"
             "注意：按板块添加可能涉及数千只股票，耗时较长且受数据源限流影响，请谨慎操作。"
-        )
+        ),
     )
 
     batch_symbols_text = ""
     selected_boards_codes = []
-    
+
     if batch_mode:
         st.markdown("##### 📌 1. 手动输入代码")
-        st.caption("批量模式：为降低失败率与封禁风险，固定回溯 60 个交易日，且最多 6 只股票。")
+        st.caption(
+            "批量模式：为降低失败率与封禁风险，固定回溯 60 个交易日，且最多 6 只股票。"
+        )
         batch_symbols_text = st.text_area(
             "股票代码列表（支持粘贴混合文本）",
             value="",
             placeholder="例如：000973;600798;300459（; 或 ；均可）",
-            help="用分号（; 或 ；）分隔，系统会提取其中的 6 位数字作为股票代码（自动去重）。"
+            help="用分号（; 或 ；）分隔，系统会提取其中的 6 位数字作为股票代码（自动去重）。",
         )
-        
+
         board_help = (
             "**💡 各板块交易规则速览**：\\n"
             "- **主板**: 门槛无特殊要求；涨跌幅限制 ±10%（ST股±5%）。\\n"
@@ -219,7 +277,7 @@ with st.sidebar:
             "- **科创板**: 50万资产 + 2年经验；涨跌幅限制 ±20%。\\n"
             "- **北交所**: 50万资产 + 2年经验；涨跌幅限制 ±30%。"
         )
-        
+
         st.markdown("##### 📌 2. 按板块批量添加 (可选)", help=board_help)
         col_b1, col_b2, col_b3, col_b4 = st.columns(4)
         with col_b1:
@@ -230,16 +288,24 @@ with st.sidebar:
             check_star = st.checkbox("科创板", key="check_board_star")
         with col_b4:
             check_bse = st.checkbox("北交所", key="check_board_bse")
-            
+
         if check_main:
-            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("main")])
+            selected_boards_codes.extend(
+                [s["code"] for s in get_stocks_by_board("main")]
+            )
         if check_chinext:
-            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("chinext")])
+            selected_boards_codes.extend(
+                [s["code"] for s in get_stocks_by_board("chinext")]
+            )
         if check_star:
-            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("star")])
+            selected_boards_codes.extend(
+                [s["code"] for s in get_stocks_by_board("star")]
+            )
         if check_bse:
-            selected_boards_codes.extend([s['code'] for s in get_stocks_by_board("bse")])
-            
+            selected_boards_codes.extend(
+                [s["code"] for s in get_stocks_by_board("bse")]
+            )
+
         if selected_boards_codes:
             st.info(f"✅ 已从板块选择 {len(selected_boards_codes)} 只股票")
 
@@ -247,14 +313,16 @@ with st.sidebar:
         enable_stock_search = st.toggle(
             "启用股票名称搜索",
             value=True,
-            help="开启后会加载全量股票列表用于搜索（首次加载可能较慢）。关闭则直接输入股票代码。"
+            help="开启后会加载全量股票列表用于搜索（首次加载可能较慢）。关闭则直接输入股票代码。",
         )
 
         stock_options = []
         if enable_stock_search:
             with st.spinner("正在加载股票列表..."):
                 all_stocks = load_stock_list()
-            stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
+            stock_options = (
+                [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
+            )
 
         if stock_options:
             default_index = 0
@@ -269,16 +337,22 @@ with st.sidebar:
                 options=stock_options,
                 index=default_index,
                 help="输入代码（如 300364）或名称（如 中文在线）进行搜索",
-                key="stock_selector"
+                key="stock_selector",
             )
 
             current_code = selected_stock.split(" ")[0]
-            current_name_from_select = selected_stock.split(" ")[1] if len(selected_stock.split(" ")) > 1 else ""
+            current_name_from_select = (
+                selected_stock.split(" ")[1]
+                if len(selected_stock.split(" ")) > 1
+                else ""
+            )
             if current_code != st.session_state.current_symbol:
                 st.session_state.current_symbol = current_code
         else:
             if enable_stock_search:
-                st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
+                st.warning(
+                    "股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。"
+                )
                 if st.button("🔄 重试加载股票列表", width="stretch"):
                     load_stock_list.clear()
                     st.rerun()
@@ -287,53 +361,54 @@ with st.sidebar:
                 "股票代码 (必填)",
                 value=st.session_state.current_symbol,
                 help="请输入 6 位股票代码，例如 300364",
-                key="symbol_input_widget"
+                key="symbol_input_widget",
             )
             if symbol_input != st.session_state.current_symbol:
                 st.session_state.current_symbol = symbol_input
             current_name_from_select = ""
 
-    
     symbol_name_input = ""
     if not batch_mode:
         symbol_name_input = st.text_input(
             "股票名称 (选填)",
             value=current_name_from_select,
-            help="仅用于展示或文件名，留空则自动从 akshare 获取"
+            help="仅用于展示或文件名，留空则自动从 akshare 获取",
         )
-    
+
     trading_days = st.number_input(
         "回溯交易日数量",
         min_value=1,
         max_value=700,
         value=min(500, 700),
         step=50,
-        help="从结束日期向前回溯的交易日天数（上限 700）"
+        help="从结束日期向前回溯的交易日天数（上限 700）",
     )
-    
+
     end_offset = st.number_input(
         "结束日期偏移 (天)",
         min_value=0,
         value=1,
-        help="0 表示今天，1 表示昨天。系统会自动对齐到最近的交易日。"
+        help="0 表示今天，1 表示昨天。系统会自动对齐到最近的交易日。",
     )
-    
+
     adjust = st.selectbox(
         "复权类型",
         options=["", "qfq", "hfq"],
-        format_func=lambda x: "不复权" if x == "" else ("前复权" if x == "qfq" else "后复权"),
+        format_func=lambda x: "不复权"
+        if x == ""
+        else ("前复权" if x == "qfq" else "后复权"),
         index=0,
         help=(
             "不复权：原始行情；\n"
             "前复权(qfq)：把历史价格按当前口径调整，除权后走势连续，适合看长期趋势；\n"
             "后复权(hfq)：把当前价格按历史口径调整，便于对比历史绝对价位。"
-        )
+        ),
     )
 
     st.caption(
         "复权用于处理分红送转等导致的价格跳变：前复权更常用于看趋势；后复权更常用于还原历史价位对比。"
     )
-    
+
     st.markdown("---")
 
     run_btn = st.button("🚀 开始获取数据", type="primary")
@@ -344,7 +419,7 @@ with st.sidebar:
         for item in st.session_state.search_history:
             label = f"{item['symbol']} {item['name']}"
             if st.button(label, key=f"hist_{item['symbol']}", width="stretch"):
-                set_symbol_from_history(item['symbol'])
+                set_symbol_from_history(item["symbol"])
                 st.rerun()
 
 # Main content
@@ -352,13 +427,13 @@ if run_btn or st.session_state.should_run:
     # Reset trigger
     if st.session_state.should_run:
         st.session_state.should_run = False
-        
+
     try:
         is_mobile = bool(st.session_state.get("mobile_mode"))
 
         if batch_mode:
             symbols = _parse_batch_symbols(batch_symbols_text)
-            
+
             if selected_boards_codes:
                 symbols.extend(selected_boards_codes)
             symbols = _normalize_symbols(symbols)
@@ -367,7 +442,9 @@ if run_btn or st.session_state.should_run:
                 st.error("请至少输入 1 个股票代码，或勾选至少 1 个板块。")
                 st.stop()
             if len(symbols) > 6:
-                st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。")
+                st.error(
+                    f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。"
+                )
                 st.stop()
 
             progress_ph = st.empty()
@@ -400,18 +477,36 @@ if run_btn or st.session_state.should_run:
                             file_name_export = f"{safe_symbol}_{safe_name}_ohlcv.csv"
                             file_name_hist = f"{safe_symbol}_{safe_name}_hist_data.csv"
 
-                            csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                            csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                            csv_export = df_export.to_csv(
+                                index=False, encoding="utf-8-sig"
+                            ).encode("utf-8-sig")
+                            csv_hist = df_hist.to_csv(
+                                index=False, encoding="utf-8-sig"
+                            ).encode("utf-8-sig")
 
                             zf.writestr(file_name_export, csv_export)
                             zf.writestr(file_name_hist, csv_hist)
 
                             add_to_history(symbol, name)
-                            results.append({"symbol": symbol, "name": name, "status": "ok", "error": ""})
+                            results.append(
+                                {
+                                    "symbol": symbol,
+                                    "name": name,
+                                    "status": "ok",
+                                    "error": "",
+                                }
+                            )
                         except Exception as e:
                             msg = _friendly_error_message(e, symbol, 60)
-                            results.append({"symbol": symbol, "name": "", "status": "failed", "error": msg})
-                        
+                            results.append(
+                                {
+                                    "symbol": symbol,
+                                    "name": "",
+                                    "status": "failed",
+                                    "error": msg,
+                                }
+                            )
+
                         # 延长请求间隔到 2.0 ~ 4.0 秒，降低被封禁概率
                         time.sleep(random.uniform(2.0, 4.0))
                         progress_bar.progress(idx / len(symbols))
@@ -422,10 +517,12 @@ if run_btn or st.session_state.should_run:
 
             # === 自动记录批量下载历史 ===
             # 只要任务完成，就记录一次
-            symbols_str = "_".join(symbols[:3]) + (f"_etc_{len(symbols)}" if len(symbols) > 3 else "")
+            symbols_str = "_".join(symbols[:3]) + (
+                f"_etc_{len(symbols)}" if len(symbols) > 3 else ""
+            )
             current_batch_key = f"batch_{symbols_str}_{datetime.now().strftime('%H%M')}"
             last_batch_key = st.session_state.get("last_home_batch_key")
-            
+
             if current_batch_key != last_batch_key:
                 add_download_history(
                     page="Home",
@@ -433,10 +530,10 @@ if run_btn or st.session_state.should_run:
                     title=f"批量 ({len(symbols)} 只)",
                     file_name=file_name_zip,
                     mime="application/zip",
-                    data=None
+                    data=None,
                 )
                 st.session_state["last_home_batch_key"] = current_batch_key
-            
+
             # Send Feishu notification
             if st.session_state.feishu_webhook:
                 success_count = len([r for r in results if r["status"] == "ok"])
@@ -450,10 +547,18 @@ if run_btn or st.session_state.should_run:
                     f"**文件**: {file_name_zip}"
                 )
                 if failed_count > 0:
-                    failed_details = "\\n".join([f"- {r['symbol']}: {r['error']}" for r in results if r["status"] != "ok"])
+                    failed_details = "\\n".join(
+                        [
+                            f"- {r['symbol']}: {r['error']}"
+                            for r in results
+                            if r["status"] != "ok"
+                        ]
+                    )
                     notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
-                
-                send_feishu_notification(st.session_state.feishu_webhook, notify_title, notify_text)
+
+                send_feishu_notification(
+                    st.session_state.feishu_webhook, notify_title, notify_text
+                )
                 st.toast("✅ 飞书通知已发送", icon="🔔")
 
             status_ph.empty()
@@ -472,14 +577,18 @@ if run_btn or st.session_state.should_run:
             )
             st.stop()
 
-        if not st.session_state.current_symbol or not st.session_state.current_symbol.isdigit() or len(st.session_state.current_symbol) != 6:
+        if (
+            not st.session_state.current_symbol
+            or not st.session_state.current_symbol.isdigit()
+            or len(st.session_state.current_symbol) != 6
+        ):
             st.error("请输入有效的 6 位数字股票代码！")
             st.stop()
 
         with st.spinner(f"正在获取 {st.session_state.current_symbol} 的数据..."):
             end_calendar = date.today() - timedelta(days=int(end_offset))
             window = _resolve_trading_window(end_calendar, int(trading_days))
-            
+
             if not symbol_name_input:
                 try:
                     name = _stock_name_from_code(st.session_state.current_symbol)
@@ -488,34 +597,44 @@ if run_btn or st.session_state.should_run:
                     name = "Unknown"
             else:
                 name = symbol_name_input
-            
-            add_to_history(st.session_state.current_symbol, name)
-            
-            st.info(f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
 
-            df_hist = _fetch_hist_with_retry(st.session_state.current_symbol, window, adjust)
-            sector = _stock_sector_em_timeout(st.session_state.current_symbol, timeout=60)
+            add_to_history(st.session_state.current_symbol, name)
+
+            st.info(
+                f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)"
+            )
+
+            df_hist = _fetch_hist_with_retry(
+                st.session_state.current_symbol, window, adjust
+            )
+            sector = _stock_sector_em_timeout(
+                st.session_state.current_symbol, timeout=60
+            )
             df_export = _build_export(df_hist, sector)
-            
+
             st.subheader("📊 数据预览")
             tab1, tab2 = st.tabs(["📈 OHLCV (增强版)", "📄 原始数据 (Hist Data)"])
-            
+
             with tab1:
                 if is_mobile:
                     st.dataframe(df_export, width="stretch", height=420)
                 else:
                     st.dataframe(df_export, width="stretch")
-            
+
             with tab2:
                 if is_mobile:
                     st.dataframe(df_hist, width="stretch", height=420)
                 else:
                     st.dataframe(df_hist, width="stretch")
-            
-            csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+            csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode(
+                "utf-8-sig"
+            )
             file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
-            
-            csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+            csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode(
+                "utf-8-sig"
+            )
             file_name_hist = f"{st.session_state.current_symbol}_{name}_hist_data.csv"
 
             zip_buffer = io.BytesIO()
@@ -536,7 +655,7 @@ if run_btn or st.session_state.should_run:
                     title=f"{st.session_state.current_symbol} {name}",
                     file_name=file_name_zip,
                     mime="application/zip",
-                    data=None
+                    data=None,
                 )
                 st.session_state["last_home_single_key"] = current_single_key
 
@@ -575,7 +694,7 @@ if run_btn or st.session_state.should_run:
                         type="primary",
                         width="stretch",
                     )
-                
+
                 with col2:
                     st.download_button(
                         label="下载原始数据 (Hist Data)",
@@ -594,7 +713,7 @@ if run_btn or st.session_state.should_run:
                         type="primary",
                         width="stretch",
                     )
-                
+
     except Exception as e:
         st.error(f"发生错误: {str(e)}")
         st.exception(e)
