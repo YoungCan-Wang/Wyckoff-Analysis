@@ -98,6 +98,8 @@ def _fetch_index_hist_with_source(
         df = _fetch_index_hist(code, start, end)
         return _normalize_hist(df), "akshare"
     except Exception:
+        if not _baostock_available():
+            raise RuntimeError("baostock not installed")
         df = _fetch_index_hist_baostock(code, start, end)
         return _normalize_hist_baostock(df), "baostock"
 
@@ -181,6 +183,16 @@ def _normalize_hist_baostock(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _baostock_available() -> bool:
+    try:
+        import baostock  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def _stock_sector(symbol: str) -> str:
     try:
         df = ak.stock_individual_info_em(symbol=symbol)
@@ -234,6 +246,8 @@ def _load_hist_with_source(
         df = _fetch_hist(symbol=symbol, window=window, adjust=adjust)
         return _normalize_hist(df), "akshare"
     except Exception:
+        if not _baostock_available():
+            raise RuntimeError("baostock not installed")
         df = _fetch_hist_baostock(symbol=symbol, window=window)
         return _normalize_hist_baostock(df), "baostock"
 
