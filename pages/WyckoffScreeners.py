@@ -1,7 +1,7 @@
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -91,6 +91,55 @@ def _fetch_index_hist(code: str, start: str, end: str) -> pd.DataFrame:
     return df
 
 
+def _fetch_index_hist_with_source(
+    code: str, start: str, end: str
+) -> tuple[pd.DataFrame, str]:
+    try:
+        df = _fetch_index_hist(code, start, end)
+        return _normalize_hist(df), "akshare"
+    except Exception:
+        df = _fetch_index_hist_baostock(code, start, end)
+        return _normalize_hist_baostock(df), "baostock"
+
+
+def _fetch_index_hist_baostock(code: str, start: str, end: str) -> pd.DataFrame:
+    import baostock as bs
+
+    def normalize_index(idx: str) -> str:
+        if idx.startswith("sh.") or idx.startswith("sz."):
+            return idx
+        if idx.startswith("000"):
+            return f"sh.{idx}"
+        return f"sz.{idx}"
+
+    bs_code = normalize_index(code)
+    start_date = datetime.strptime(start, "%Y%m%d").strftime("%Y-%m-%d")
+    end_date = datetime.strptime(end, "%Y%m%d").strftime("%Y-%m-%d")
+
+    login = bs.login()
+    if login.error_code != "0":
+        raise RuntimeError(f"baostock login failed: {login.error_msg}")
+    try:
+        rs = bs.query_history_k_data_plus(
+            code=bs_code,
+            fields="date,open,high,low,close,volume,pctChg",
+            start_date=start_date,
+            end_date=end_date,
+            frequency="d",
+            adjustflag="2",
+        )
+        if rs.error_code != "0":
+            raise RuntimeError(f"baostock query failed: {rs.error_msg}")
+        data_list = []
+        while rs.next():
+            data_list.append(rs.get_row_data())
+        if not data_list:
+            raise RuntimeError(f"baostock empty data for index {code}")
+        return pd.DataFrame(data_list, columns=rs.fields)
+    finally:
+        bs.logout()
+
+
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(
         columns={
@@ -105,6 +154,9 @@ def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
     )
     keep = ["date", "open", "close", "high", "low", "volume", "pct_chg"]
     out = df[[c for c in keep if c in df.columns]].copy()
+    for col in ["open", "close", "high", "low", "volume", "pct_chg"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
 
 
@@ -122,6 +174,9 @@ def _normalize_hist_baostock(df: pd.DataFrame) -> pd.DataFrame:
     )
     keep = ["date", "open", "close", "high", "low", "volume", "pct_chg"]
     out = df[[c for c in keep if c in df.columns]].copy()
+    for col in ["open", "close", "high", "low", "volume", "pct_chg"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
 
 
@@ -292,10 +347,18 @@ def screen_anomalies(
 def screen_jumpers(
     data_map: dict[str, pd.DataFrame],
     cfg: JumperConfig,
-) -> list[tuple[str, float]]:
+) -> tuple[list[tuple[str, float]], dict[str, int]]:
     results: list[tuple[str, float]] = []
+    stats = {
+        "total": 0,
+        "box_pass": 0,
+        "squeeze_pass": 0,
+        "volume_pass": 0,
+        "position_pass": 0,
+    }
     window = max(cfg.consolidation_window, 20)
     for symbol, df in data_map.items():
+        stats["total"] += 1
         df = df.sort_values("date")
         if len(df) < window:
             continue
@@ -308,6 +371,7 @@ def screen_jumpers(
         box_range = (high - low) / last_close
         if box_range > cfg.box_range:
             continue
+        stats["box_pass"] += 1
 
         short = recent.tail(cfg.squeeze_window)
         short_high = short["high"].max()
@@ -318,6 +382,7 @@ def screen_jumpers(
         short_amp = (short_high - short_low) / short_close
         if short_amp > cfg.squeeze_amplitude:
             continue
+        stats["squeeze_pass"] += 1
 
         vol_short = short["volume"].mean()
         vol_long = recent["volume"].tail(cfg.volume_long_window).mean()
@@ -325,13 +390,15 @@ def screen_jumpers(
             continue
         if vol_short >= vol_long * cfg.volume_dry_ratio:
             continue
+        stats["volume_pass"] += 1
 
         near_top = last_close >= low + (high - low) * 0.8
         near_bottom = last_close <= low + (high - low) * 0.2
         if near_top or near_bottom:
+            stats["position_pass"] += 1
             score = float(short_amp * 100)
             results.append((symbol, score))
-    return results
+    return results, stats
 
 
 def _estimate_market_cap(symbol: str) -> float:
@@ -374,11 +441,21 @@ def screen_first_board(
         prev = df.iloc[-2]
         limit = 20.0 if symbol.startswith(("300", "301", "688")) else 10.0
         threshold = limit * 0.98
-        is_limit_up = last["pct_chg"] >= threshold
-        prev_limit = prev["pct_chg"] >= threshold
+
+        # Ensure numeric type for comparison
+        curr_pct = float(last["pct_chg"])
+        last_prev_pct = float(prev["pct_chg"])
+
+        is_limit_up = curr_pct >= threshold
+        prev_limit = last_prev_pct >= threshold
         if not is_limit_up or prev_limit:
             continue
-        recent_limits = df.tail(cfg.lookback_limit_days)
+
+        # Check if there are other limit ups in the lookback window
+        recent_limits = df.tail(cfg.lookback_limit_days).copy()
+        recent_limits["pct_chg"] = pd.to_numeric(
+            recent_limits["pct_chg"], errors="coerce"
+        )
         if (recent_limits["pct_chg"] >= threshold).sum() > 1:
             continue
         breakout_window = df.tail(cfg.breakout_window)
@@ -507,6 +584,7 @@ with st.sidebar:
         )
 
     group_power = st.checkbox("板块共振排序", value=True)
+    debug_log = st.checkbox("显示调试信息", value=False)
 
 
 st.subheader("淘金池")
@@ -602,16 +680,19 @@ if run:
         progress.progress(idx / total)
 
     benchmark_df = None
+    benchmark_source = ""
     results: dict[str, list[tuple[str, float]]] = {}
     if tactic == "抗跌主力":
         try:
-            benchmark_df = _fetch_index_hist(cfg.resister.benchmark_code, start, end)
-            benchmark_df = _normalize_hist(benchmark_df)
+            benchmark_df, benchmark_source = _fetch_index_hist_with_source(
+                cfg.resister.benchmark_code, start, end
+            )
         except Exception as exc:
             errors[cfg.resister.benchmark_code] = f"benchmark failed: {exc}"
         results["resisters"] = screen_resisters(data_map, benchmark_df, cfg.resister)
     elif tactic == "突破临界":
-        results["jumpers"] = screen_jumpers(data_map, cfg.jumper)
+        jumpers, jump_stats = screen_jumpers(data_map, cfg.jumper)
+        results["jumpers"] = jumpers
     elif tactic == "异常吸筹/出货":
         results["anomalies"] = screen_anomalies(data_map, cfg.anomaly)
     else:
@@ -630,6 +711,18 @@ if run:
         "first_board": "涨幅(%)",
     }
     st.subheader("淘金结果")
+    if debug_log:
+        st.caption(
+            f"调试: 输入股票数={len(symbols)}，成功数据={len(data_map)}，失败={len(errors)}"
+        )
+        if tactic == "突破临界":
+            st.caption(
+                "跳跃者过滤: "
+                f"箱体通过={jump_stats['box_pass']}，"
+                f"挤压通过={jump_stats['squeeze_pass']}，"
+                f"缩量通过={jump_stats['volume_pass']}，"
+                f"位置通过={jump_stats['position_pass']}"
+            )
     if source_map:
         source_counts: dict[str, int] = {}
         for source in source_map.values():
@@ -638,6 +731,8 @@ if run:
             [f"{name}({count})" for name, count in source_counts.items()]
         )
         st.caption(f"数据来源: {summary}")
+    if benchmark_source:
+        st.caption(f"基准来源: {benchmark_source}")
     sector_counts: dict[str, int] = {}
     if group_power:
         for pairs in results.values():

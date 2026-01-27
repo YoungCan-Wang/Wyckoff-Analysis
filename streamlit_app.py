@@ -7,6 +7,9 @@ import requests
 import os
 import random
 import time
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from requests.exceptions import RequestException
+from http.client import RemoteDisconnected
 from dotenv import load_dotenv
 import akshare as ak
 from fetch_a_share_csv import (
@@ -16,6 +19,7 @@ from fetch_a_share_csv import (
     get_all_stocks,
     get_stocks_by_board,
     _normalize_symbols,
+    _stock_name_from_code,
 )
 from download_history import add_download_history
 from auth_component import check_auth, login_form, logout
@@ -68,6 +72,16 @@ if "mobile_mode" not in st.session_state:
 def load_stock_list():
     return get_all_stocks()
 
+# 增加网络请求重试机制，应对 RemoteDisconnected 等反爬限制
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=3, max=30),
+    retry=retry_if_exception_type(Exception), # 捕获所有异常进行重试，确保稳健
+    reraise=True
+)
+def _fetch_hist_with_retry(symbol, window, adjust):
+    return _fetch_hist(symbol, window, adjust)
+
 def add_to_history(symbol, name):
     item = {"symbol": symbol, "name": name}
     # Remove if exists to move to top
@@ -114,6 +128,14 @@ def _stock_sector_em_timeout(symbol: str, timeout: float):
         return str(row.iloc[0]).strip()
     except Exception:
         return ""
+
+def _friendly_error_message(e: Exception, symbol: str, trading_days: int) -> str:
+    msg = str(e)
+    if "not found in stock list" in msg:
+        return f"股票代码 {symbol} 未找到或已退市"
+    if "empty data returned" in msg:
+        return f"数据源返回空 (可能停牌或上市不足 {trading_days} 天)"
+    return f"未知错误: {msg}"
 
 def send_feishu_notification(webhook_url: str, title: str, content: str):
     """发送飞书卡片消息"""
@@ -367,7 +389,8 @@ if run_btn or st.session_state.should_run:
                         try:
                             name = name_map.get(symbol) or "Unknown"
 
-                            df_hist = _fetch_hist(symbol, window, adjust)
+                            # 使用带重试的函数获取数据
+                            df_hist = _fetch_hist_with_retry(symbol, window, adjust)
 
                             sector = _stock_sector_em_timeout(symbol, timeout=60)
                             df_export = _build_export(df_hist, sector)
@@ -388,7 +411,9 @@ if run_btn or st.session_state.should_run:
                         except Exception as e:
                             msg = _friendly_error_message(e, symbol, 60)
                             results.append({"symbol": symbol, "name": "", "status": "failed", "error": msg})
-                        time.sleep(random.uniform(0.8, 1.2))
+                        
+                        # 延长请求间隔到 2.0 ~ 4.0 秒，降低被封禁概率
+                        time.sleep(random.uniform(2.0, 4.0))
                         progress_bar.progress(idx / len(symbols))
                         results_ph.dataframe(results, width="stretch", height=260)
 
@@ -468,7 +493,7 @@ if run_btn or st.session_state.should_run:
             
             st.info(f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
 
-            df_hist = _fetch_hist(st.session_state.current_symbol, window, adjust)
+            df_hist = _fetch_hist_with_retry(st.session_state.current_symbol, window, adjust)
             sector = _stock_sector_em_timeout(st.session_state.current_symbol, timeout=60)
             df_export = _build_export(df_hist, sector)
             
