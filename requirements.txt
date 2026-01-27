@@ -8,3 +8,4 @@ tenacity>=8.2.0
 python-dotenv>=1.0.0
 supabase>=2.0.0
 baostock
+streamlit-cookies-manager

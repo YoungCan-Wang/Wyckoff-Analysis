@@ -1,13 +1,33 @@
+import os
 import streamlit as st
+from streamlit_cookies_manager import EncryptedCookieManager
 from supabase_client import get_supabase_client, load_user_settings
 from supabase import AuthApiError
 import time
 
+_ACCESS_TOKEN_KEY = "sb_access_token"
+_REFRESH_TOKEN_KEY = "sb_refresh_token"
+
+
+def _cookie_manager() -> EncryptedCookieManager:
+    manager = st.session_state.get("cookie_manager")
+    if manager is None:
+        manager = EncryptedCookieManager(
+            prefix="wyckoff",
+            password=os.getenv("COOKIE_SECRET", "wyckoff-cookie-secret"),
+        )
+        st.session_state.cookie_manager = manager
+    if not manager.ready():
+        st.stop()
+    return manager
+
+
 def login_form():
     """显示登录/注册表单"""
     supabase = get_supabase_client()
-    
-    st.markdown("""
+
+    st.markdown(
+        """
     <style>
     .auth-container {
         max-width: 400px;
@@ -21,7 +41,9 @@ def login_form():
         width: 100%;
     }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -32,28 +54,42 @@ def login_form():
                 <h2>欢迎回来</h2>
                 <p style="color: #666;">请登录以继续使用 Akshare 智能投研平台</p>
             </div>
-            """, 
-            unsafe_allow_html=True
+            """,
+            unsafe_allow_html=True,
         )
-        
+
         tab1, tab2 = st.tabs(["登录", "注册"])
-        
+
         with tab1:
             with st.form("login_form", clear_on_submit=False):
-                email = st.text_input("邮箱", key="login_email", placeholder="name@example.com")
-                password = st.text_input("密码", type="password", key="login_password", placeholder="请输入密码")
+                email = st.text_input(
+                    "邮箱", key="login_email", placeholder="name@example.com"
+                )
+                password = st.text_input(
+                    "密码",
+                    type="password",
+                    key="login_password",
+                    placeholder="请输入密码",
+                )
                 submit = st.form_submit_button("登录", type="primary", width="stretch")
-                
+
                 if submit:
                     try:
                         with st.spinner("正在登录..."):
-                            response = supabase.auth.sign_in_with_password({
-                                "email": email,
-                                "password": password
-                            })
+                            response = supabase.auth.sign_in_with_password(
+                                {"email": email, "password": password}
+                            )
                             st.session_state.user = response.user
-                            st.session_state.access_token = response.session.access_token
-                            st.session_state.refresh_token = response.session.refresh_token
+                            st.session_state.access_token = (
+                                response.session.access_token
+                            )
+                            st.session_state.refresh_token = (
+                                response.session.refresh_token
+                            )
+                            cookies = _cookie_manager()
+                            cookies[_ACCESS_TOKEN_KEY] = response.session.access_token
+                            cookies[_REFRESH_TOKEN_KEY] = response.session.refresh_token
+                            cookies.save()
                             # 登录成功，加载用户配置
                             load_user_settings(response.user.id)
                             st.success("登录成功！")
@@ -66,11 +102,25 @@ def login_form():
 
         with tab2:
             with st.form("register_form", clear_on_submit=False):
-                new_email = st.text_input("邮箱", key="reg_email", placeholder="name@example.com")
-                new_password = st.text_input("密码", type="password", key="reg_password", placeholder="至少 6 位字符")
-                confirm_password = st.text_input("确认密码", type="password", key="reg_confirm", placeholder="请再次输入密码")
-                submit_reg = st.form_submit_button("注册新账号", type="primary", width="stretch")
-                
+                new_email = st.text_input(
+                    "邮箱", key="reg_email", placeholder="name@example.com"
+                )
+                new_password = st.text_input(
+                    "密码",
+                    type="password",
+                    key="reg_password",
+                    placeholder="至少 6 位字符",
+                )
+                confirm_password = st.text_input(
+                    "确认密码",
+                    type="password",
+                    key="reg_confirm",
+                    placeholder="请再次输入密码",
+                )
+                submit_reg = st.form_submit_button(
+                    "注册新账号", type="primary", width="stretch"
+                )
+
                 if submit_reg:
                     if new_password != confirm_password:
                         st.error("两次输入的密码不一致")
@@ -79,25 +129,44 @@ def login_form():
                     else:
                         try:
                             with st.spinner("正在注册..."):
-                                response = supabase.auth.sign_up({
-                                    "email": new_email,
-                                    "password": new_password
-                                })
-                                st.success("注册成功！请检查邮箱并点击验证链接完成激活。")
+                                response = supabase.auth.sign_up(
+                                    {"email": new_email, "password": new_password}
+                                )
+                                st.success(
+                                    "注册成功！请检查邮箱并点击验证链接完成激活。"
+                                )
                         except AuthApiError as e:
                             st.error(f"注册失败: {e.message}")
                         except Exception as e:
                             st.error(f"注册失败: {str(e)}")
+
 
 def check_auth():
     """
     检查用户认证状态
     """
     supabase = get_supabase_client()
-    
+
     # 1. 如果 Session 中已有用户，直接通过
     if "user" in st.session_state and st.session_state.user:
         return True
+
+    cookies = _cookie_manager()
+    access_token = cookies.get(_ACCESS_TOKEN_KEY)
+    refresh_token = cookies.get(_REFRESH_TOKEN_KEY)
+    if access_token and refresh_token:
+        try:
+            session = supabase.auth.set_session(access_token, refresh_token)
+            if session:
+                st.session_state.user = session.user
+                st.session_state.access_token = session.access_token
+                st.session_state.refresh_token = session.refresh_token
+                load_user_settings(session.user.id)
+                return True
+        except Exception:
+            cookies.pop(_ACCESS_TOKEN_KEY, None)
+            cookies.pop(_REFRESH_TOKEN_KEY, None)
+            cookies.save()
 
     # 尝试恢复会话
     try:
@@ -114,6 +183,7 @@ def check_auth():
 
     return False
 
+
 def logout():
     """登出"""
     supabase = get_supabase_client()
@@ -124,4 +194,8 @@ def logout():
     st.session_state.user = None
     st.session_state.access_token = None
     st.session_state.refresh_token = None
+    cookies = _cookie_manager()
+    cookies.pop(_ACCESS_TOKEN_KEY, None)
+    cookies.pop(_REFRESH_TOKEN_KEY, None)
+    cookies.save()
     st.rerun()
