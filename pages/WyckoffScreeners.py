@@ -19,6 +19,10 @@ from fetch_a_share_csv import (
 )
 from navigation import show_right_nav
 
+_CACHE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "data", "wyckoff_cache")
+)
+
 
 @dataclass
 class ResisterConfig:
@@ -92,16 +96,28 @@ def _fetch_index_hist(code: str, start: str, end: str) -> pd.DataFrame:
 
 
 def _fetch_index_hist_with_source(
-    code: str, start: str, end: str
+    code: str, start: str, end: str, use_cache: bool
 ) -> tuple[pd.DataFrame, str]:
+    cache_key = _cache_key("index", code, start, end, "none")
+    if use_cache:
+        cached = _load_cache(cache_key)
+        if cached is not None and not cached.empty:
+            return cached, "cache"
+
     try:
         df = _fetch_index_hist(code, start, end)
-        return _normalize_hist(df), "akshare"
+        df = _normalize_hist(df)
+        if use_cache:
+            _save_cache(cache_key, df)
+        return df, "akshare"
     except Exception:
         if not _baostock_available():
             raise RuntimeError("baostock not installed")
         df = _fetch_index_hist_baostock(code, start, end)
-        return _normalize_hist_baostock(df), "baostock"
+        df = _normalize_hist_baostock(df)
+        if use_cache:
+            _save_cache(cache_key, df)
+        return df, "baostock"
 
 
 def _fetch_index_hist_baostock(code: str, start: str, end: str) -> pd.DataFrame:
@@ -160,6 +176,34 @@ def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
+
+
+def _cache_key(prefix: str, symbol: str, start: str, end: str, adjust: str) -> str:
+    safe = f"{prefix}_{symbol}_{start}_{end}_{adjust}".replace("/", "_")
+    return safe
+
+
+def _cache_path(key: str) -> str:
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    return os.path.join(_CACHE_DIR, f"{key}.csv")
+
+
+def _load_cache(key: str) -> pd.DataFrame | None:
+    path = _cache_path(key)
+    if not os.path.exists(path):
+        return None
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return None
+
+
+def _save_cache(key: str, df: pd.DataFrame) -> None:
+    path = _cache_path(key)
+    try:
+        df.to_csv(path, index=False)
+    except Exception:
+        return
 
 
 def _normalize_hist_baostock(df: pd.DataFrame) -> pd.DataFrame:
@@ -240,16 +284,33 @@ def _load_hist(symbol: str, window, adjust: str) -> pd.DataFrame:
 
 
 def _load_hist_with_source(
-    symbol: str, window, adjust: str
+    symbol: str,
+    window,
+    adjust: str,
+    use_cache: bool,
 ) -> tuple[pd.DataFrame, str]:
+    start = window.start_trade_date.strftime("%Y%m%d")
+    end = window.end_trade_date.strftime("%Y%m%d")
+    cache_key = _cache_key("stock", symbol, start, end, adjust or "none")
+    if use_cache:
+        cached = _load_cache(cache_key)
+        if cached is not None and not cached.empty:
+            return cached, "cache"
+
     try:
         df = _fetch_hist(symbol=symbol, window=window, adjust=adjust)
-        return _normalize_hist(df), "akshare"
+        df = _normalize_hist(df)
+        if use_cache:
+            _save_cache(cache_key, df)
+        return df, "akshare"
     except Exception:
         if not _baostock_available():
             raise RuntimeError("baostock not installed")
         df = _fetch_hist_baostock(symbol=symbol, window=window)
-        return _normalize_hist_baostock(df), "baostock"
+        df = _normalize_hist_baostock(df)
+        if use_cache:
+            _save_cache(cache_key, df)
+        return df, "baostock"
 
 
 def _fetch_hist_baostock(symbol: str, window) -> pd.DataFrame:
@@ -489,6 +550,94 @@ def screen_first_board(
     return results
 
 
+def _render_results(
+    payload: dict, group_power: bool, debug_log: bool, use_cache: bool
+) -> None:
+    label_map = {
+        "resisters": "抗跌主力（相对强弱）",
+        "anomalies": "异常吸筹/出货（量价背离）",
+        "jumpers": "突破临界（箱体挤压）",
+        "first_board": "启动龙头（首板）",
+    }
+    score_map = {
+        "resisters": "RS(%)",
+        "anomalies": "量比",
+        "jumpers": "短期振幅(%)",
+        "first_board": "涨幅(%)",
+    }
+    results = payload.get("results", {})
+    errors = payload.get("errors", {})
+    source_map = payload.get("source_map", {})
+    benchmark_source = payload.get("benchmark_source", "")
+
+    st.subheader("淘金结果")
+    if debug_log:
+        st.caption(
+            f"调试: 输入股票数={payload.get('symbols_count', 0)}，成功数据={payload.get('data_count', 0)}，失败={len(errors)}"
+        )
+        if use_cache and source_map:
+            cache_hits = sum(1 for source in source_map.values() if source == "cache")
+            st.caption(f"缓存命中: {cache_hits}/{len(source_map)}")
+        if payload.get("tactic") == "突破临界" and payload.get("jump_stats"):
+            stats = payload["jump_stats"]
+            st.caption(
+                "跳跃者过滤: "
+                f"箱体通过={stats['box_pass']}，"
+                f"挤压通过={stats['squeeze_pass']}，"
+                f"缩量通过={stats['volume_pass']}，"
+                f"位置通过={stats['position_pass']}"
+            )
+
+    if source_map:
+        source_counts: dict[str, int] = {}
+        for source in source_map.values():
+            source_counts[source] = source_counts.get(source, 0) + 1
+        summary = "，".join(
+            [f"{name}({count})" for name, count in source_counts.items()]
+        )
+        st.caption(f"数据来源: {summary}")
+    if benchmark_source:
+        st.caption(f"基准来源: {benchmark_source}")
+
+    sector_counts: dict[str, int] = {}
+    if group_power:
+        for pairs in results.values():
+            for code, _ in pairs:
+                sector = _stock_sector(code)
+                if not sector:
+                    continue
+                sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        if sector_counts:
+            top = sorted(sector_counts.items(), key=lambda x: (-x[1], x[0]))[:8]
+            summary = "，".join([f"{name}({count})" for name, count in top])
+            st.caption(f"板块共振: {summary}")
+
+    for key, label in label_map.items():
+        if key not in results:
+            continue
+        pairs = results.get(key, [])
+        st.markdown(f"**{label}**")
+        if pairs:
+            if group_power and sector_counts:
+                pairs = sorted(
+                    pairs,
+                    key=lambda item: (
+                        -sector_counts.get(_stock_sector(item[0]), 0),
+                        item[0],
+                    ),
+                )
+            score_label = score_map.get(key, "评分")
+            lines = [f"{code} | {score_label}: {score:.2f}" for code, score in pairs]
+            st.code("\n".join(lines))
+        else:
+            st.caption("无")
+
+    if errors:
+        with st.expander("淘金失败明细"):
+            for code, msg in errors.items():
+                st.write(f"{code}: {msg}")
+
+
 with st.sidebar:
     st.subheader("淘金目标")
     tactic = st.radio(
@@ -599,6 +748,7 @@ with st.sidebar:
 
     group_power = st.checkbox("板块共振排序", value=True)
     debug_log = st.checkbox("显示调试信息", value=False)
+    use_cache = st.checkbox("使用缓存", value=True)
 
 
 st.subheader("淘金池")
@@ -686,12 +836,17 @@ if run:
 
     for idx, symbol in enumerate(symbols, start=1):
         try:
-            df, source = _load_hist_with_source(symbol, window, adjust="qfq")
+            df, source = _load_hist_with_source(
+                symbol, window, adjust="qfq", use_cache=use_cache
+            )
             data_map[symbol] = df
             source_map[symbol] = source
         except Exception as exc:
             errors[symbol] = str(exc)
         progress.progress(idx / total)
+
+    progress.progress(1.0)
+    progress.empty()
 
     benchmark_df = None
     benchmark_source = ""
@@ -699,7 +854,7 @@ if run:
     if tactic == "抗跌主力":
         try:
             benchmark_df, benchmark_source = _fetch_index_hist_with_source(
-                cfg.resister.benchmark_code, start, end
+                cfg.resister.benchmark_code, start, end, use_cache=use_cache
             )
         except Exception as exc:
             errors[cfg.resister.benchmark_code] = f"benchmark failed: {exc}"
@@ -712,74 +867,19 @@ if run:
     else:
         results["first_board"] = screen_first_board(data_map, cfg.first_board)
 
-    label_map = {
-        "resisters": "抗跌主力（相对强弱）",
-        "anomalies": "异常吸筹/出货（量价背离）",
-        "jumpers": "突破临界（箱体挤压）",
-        "first_board": "启动龙头（首板）",
+    st.session_state.wyckoff_payload = {
+        "results": results,
+        "errors": errors,
+        "source_map": source_map,
+        "benchmark_source": benchmark_source,
+        "symbols_count": len(symbols),
+        "data_count": len(data_map),
+        "tactic": tactic,
+        "jump_stats": jump_stats if tactic == "突破临界" else None,
     }
-    score_map = {
-        "resisters": "RS(%)",
-        "anomalies": "量比",
-        "jumpers": "短期振幅(%)",
-        "first_board": "涨幅(%)",
-    }
-    st.subheader("淘金结果")
-    if debug_log:
-        st.caption(
-            f"调试: 输入股票数={len(symbols)}，成功数据={len(data_map)}，失败={len(errors)}"
-        )
-        if tactic == "突破临界":
-            st.caption(
-                "跳跃者过滤: "
-                f"箱体通过={jump_stats['box_pass']}，"
-                f"挤压通过={jump_stats['squeeze_pass']}，"
-                f"缩量通过={jump_stats['volume_pass']}，"
-                f"位置通过={jump_stats['position_pass']}"
-            )
-    if source_map:
-        source_counts: dict[str, int] = {}
-        for source in source_map.values():
-            source_counts[source] = source_counts.get(source, 0) + 1
-        summary = "，".join(
-            [f"{name}({count})" for name, count in source_counts.items()]
-        )
-        st.caption(f"数据来源: {summary}")
-    if benchmark_source:
-        st.caption(f"基准来源: {benchmark_source}")
-    sector_counts: dict[str, int] = {}
-    if group_power:
-        for pairs in results.values():
-            for code, _ in pairs:
-                sector = _stock_sector(code)
-                if not sector:
-                    continue
-                sector_counts[sector] = sector_counts.get(sector, 0) + 1
-        if sector_counts:
-            top = sorted(sector_counts.items(), key=lambda x: (-x[1], x[0]))[:8]
-            summary = "，".join([f"{name}({count})" for name, count in top])
-            st.caption(f"板块共振: {summary}")
-    for key, label in label_map.items():
-        if key not in results:
-            continue
-        pairs = results.get(key, [])
-        st.markdown(f"**{label}**")
-        if pairs:
-            if group_power and sector_counts:
-                pairs = sorted(
-                    pairs,
-                    key=lambda item: (
-                        -sector_counts.get(_stock_sector(item[0]), 0),
-                        item[0],
-                    ),
-                )
-            score_label = score_map.get(key, "评分")
-            lines = [f"{code} | {score_label}: {score:.2f}" for code, score in pairs]
-            st.code("\n".join(lines))
-        else:
-            st.caption("无")
 
-    if errors:
-        with st.expander("淘金失败明细"):
-            for code, msg in errors.items():
-                st.write(f"{code}: {msg}")
+payload = st.session_state.wyckoff_payload
+if payload:
+    _render_results(
+        payload, group_power=group_power, debug_log=debug_log, use_cache=use_cache
+    )
