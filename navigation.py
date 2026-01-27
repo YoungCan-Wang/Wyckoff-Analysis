@@ -1,5 +1,6 @@
 import streamlit as st
 
+
 def show_right_nav():
     """Injects a floating navigation bar on the right side with collapse/expand support"""
     style = """
@@ -136,7 +137,7 @@ def show_right_nav():
     }
     </style>
     """
-    
+
     content = """
     <div class="nav-wrapper">
         <input type="checkbox" id="nav-toggle" class="nav-toggle-checkbox" checked>
@@ -156,6 +157,9 @@ def show_right_nav():
             <a href="/DownloadHistory" target="_self" class="nav-item" data-title="下载历史 Download History">
                 <span>🕘</span>
             </a>
+            <a href="/WyckoffScreeners" target="_self" class="nav-item" data-title="沙里淘金 Gold Panning">
+                <span>🧭</span>
+            </a>
             <a href="/Settings" target="_self" class="nav-item" data-title="设置 Settings">
                 <span>⚙️</span>
             </a>
@@ -168,5 +172,5 @@ def show_right_nav():
         </div>
     </div>
     """
-    
+
     st.html(style + content)

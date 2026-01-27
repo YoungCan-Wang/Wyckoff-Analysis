@@ -203,7 +203,7 @@ if df is None:
 
 st.subheader("📊 数据预览")
 st.caption(f"行数：{len(df)} | 列数：{len(df.columns)}")
-st.dataframe(df, use_container_width=True, height=420)
+st.dataframe(df, width="stretch", height=420)
 
 
 st.subheader("✅ 可选内容")
@@ -252,12 +252,12 @@ st.download_button(
     file_name=f"{file_prefix}_selected.csv",
     mime="text/csv",
     type="primary",
-    use_container_width=True,
+    width="stretch",
 )
 st.download_button(
     label="下载全部字段 CSV",
     data=csv_all,
     file_name=f"{file_prefix}_all.csv",
     mime="text/csv",
-    use_container_width=True,
+    width="stretch",
 )

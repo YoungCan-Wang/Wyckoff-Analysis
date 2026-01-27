@@ -49,7 +49,7 @@ for item in history:
         }
     )
 
-st.dataframe(rows, use_container_width=True, height=500, hide_index=True)
+st.dataframe(rows, width="stretch", height=500, hide_index=True)
 
 st.caption("注：出于节省存储成本考虑，目前仅保留下载记录元数据，不支持直接重新下载历史文件。如需文件请重新执行查询。")
 

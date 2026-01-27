@@ -3,11 +3,13 @@ from datetime import date, timedelta, datetime
 import zipfile
 import io
 import re
-import json
 import requests
-import time
 import os
-import pandas as pd
+import random
+import time
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from requests.exceptions import RequestException
+from http.client import RemoteDisconnected
 from dotenv import load_dotenv
 import akshare as ak
 from fetch_a_share_csv import (
@@ -17,6 +19,7 @@ from fetch_a_share_csv import (
     get_all_stocks,
     get_stocks_by_board,
     _normalize_symbols,
+    _stock_name_from_code,
 )
 from download_history import add_download_history
 from auth_component import check_auth, login_form, logout
@@ -69,6 +72,16 @@ if "mobile_mode" not in st.session_state:
 def load_stock_list():
     return get_all_stocks()
 
+# 增加网络请求重试机制，应对 RemoteDisconnected 等反爬限制
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=3, max=30),
+    retry=retry_if_exception_type(Exception), # 捕获所有异常进行重试，确保稳健
+    reraise=True
+)
+def _fetch_hist_with_retry(symbol, window, adjust):
+    return _fetch_hist(symbol, window, adjust)
+
 def add_to_history(symbol, name):
     item = {"symbol": symbol, "name": name}
     # Remove if exists to move to top
@@ -115,6 +128,14 @@ def _stock_sector_em_timeout(symbol: str, timeout: float):
         return str(row.iloc[0]).strip()
     except Exception:
         return ""
+
+def _friendly_error_message(e: Exception, symbol: str, trading_days: int) -> str:
+    msg = str(e)
+    if "not found in stock list" in msg:
+        return f"股票代码 {symbol} 未找到或已退市"
+    if "empty data returned" in msg:
+        return f"数据源返回空 (可能停牌或上市不足 {trading_days} 天)"
+    return f"未知错误: {msg}"
 
 def send_feishu_notification(webhook_url: str, title: str, content: str):
     """发送飞书卡片消息"""
@@ -183,6 +204,7 @@ with st.sidebar:
     
     if batch_mode:
         st.markdown("##### 📌 1. 手动输入代码")
+        st.caption("批量模式：为降低失败率与封禁风险，固定回溯 60 个交易日，且最多 6 只股票。")
         batch_symbols_text = st.text_area(
             "股票代码列表（支持粘贴混合文本）",
             value="",
@@ -257,7 +279,7 @@ with st.sidebar:
         else:
             if enable_stock_search:
                 st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
-                if st.button("🔄 重试加载股票列表", use_container_width=True):
+                if st.button("🔄 重试加载股票列表", width="stretch"):
                     load_stock_list.clear()
                     st.rerun()
 
@@ -283,10 +305,10 @@ with st.sidebar:
     trading_days = st.number_input(
         "回溯交易日数量",
         min_value=1,
-        max_value=5000,
-        value=500,
+        max_value=700,
+        value=min(500, 700),
         step=50,
-        help="从结束日期向前回溯的交易日天数"
+        help="从结束日期向前回溯的交易日天数（上限 700）"
     )
     
     end_offset = st.number_input(
@@ -321,7 +343,7 @@ with st.sidebar:
         st.header("🕒 搜索历史")
         for item in st.session_state.search_history:
             label = f"{item['symbol']} {item['name']}"
-            if st.button(label, key=f"hist_{item['symbol']}", use_container_width=True):
+            if st.button(label, key=f"hist_{item['symbol']}", width="stretch"):
                 set_symbol_from_history(item['symbol'])
                 st.rerun()
 
@@ -337,19 +359,16 @@ if run_btn or st.session_state.should_run:
         if batch_mode:
             symbols = _parse_batch_symbols(batch_symbols_text)
             
-            # Merge with selected boards
             if selected_boards_codes:
                 symbols.extend(selected_boards_codes)
-            
-            # De-duplicate
             symbols = _normalize_symbols(symbols)
 
             if not symbols:
                 st.error("请至少输入 1 个股票代码，或勾选至少 1 个板块。")
                 st.stop()
-            # if len(symbols) > 6:
-            #     st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。开超市不是一个好的行为呦。")
-            #     st.stop()
+            if len(symbols) > 6:
+                st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。")
+                st.stop()
 
             progress_ph = st.empty()
             status_ph = st.empty()
@@ -358,13 +377,11 @@ if run_btn or st.session_state.should_run:
 
             with st.spinner(f"正在批量生成（{len(symbols)} 个）..."):
                 end_calendar = date.today() - timedelta(days=int(end_offset))
-                window = _resolve_trading_window(end_calendar, int(trading_days))
+                window = _resolve_trading_window(end_calendar, 60)
 
                 zip_buffer = io.BytesIO()
                 results: list[dict[str, str]] = []
                 name_map = _stock_name_map()
-                start = window.start_trade_date.strftime("%Y%m%d")
-                end = window.end_trade_date.strftime("%Y%m%d")
 
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                     for idx, symbol in enumerate(symbols, start=1):
@@ -372,16 +389,8 @@ if run_btn or st.session_state.should_run:
                         try:
                             name = name_map.get(symbol) or "Unknown"
 
-                            df_hist = ak.stock_zh_a_hist(
-                                symbol=symbol,
-                                period="daily",
-                                start_date=start,
-                                end_date=end,
-                                adjust=adjust,
-                                timeout=60,
-                            )
-                            if df_hist is None or df_hist.empty:
-                                raise RuntimeError("empty data returned")
+                            # 使用带重试的函数获取数据
+                            df_hist = _fetch_hist_with_retry(symbol, window, adjust)
 
                             sector = _stock_sector_em_timeout(symbol, timeout=60)
                             df_export = _build_export(df_hist, sector)
@@ -400,12 +409,13 @@ if run_btn or st.session_state.should_run:
                             add_to_history(symbol, name)
                             results.append({"symbol": symbol, "name": name, "status": "ok", "error": ""})
                         except Exception as e:
-                            msg = str(e)
-                            if "ReadTimeout" in msg or "timed out" in msg or "timeout" in msg.lower():
-                                msg = "timeout(60s)"
+                            msg = _friendly_error_message(e, symbol, 60)
                             results.append({"symbol": symbol, "name": "", "status": "failed", "error": msg})
+                        
+                        # 延长请求间隔到 2.0 ~ 4.0 秒，降低被封禁概率
+                        time.sleep(random.uniform(2.0, 4.0))
                         progress_bar.progress(idx / len(symbols))
-                        results_ph.dataframe(results, use_container_width=True, height=260)
+                        results_ph.dataframe(results, width="stretch", height=260)
 
                 zip_data = zip_buffer.getvalue()
                 file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
@@ -451,14 +461,14 @@ if run_btn or st.session_state.should_run:
             results_ph.empty()
 
             st.subheader("📦 批量生成结果")
-            st.dataframe(results, use_container_width=True)
+            st.dataframe(results, width="stretch")
             clicked = st.download_button(
                 label="📦 下载全部 (.zip)",
                 data=zip_data,
                 file_name=file_name_zip,
                 mime="application/zip",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             )
             st.stop()
 
@@ -483,7 +493,7 @@ if run_btn or st.session_state.should_run:
             
             st.info(f"股票: **{st.session_state.current_symbol} {name}** | 时间窗口: **{window.start_trade_date}** 至 **{window.end_trade_date}** ({trading_days} 个交易日)")
 
-            df_hist = _fetch_hist(st.session_state.current_symbol, window, adjust)
+            df_hist = _fetch_hist_with_retry(st.session_state.current_symbol, window, adjust)
             sector = _stock_sector_em_timeout(st.session_state.current_symbol, timeout=60)
             df_export = _build_export(df_hist, sector)
             
@@ -492,15 +502,15 @@ if run_btn or st.session_state.should_run:
             
             with tab1:
                 if is_mobile:
-                    st.dataframe(df_export, use_container_width=True, height=420)
+                    st.dataframe(df_export, width="stretch", height=420)
                 else:
-                    st.dataframe(df_export, use_container_width=True)
+                    st.dataframe(df_export, width="stretch")
             
             with tab2:
                 if is_mobile:
-                    st.dataframe(df_hist, use_container_width=True, height=420)
+                    st.dataframe(df_hist, width="stretch", height=420)
                 else:
-                    st.dataframe(df_hist, use_container_width=True)
+                    st.dataframe(df_hist, width="stretch")
             
             csv_export = df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
@@ -538,21 +548,21 @@ if run_btn or st.session_state.should_run:
                     file_name=file_name_zip,
                     mime="application/zip",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 st.download_button(
                     label="下载 OHLCV (增强版)",
                     data=csv_export,
                     file_name=file_name_export,
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 st.download_button(
                     label="下载原始数据 (Hist Data)",
                     data=csv_hist,
                     file_name=file_name_hist,
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 col1, col2, col3 = st.columns(3)
@@ -563,7 +573,7 @@ if run_btn or st.session_state.should_run:
                         file_name=file_name_export,
                         mime="text/csv",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 
                 with col2:
@@ -572,7 +582,7 @@ if run_btn or st.session_state.should_run:
                         data=csv_hist,
                         file_name=file_name_hist,
                         mime="text/csv",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                 with col3:
@@ -582,7 +592,7 @@ if run_btn or st.session_state.should_run:
                         file_name=file_name_zip,
                         mime="application/zip",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 
     except Exception as e:
