@@ -7,7 +7,12 @@ from typing import Optional
 import pandas as pd
 from postgrest.exceptions import APIError
 
-from constants import TABLE_STOCK_CACHE_DATA, TABLE_STOCK_CACHE_META
+try:
+    from constants import TABLE_STOCK_CACHE_DATA, TABLE_STOCK_CACHE_META
+except ImportError:
+    from constants import TABLE_STOCK_CACHE_META
+
+    TABLE_STOCK_CACHE_DATA = "stock_cache_data"
 from supabase_client import get_supabase_client
 
 
