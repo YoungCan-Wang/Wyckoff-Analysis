@@ -21,7 +21,7 @@ def _safe_get_supabase_client():
         return None
 
 
-def _cookie_manager() -> EncryptedCookieManager:
+def _cookie_manager() -> EncryptedCookieManager | None:
     manager = st.session_state.get("cookie_manager")
     if manager is None:
         manager = EncryptedCookieManager(
@@ -30,11 +30,15 @@ def _cookie_manager() -> EncryptedCookieManager:
         )
         st.session_state.cookie_manager = manager
     if not manager.ready():
-        st.error(
-            "浏览器 Cookie 未就绪，无法恢复登录状态。请检查浏览器隐私设置或关闭无痕模式后重试。"
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
+        st.session_state.cookie_manager = None
+        st.warning(
+            "登录状态无法恢复，已清空本地登录信息。请重新登录。"
         )
         st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
-        st.stop()
+        return None
     return manager
 
 
@@ -105,9 +109,14 @@ def login_form():
                                 response.session.refresh_token
                             )
                             cookies = _cookie_manager()
-                            cookies[_ACCESS_TOKEN_KEY] = response.session.access_token
-                            cookies[_REFRESH_TOKEN_KEY] = response.session.refresh_token
-                            cookies.save()
+                            if cookies is not None:
+                                cookies[_ACCESS_TOKEN_KEY] = (
+                                    response.session.access_token
+                                )
+                                cookies[_REFRESH_TOKEN_KEY] = (
+                                    response.session.refresh_token
+                                )
+                                cookies.save()
                             # 登录成功，加载用户配置
                             load_user_settings(response.user.id)
                             st.success("登录成功！")
@@ -172,6 +181,8 @@ def check_auth():
         return True
 
     cookies = _cookie_manager()
+    if cookies is None:
+        return False
     access_token = cookies.get(_ACCESS_TOKEN_KEY)
     refresh_token = cookies.get(_REFRESH_TOKEN_KEY)
     if access_token and refresh_token:
@@ -217,6 +228,8 @@ def logout():
     st.session_state.access_token = None
     st.session_state.refresh_token = None
     cookies = _cookie_manager()
+    if cookies is None:
+        return
     cookies.pop(_ACCESS_TOKEN_KEY, None)
     cookies.pop(_REFRESH_TOKEN_KEY, None)
     cookies.save()
