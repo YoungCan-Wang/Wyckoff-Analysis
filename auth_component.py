@@ -9,6 +9,18 @@ _ACCESS_TOKEN_KEY = "sb_access_token"
 _REFRESH_TOKEN_KEY = "sb_refresh_token"
 
 
+def _safe_get_supabase_client():
+    try:
+        return get_supabase_client()
+    except Exception as e:
+        st.error(
+            "Supabase 配置缺失或初始化失败，请检查 SUPABASE_URL/SUPABASE_KEY 或 "
+            "Streamlit secrets 设置。"
+        )
+        st.caption(f"详细错误: {e}")
+        return None
+
+
 def _cookie_manager() -> EncryptedCookieManager:
     manager = st.session_state.get("cookie_manager")
     if manager is None:
@@ -18,13 +30,19 @@ def _cookie_manager() -> EncryptedCookieManager:
         )
         st.session_state.cookie_manager = manager
     if not manager.ready():
+        st.error(
+            "浏览器 Cookie 未就绪，无法恢复登录状态。请检查浏览器隐私设置或关闭无痕模式后重试。"
+        )
+        st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
         st.stop()
     return manager
 
 
 def login_form():
     """显示登录/注册表单"""
-    supabase = get_supabase_client()
+    supabase = _safe_get_supabase_client()
+    if supabase is None:
+        return
 
     st.markdown(
         """
@@ -145,7 +163,9 @@ def check_auth():
     """
     检查用户认证状态
     """
-    supabase = get_supabase_client()
+    supabase = _safe_get_supabase_client()
+    if supabase is None:
+        return False
 
     # 1. 如果 Session 中已有用户，直接通过
     if "user" in st.session_state and st.session_state.user:
@@ -186,7 +206,9 @@ def check_auth():
 
 def logout():
     """登出"""
-    supabase = get_supabase_client()
+    supabase = _safe_get_supabase_client()
+    if supabase is None:
+        return
     try:
         supabase.auth.sign_out()
     except:
