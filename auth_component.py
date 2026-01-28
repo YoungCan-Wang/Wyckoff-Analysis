@@ -9,7 +9,19 @@ _ACCESS_TOKEN_KEY = "sb_access_token"
 _REFRESH_TOKEN_KEY = "sb_refresh_token"
 
 
-def _cookie_manager() -> EncryptedCookieManager:
+def _safe_get_supabase_client():
+    try:
+        return get_supabase_client()
+    except Exception as e:
+        st.error(
+            "Supabase 配置缺失或初始化失败，请检查 SUPABASE_URL/SUPABASE_KEY 或 "
+            "Streamlit secrets 设置。"
+        )
+        st.caption(f"详细错误: {e}")
+        return None
+
+
+def _cookie_manager() -> EncryptedCookieManager | None:
     manager = st.session_state.get("cookie_manager")
     if manager is None:
         manager = EncryptedCookieManager(
@@ -18,13 +30,23 @@ def _cookie_manager() -> EncryptedCookieManager:
         )
         st.session_state.cookie_manager = manager
     if not manager.ready():
-        st.stop()
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
+        st.session_state.cookie_manager = None
+        st.warning(
+            "登录状态无法恢复，已清空本地登录信息。请重新登录。"
+        )
+        st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
+        return None
     return manager
 
 
 def login_form():
     """显示登录/注册表单"""
-    supabase = get_supabase_client()
+    supabase = _safe_get_supabase_client()
+    if supabase is None:
+        return
 
     st.markdown(
         """
@@ -87,9 +109,14 @@ def login_form():
                                 response.session.refresh_token
                             )
                             cookies = _cookie_manager()
-                            cookies[_ACCESS_TOKEN_KEY] = response.session.access_token
-                            cookies[_REFRESH_TOKEN_KEY] = response.session.refresh_token
-                            cookies.save()
+                            if cookies is not None:
+                                cookies[_ACCESS_TOKEN_KEY] = (
+                                    response.session.access_token
+                                )
+                                cookies[_REFRESH_TOKEN_KEY] = (
+                                    response.session.refresh_token
+                                )
+                                cookies.save()
                             # 登录成功，加载用户配置
                             load_user_settings(response.user.id)
                             st.success("登录成功！")
@@ -145,13 +172,17 @@ def check_auth():
     """
     检查用户认证状态
     """
-    supabase = get_supabase_client()
+    supabase = _safe_get_supabase_client()
+    if supabase is None:
+        return False
 
     # 1. 如果 Session 中已有用户，直接通过
     if "user" in st.session_state and st.session_state.user:
         return True
 
     cookies = _cookie_manager()
+    if cookies is None:
+        return False
     access_token = cookies.get(_ACCESS_TOKEN_KEY)
     refresh_token = cookies.get(_REFRESH_TOKEN_KEY)
     if access_token and refresh_token:
@@ -186,7 +217,9 @@ def check_auth():
 
 def logout():
     """登出"""
-    supabase = get_supabase_client()
+    supabase = _safe_get_supabase_client()
+    if supabase is None:
+        return
     try:
         supabase.auth.sign_out()
     except:
@@ -195,6 +228,8 @@ def logout():
     st.session_state.access_token = None
     st.session_state.refresh_token = None
     cookies = _cookie_manager()
+    if cookies is None:
+        return
     cookies.pop(_ACCESS_TOKEN_KEY, None)
     cookies.pop(_REFRESH_TOKEN_KEY, None)
     cookies.save()
