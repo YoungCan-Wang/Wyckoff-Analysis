@@ -174,7 +174,7 @@ def check_auth():
     """
     supabase = _safe_get_supabase_client()
     if supabase is None:
-        return False
+        return True
 
     # 1. 如果 Session 中已有用户，直接通过
     if "user" in st.session_state and st.session_state.user:
