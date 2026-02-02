@@ -50,8 +50,7 @@ def _cookie_manager() -> EncryptedCookieManager | None:
         return None
 
     st.session_state.cookies_pending = False
-    st.warning("登录状态无法恢复，已清空本地登录信息。请重新登录。")
-    st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
+    st.session_state.cookies_pending_count = 0
     st.session_state.user = None
     st.session_state.access_token = None
     st.session_state.refresh_token = None
