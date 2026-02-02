@@ -4,13 +4,13 @@ from supabase import create_client, Client
 from postgrest.exceptions import APIError
 from constants import TABLE_USER_SETTINGS
 
-@st.cache_resource
+
 def _get_supabase_client_base() -> Client:
     # 优先尝试从 os.getenv 读取（本地 .env 文件）
     # 其次尝试从 st.secrets 读取（Streamlit Cloud 部署环境）
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
-    
+
     if not url or not key:
         # 如果 os.getenv 没取到，再试 st.secrets
         try:
@@ -20,9 +20,12 @@ def _get_supabase_client_base() -> Client:
             pass
 
     if not url or not key:
-        raise ValueError("Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_KEY in .env or secrets.")
+        raise ValueError(
+            "Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_KEY in .env or secrets."
+        )
 
     return create_client(url, key)
+
 
 def _apply_user_session(supabase: Client) -> None:
     """
@@ -43,17 +46,26 @@ def _apply_user_session(supabase: Client) -> None:
         # 回退到 anon/service key（未登录场景）
         supabase.postgrest.auth(supabase.supabase_key)
 
+
 def get_supabase_client() -> Client:
-    supabase = _get_supabase_client_base()
+    if "supabase_client_base" not in st.session_state:
+        st.session_state.supabase_client_base = _get_supabase_client_base()
+    supabase = st.session_state.supabase_client_base
     _apply_user_session(supabase)
     return supabase
+
 
 def load_user_settings(user_id: str):
     """从 Supabase 加载用户配置到 st.session_state"""
     try:
         supabase = get_supabase_client()
-        response = supabase.table(TABLE_USER_SETTINGS).select("*").eq("user_id", user_id).execute()
-        
+        response = (
+            supabase.table(TABLE_USER_SETTINGS)
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
         if response.data and len(response.data) > 0:
             settings = response.data[0]
             # 仅当 session_state 为空时才覆盖，或者强制覆盖
@@ -66,14 +78,12 @@ def load_user_settings(user_id: str):
         print(f"Unexpected error in load_user_settings: {e}")
     return False
 
+
 def save_user_settings(user_id: str, settings: dict):
     """保存用户配置到 Supabase"""
     try:
         supabase = get_supabase_client()
-        data = {
-            "user_id": user_id,
-            **settings
-        }
+        data = {"user_id": user_id, **settings}
         # upsert: 存在则更新，不存在则插入
         supabase.table(TABLE_USER_SETTINGS).upsert(data).execute()
         return True
