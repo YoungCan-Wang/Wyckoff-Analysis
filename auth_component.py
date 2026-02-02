@@ -24,9 +24,15 @@ def _safe_get_supabase_client():
 def _cookie_manager() -> EncryptedCookieManager | None:
     manager = st.session_state.get("cookie_manager")
     if manager is None:
+        secret = os.getenv("COOKIE_SECRET")
+        if not secret:
+            st.error(
+                "COOKIE_SECRET 未配置，无法持久化登录状态。请在环境变量或 secrets 中设置。"
+            )
+            return None
         manager = EncryptedCookieManager(
             prefix="wyckoff",
-            password=os.getenv("COOKIE_SECRET", "wyckoff-cookie-secret"),
+            password=secret,
         )
         st.session_state.cookie_manager = manager
     if not manager.ready():
@@ -34,9 +40,7 @@ def _cookie_manager() -> EncryptedCookieManager | None:
         st.session_state.access_token = None
         st.session_state.refresh_token = None
         st.session_state.cookie_manager = None
-        st.warning(
-            "登录状态无法恢复，已清空本地登录信息。请重新登录。"
-        )
+        st.warning("登录状态无法恢复，已清空本地登录信息。请重新登录。")
         st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
         return None
     return manager
@@ -174,7 +178,7 @@ def check_auth():
     """
     supabase = _safe_get_supabase_client()
     if supabase is None:
-        return False
+        return True
 
     # 1. 如果 Session 中已有用户，直接通过
     if "user" in st.session_state and st.session_state.user:

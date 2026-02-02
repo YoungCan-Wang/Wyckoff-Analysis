@@ -13,25 +13,13 @@ import akshare as ak
 import pandas as pd
 import requests
 
+from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
+
 
 @dataclass(frozen=True)
 class TradingWindow:
     start_trade_date: date
     end_trade_date: date
-
-
-def _safe_filename_part(value: str) -> str:
-    if value is None:
-        return ""
-    s = str(value).strip()
-    if not s:
-        return ""
-    for ch in ["<", ">", ":", '"', "/", "\\", "|", "?", "*"]:
-        s = s.replace(ch, "_")
-    s = s.replace(os.sep, "_")
-    if os.altsep:
-        s = s.replace(os.altsep, "_")
-    return s
 
 
 def _trade_dates() -> list[date]:
@@ -302,19 +290,6 @@ def _fetch_hist_baostock(symbol: str, window: TradingWindow) -> pd.DataFrame:
         bs.logout()
 
 
-def _stock_sector_em(symbol: str) -> str:
-    try:
-        df = ak.stock_individual_info_em(symbol=symbol)
-        if df is None or df.empty:
-            return ""
-        row = df.loc[df["item"] == "行业", "value"]
-        if row.empty:
-            return ""
-        return str(row.iloc[0]).strip()
-    except Exception:
-        return ""
-
-
 def _build_export(df: pd.DataFrame, sector: str) -> pd.DataFrame:
     required = [
         "日期",
@@ -369,61 +344,6 @@ def _build_export(df: pd.DataFrame, sector: str) -> pd.DataFrame:
     return out
 
 
-def _extract_symbols_from_text(text: str, valid_codes: set[str] | None) -> list[str]:
-    if not text:
-        return []
-    digit_runs = re.findall(r"\d{6,}", text)
-    if not digit_runs:
-        return []
-
-    out: list[str] = []
-
-    def accept(code: str) -> bool:
-        if not re.fullmatch(r"\d{6}", code):
-            return False
-        if valid_codes is None:
-            out.append(code)
-            return True
-        if code in valid_codes:
-            out.append(code)
-            return True
-        return False
-
-    for run in digit_runs:
-        if len(run) == 6:
-            accept(run)
-            continue
-
-        if valid_codes is not None and len(run) == 7:
-            fixed = False
-            for i in range(7):
-                cand = run[:i] + run[i + 1 :]
-                if accept(cand):
-                    fixed = True
-                    break
-            if fixed:
-                continue
-
-        if valid_codes is not None and len(run) % 6 == 0:
-            for i in range(0, len(run), 6):
-                accept(run[i : i + 6])
-            continue
-
-        if valid_codes is None:
-            accept(run[:6])
-            continue
-
-        i = 0
-        while i <= len(run) - 6:
-            cand = run[i : i + 6]
-            if accept(cand):
-                i += 6
-            else:
-                i += 1
-
-    return out
-
-
 def _normalize_symbols(symbols: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -443,7 +363,7 @@ def _normalize_symbols(symbols: list[str]) -> list[str]:
 def _write_two_csv(
     symbol: str, name: str, df_hist: pd.DataFrame, out_dir: str, sector: str
 ) -> tuple[str, str]:
-    file_prefix = f"{_safe_filename_part(symbol)}_{_safe_filename_part(name)}"
+    file_prefix = f"{safe_filename_part(symbol, fallback='')}_{safe_filename_part(name, fallback='')}"
     hist_path = os.path.join(out_dir, f"{file_prefix}_hist_data.csv")
     ohlcv_path = os.path.join(out_dir, f"{file_prefix}_ohlcv.csv")
     df_hist.to_csv(hist_path, index=False, encoding="utf-8-sig")
@@ -497,7 +417,7 @@ def main() -> int:
         candidates.extend(args.symbols)
     if args.symbols_text:
         candidates.extend(
-            _extract_symbols_from_text(args.symbols_text, valid_codes=valid_codes)
+            extract_symbols_from_text(args.symbols_text, valid_codes=valid_codes)
         )
     symbols = _normalize_symbols(candidates)
     if not symbols:
@@ -521,7 +441,7 @@ def main() -> int:
             if not name:
                 raise RuntimeError(f"symbol not found in stock list: {symbol}")
             df_hist = _fetch_hist(symbol=symbol, window=window, adjust=str(args.adjust))
-            sector = _stock_sector_em(symbol)
+            sector = stock_sector_em(symbol)
             hist_path, ohlcv_path = _write_two_csv(
                 symbol=symbol,
                 name=name,

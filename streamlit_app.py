@@ -2,7 +2,6 @@ import streamlit as st
 from datetime import date, timedelta, datetime
 import zipfile
 import io
-import re
 import requests
 import os
 import random
@@ -13,10 +12,7 @@ from tenacity import (
     wait_exponential,
     retry_if_exception_type,
 )
-from requests.exceptions import RequestException
-from http.client import RemoteDisconnected
 from dotenv import load_dotenv
-import akshare as ak
 import pandas as pd
 from fetch_a_share_csv import (
     _resolve_trading_window,
@@ -27,6 +23,7 @@ from fetch_a_share_csv import (
     _normalize_symbols,
     _stock_name_from_code,
 )
+from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 from download_history import add_download_history
 from auth_component import check_auth, login_form, logout
 from navigation import show_right_nav
@@ -155,23 +152,8 @@ def set_symbol_from_history(symbol):
     st.session_state.should_run = True
 
 
-def _safe_filename_part(value: str) -> str:
-    s = str(value).strip()
-    if not s:
-        return "Unknown"
-    s = re.sub(r"[\\/:*?\"<>|]+", "_", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
 def _parse_batch_symbols(text: str) -> list[str]:
-    parts = re.split(r"[;；\s,，\n]+", str(text or ""))
-    candidates: list[str] = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        candidates.extend(re.findall(r"\d{6}", part))
+    candidates = extract_symbols_from_text(str(text or ""), valid_codes=None)
     return _normalize_symbols(candidates)
 
 
@@ -179,19 +161,6 @@ def _parse_batch_symbols(text: str) -> list[str]:
 def _stock_name_map():
     stocks = load_stock_list()
     return {s.get("code"): s.get("name") for s in stocks if s.get("code")}
-
-
-def _stock_sector_em_timeout(symbol: str, timeout: float):
-    try:
-        df = ak.stock_individual_info_em(symbol=symbol, timeout=timeout)
-        if df is None or df.empty:
-            return ""
-        row = df.loc[df["item"] == "行业", "value"]
-        if row.empty:
-            return ""
-        return str(row.iloc[0]).strip()
-    except Exception:
-        return ""
 
 
 def _friendly_error_message(e: Exception, symbol: str, trading_days: int) -> str:
@@ -469,11 +438,11 @@ if run_btn or st.session_state.should_run:
                             # 使用带重试的函数获取数据
                             df_hist = _fetch_hist_with_retry(symbol, window, adjust)
 
-                            sector = _stock_sector_em_timeout(symbol, timeout=60)
+                            sector = stock_sector_em(symbol, timeout=60)
                             df_export = _build_export(df_hist, sector)
 
-                            safe_symbol = _safe_filename_part(symbol)
-                            safe_name = _safe_filename_part(name)
+                            safe_symbol = safe_filename_part(symbol)
+                            safe_name = safe_filename_part(name)
                             file_name_export = f"{safe_symbol}_{safe_name}_ohlcv.csv"
                             file_name_hist = f"{safe_symbol}_{safe_name}_hist_data.csv"
 
@@ -513,7 +482,7 @@ if run_btn or st.session_state.should_run:
                         results_ph.dataframe(results, width="stretch", height=260)
 
                 zip_data = zip_buffer.getvalue()
-                file_name_zip = f"batch_{_safe_filename_part(str(window.start_trade_date))}_{_safe_filename_part(str(window.end_trade_date))}.zip"
+                file_name_zip = f"batch_{safe_filename_part(str(window.start_trade_date))}_{safe_filename_part(str(window.end_trade_date))}.zip"
 
             # === 自动记录批量下载历史 ===
             # 只要任务完成，就记录一次
@@ -607,9 +576,7 @@ if run_btn or st.session_state.should_run:
             df_hist = _fetch_hist_with_retry(
                 st.session_state.current_symbol, window, adjust
             )
-            sector = _stock_sector_em_timeout(
-                st.session_state.current_symbol, timeout=60
-            )
+            sector = stock_sector_em(st.session_state.current_symbol, timeout=60)
             df_export = _build_export(df_hist, sector)
 
             st.subheader("📊 数据预览")

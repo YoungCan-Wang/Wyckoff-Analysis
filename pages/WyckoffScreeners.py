@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 import akshare as ak
 
+from utils import extract_symbols_from_text, stock_sector_em
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
@@ -238,16 +239,7 @@ def _baostock_available() -> bool:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _stock_sector(symbol: str) -> str:
-    try:
-        df = ak.stock_individual_info_em(symbol=symbol)
-        if df is None or df.empty:
-            return ""
-        row = df.loc[df["item"] == "行业", "value"]
-        if row.empty:
-            return ""
-        return str(row.iloc[0]).strip()
-    except Exception:
-        return ""
+    return stock_sector_em(symbol)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -269,7 +261,8 @@ def _parse_symbols(
     pool_mode: str, text: str, board: str, limit_count: int
 ) -> list[str]:
     if pool_mode == "手动输入":
-        return _normalize_symbols(text)
+        candidates = extract_symbols_from_text(str(text or ""), valid_codes=None)
+        return _normalize_symbols(candidates)
 
     stocks = get_stocks_by_board(board)
     codes = [s.get("code") for s in stocks if s.get("code")]
