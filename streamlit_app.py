@@ -466,51 +466,52 @@ if run_btn or st.session_state.should_run:
                 zip_data = zip_buffer.getvalue()
                 file_name_zip = f"batch_{safe_filename_part(str(window.start_trade_date))}_{safe_filename_part(str(window.end_trade_date))}.zip"
 
-            # === 自动记录批量下载历史 ===
-            # 只要任务完成，就记录一次
-            symbols_str = "_".join(symbols[:3]) + (
-                f"_etc_{len(symbols)}" if len(symbols) > 3 else ""
-            )
-            current_batch_key = f"batch_{symbols_str}_{datetime.now().strftime('%H%M')}"
-            last_batch_key = st.session_state.get("last_home_batch_key")
-
-            if current_batch_key != last_batch_key:
-                add_download_history(
-                    page="Home",
-                    source="批量生成",
-                    title=f"批量 ({len(symbols)} 只)",
-                    file_name=file_name_zip,
-                    mime="application/zip",
-                    data=None,
+                # === 自动记录批量下载历史 ===
+                # 只要任务完成，就记录一次
+                symbols_str = "_".join(symbols[:3]) + (
+                    f"_etc_{len(symbols)}" if len(symbols) > 3 else ""
                 )
-                st.session_state["last_home_batch_key"] = current_batch_key
-
-            # Send Feishu notification
-            if st.session_state.feishu_webhook:
-                success_count = len([r for r in results if r["status"] == "ok"])
-                failed_count = len(results) - success_count
-                notify_title = f"📦 批量下载完成 ({success_count}/{len(symbols)})"
-                notify_text = (
-                    f"**任务状态**: 已完成\n"
-                    f"**成功**: {success_count} 个\n"
-                    f"**失败**: {failed_count} 个\n"
-                    f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"**文件**: {file_name_zip}"
+                current_batch_key = (
+                    f"batch_{symbols_str}_{datetime.now().strftime('%H%M')}"
                 )
-                if failed_count > 0:
-                    failed_details = "\\n".join(
-                        [
-                            f"- {r['symbol']}: {r['error']}"
-                            for r in results
-                            if r["status"] != "ok"
-                        ]
+                last_batch_key = st.session_state.get("last_home_batch_key")
+
+                if current_batch_key != last_batch_key:
+                    add_download_history(
+                        page="Home",
+                        source="批量生成",
+                        title=f"批量 ({len(symbols)} 只)",
+                        file_name=file_name_zip,
+                        mime="application/zip",
+                        data=None,
                     )
-                    notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
+                    st.session_state["last_home_batch_key"] = current_batch_key
+                # Send Feishu notification
+                if st.session_state.feishu_webhook:
+                    success_count = len([r for r in results if r["status"] == "ok"])
+                    failed_count = len(results) - success_count
+                    notify_title = f"📦 批量下载完成 ({success_count}/{len(symbols)})"
+                    notify_text = (
+                        f"**任务状态**: 已完成\n"
+                        f"**成功**: {success_count} 个\n"
+                        f"**失败**: {failed_count} 个\n"
+                        f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"**文件**: {file_name_zip}"
+                    )
+                    if failed_count > 0:
+                        failed_details = "\\n".join(
+                            [
+                                f"- {r['symbol']}: {r['error']}"
+                                for r in results
+                                if r["status"] != "ok"
+                            ]
+                        )
+                        notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
 
-                send_feishu_notification(
-                    st.session_state.feishu_webhook, notify_title, notify_text
-                )
-                st.toast("✅ 飞书通知已发送", icon="🔔")
+                    send_feishu_notification(
+                        st.session_state.feishu_webhook, notify_title, notify_text
+                    )
+                    st.toast("✅ 飞书通知已发送", icon="🔔")
 
             finally:
                 loading.empty()
