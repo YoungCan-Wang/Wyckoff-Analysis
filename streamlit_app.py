@@ -3,7 +3,6 @@ from datetime import date, timedelta, datetime
 import zipfile
 import io
 import requests
-import os
 import random
 import time
 from tenacity import (
@@ -25,7 +24,8 @@ from fetch_a_share_csv import (
 )
 from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 from download_history import add_download_history
-from auth_component import check_auth, login_form, logout
+from auth_component import logout
+from layout import setup_page, show_user_error
 from navigation import show_right_nav
 from stock_cache import (
     cleanup_cache,
@@ -40,16 +40,7 @@ from stock_cache import (
 # Load environment variables from .env file
 load_dotenv()
 
-# Page configuration
-st.set_page_config(page_title="A股历史行情导出工具", page_icon="📈", layout="wide")
-
-# === Auth Check ===
-if not check_auth():
-    # 使用空布局，避免显示侧边栏和其他干扰元素
-    empty_container = st.empty()
-    with empty_container.container():
-        login_form()
-    st.stop()
+setup_page(page_title="A股历史行情导出工具", page_icon="📈")
 
 # === Logged In User Info ===
 with st.sidebar:
@@ -58,23 +49,6 @@ with st.sidebar:
         if st.button("退出登录"):
             logout()
     st.divider()
-
-# Initialize session state for search history
-if "search_history" not in st.session_state:
-    st.session_state.search_history = []
-if "current_symbol" not in st.session_state:
-    st.session_state.current_symbol = "300364"
-if "should_run" not in st.session_state:
-    st.session_state.should_run = False
-if "feishu_webhook" not in st.session_state:
-    st.session_state.feishu_webhook = os.getenv("FEISHU_WEBHOOK_URL", "")
-
-# 如果是从 .env 自动加载的，确保是空字符串而不是None
-if st.session_state.feishu_webhook is None:
-    st.session_state.feishu_webhook = ""
-
-if "mobile_mode" not in st.session_state:
-    st.session_state.mobile_mode = False
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -682,8 +656,7 @@ if run_btn or st.session_state.should_run:
                     )
 
     except Exception as e:
-        st.error(f"发生错误: {str(e)}")
-        st.exception(e)
+        show_user_error("发生错误，请稍后重试。", e)
 
 else:
     st.info("👈 请在左侧输入参数并点击“开始获取数据”")

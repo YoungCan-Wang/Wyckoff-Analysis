@@ -9,14 +9,11 @@ from datetime import date, timedelta
 import akshare as ak
 from download_history import add_download_history
 from fetch_a_share_csv import get_all_stocks
+from layout import setup_page, show_user_error
 from navigation import show_right_nav
 
 
-st.set_page_config(
-    page_title="自定义导出",
-    page_icon="🧰",
-    layout="wide",
-)
+setup_page(page_title="自定义导出", page_icon="🧰")
 
 
 st.title("🧰 自定义导出")
@@ -63,7 +60,9 @@ source_labels = {s["label"]: s for s in SOURCES}
 
 source_select_key = "custom_export::selected_label"
 prev_selected_label = st.session_state.get(source_select_key, "")
-selected_label = st.selectbox("数据源", options=[s["label"] for s in SOURCES], key=source_select_key)
+selected_label = st.selectbox(
+    "数据源", options=[s["label"] for s in SOURCES], key=source_select_key
+)
 source = source_labels[selected_label]
 st.caption(source["help"])
 
@@ -79,10 +78,12 @@ adjust = ""
 end_date = today
 start_date = end_date - timedelta(days=365)
 
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _stock_name_map() -> dict[str, str]:
     items = get_all_stocks()
     return {x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)}
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _etf_name_map() -> dict[str, str]:
@@ -91,6 +92,7 @@ def _etf_name_map() -> dict[str, str]:
         return {str(c): str(n) for c, n in zip(df["代码"], df["名称"])}
     except Exception:
         return {}
+
 
 INDEX_CHOICES = [
     {"label": "上证指数", "code": "000001"},
@@ -145,16 +147,13 @@ if source["id"] != "macro_china_cpi_monthly":
         adjust = st.selectbox(
             "复权类型",
             options=["", "qfq", "hfq"],
-            format_func=lambda x: "不复权" if x == "" else ("前复权" if x == "qfq" else "后复权"),
+            format_func=lambda x: "不复权"
+            if x == ""
+            else ("前复权" if x == "qfq" else "后复权"),
             index=0,
         )
 
 run = st.button("🚀 获取数据", type="primary")
-
-if "custom_export_df" not in st.session_state:
-    st.session_state.custom_export_df = None
-if "custom_export_source_id" not in st.session_state:
-    st.session_state.custom_export_source_id = ""
 
 if run:
     try:
@@ -168,9 +167,17 @@ if run:
                 sd = start_date.strftime("%Y%m%d")
                 ed = end_date.strftime("%Y%m%d")
                 if source["id"] == "index_zh_a_hist":
-                    df = source["fn"](symbol=symbol, period="daily", start_date=sd, end_date=ed)
+                    df = source["fn"](
+                        symbol=symbol, period="daily", start_date=sd, end_date=ed
+                    )
                 else:
-                    df = source["fn"](symbol=symbol, period="daily", start_date=sd, end_date=ed, adjust=adjust)
+                    df = source["fn"](
+                        symbol=symbol,
+                        period="daily",
+                        start_date=sd,
+                        end_date=ed,
+                        adjust=adjust,
+                    )
         st.session_state.custom_export_df = df
         st.session_state.custom_export_source_id = source["id"]
 
@@ -178,7 +185,7 @@ if run:
         # 生成一个唯一的 query_key 来防止重复记录
         current_query_key = f"{source['id']}_{symbol}_{start_date}_{end_date}"
         last_query_key = st.session_state.get("last_custom_export_query")
-        
+
         if current_query_key != last_query_key:
             add_download_history(
                 page="CustomExport",
@@ -186,12 +193,12 @@ if run:
                 title=f"{symbol} ({start_date}~{end_date})",
                 file_name=f"{symbol}_{start_date}_{end_date}.csv",
                 mime="text/csv",
-                data=None
+                data=None,
             )
             st.session_state["last_custom_export_query"] = current_query_key
 
     except Exception as e:
-        st.error(f"获取失败：{e}")
+        show_user_error("获取失败，请稍后重试。", e)
         st.stop()
 
 
@@ -233,12 +240,16 @@ for i, c in enumerate(columns):
     with cols[i % 4]:
         st.checkbox(str(c), key=state_key_prefix + str(c))
 
-selected_cols = [c for c in columns if st.session_state.get(state_key_prefix + str(c), False)]
+selected_cols = [
+    c for c in columns if st.session_state.get(state_key_prefix + str(c), False)
+]
 if not selected_cols:
     st.warning("请至少选择 1 个字段。")
     st.stop()
 
-csv_selected = df[selected_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+csv_selected = (
+    df[selected_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+)
 csv_all = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
 file_prefix = source_key

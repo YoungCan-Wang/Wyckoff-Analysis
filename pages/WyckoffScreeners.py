@@ -11,6 +11,7 @@ import streamlit as st
 import akshare as ak
 
 from utils import extract_symbols_from_text, stock_sector_em
+from layout import setup_page
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
@@ -70,11 +71,7 @@ class ScreenerConfig:
     first_board: FirstBoardConfig = field(default_factory=FirstBoardConfig)
 
 
-st.set_page_config(
-    page_title="沙里淘金",
-    page_icon="🧭",
-    layout="wide",
-)
+setup_page(page_title="沙里淘金", page_icon="🧭")
 
 st.title("🧭 沙里淘金")
 st.markdown("在市场的沙砾里淘金，只输出值得关注的股票代码。")

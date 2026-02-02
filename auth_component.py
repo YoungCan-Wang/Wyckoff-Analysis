@@ -35,6 +35,10 @@ def _cookie_manager() -> EncryptedCookieManager | None:
             password=secret,
         )
         st.session_state.cookie_manager = manager
+    for _ in range(3):
+        if manager.ready():
+            break
+        time.sleep(0.2)
     if not manager.ready():
         st.session_state.user = None
         st.session_state.access_token = None

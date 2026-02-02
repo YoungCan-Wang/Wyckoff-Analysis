@@ -5,24 +5,12 @@ import sys
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from auth_component import check_auth, login_form
+from layout import setup_page
 from download_history import get_download_history
 from navigation import show_right_nav
 
 
-st.set_page_config(
-    page_title="下载历史",
-    page_icon="🕘",
-    layout="wide",
-)
-
-# === Auth Check ===
-if not check_auth():
-    # 使用空布局，避免显示侧边栏和其他干扰元素
-    empty_container = st.empty()
-    with empty_container.container():
-        login_form()
-    st.stop()
+setup_page(page_title="下载历史", page_icon="🕘")
 
 st.title("🕘 下载历史（最近 20 条）")
 
@@ -51,5 +39,6 @@ for item in history:
 
 st.dataframe(rows, width="stretch", height=500, hide_index=True)
 
-st.caption("注：出于节省存储成本考虑，目前仅保留下载记录元数据，不支持直接重新下载历史文件。如需文件请重新执行查询。")
-
+st.caption(
+    "注：出于节省存储成本考虑，目前仅保留下载记录元数据，不支持直接重新下载历史文件。如需文件请重新执行查询。"
+)
