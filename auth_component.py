@@ -34,10 +34,10 @@ def _cookie_manager() -> EncryptedCookieManager | None:
         st.session_state.access_token = None
         st.session_state.refresh_token = None
         st.session_state.cookie_manager = None
-        if not st.session_state.get("cookie_warning_shown"):
-            st.warning("登录状态无法恢复，已清空本地登录信息。请重新登录。")
-            st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
-            st.session_state.cookie_warning_shown = True
+        st.warning(
+            "登录状态无法恢复，已清空本地登录信息。请重新登录。"
+        )
+        st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
         return None
     return manager
 
