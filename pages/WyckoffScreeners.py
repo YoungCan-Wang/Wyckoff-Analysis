@@ -878,7 +878,7 @@ if run:
         "jump_stats": jump_stats if tactic == "突破临界" else None,
     }
 
-payload = st.session_state.wyckoff_payload
+payload = st.session_state.get("wyckoff_payload")
 if payload:
     _render_results(
         payload, group_power=group_power, debug_log=debug_log, use_cache=use_cache
