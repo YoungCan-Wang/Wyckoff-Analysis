@@ -26,6 +26,7 @@ from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 from download_history import add_download_history
 from auth_component import logout
 from layout import setup_page, show_user_error
+from ui_helpers import show_page_loading
 from navigation import show_right_nav
 from stock_cache import (
     cleanup_cache,
@@ -261,8 +262,11 @@ with st.sidebar:
 
         stock_options = []
         if enable_stock_search:
-            with st.spinner("正在加载股票列表..."):
+            loading = show_page_loading(title="加载中...", subtitle="正在加载股票列表")
+            try:
                 all_stocks = load_stock_list()
+            finally:
+                loading.empty()
             stock_options = (
                 [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
             )
@@ -395,7 +399,11 @@ if run_btn or st.session_state.should_run:
             progress_bar = progress_ph.progress(0)
             results_ph = st.empty()
 
-            with st.spinner(f"正在批量生成（{len(symbols)} 个）..."):
+            loading = show_page_loading(
+                title="加载中...",
+                subtitle=f"正在批量生成（{len(symbols)} 个）",
+            )
+            try:
                 end_calendar = date.today() - timedelta(days=int(end_offset))
                 window = _resolve_trading_window(end_calendar, 60)
 
@@ -504,9 +512,11 @@ if run_btn or st.session_state.should_run:
                 )
                 st.toast("✅ 飞书通知已发送", icon="🔔")
 
-            status_ph.empty()
-            progress_ph.empty()
-            results_ph.empty()
+            finally:
+                loading.empty()
+                status_ph.empty()
+                progress_ph.empty()
+                results_ph.empty()
 
             st.subheader("📦 批量生成结果")
             st.dataframe(results, width="stretch")
@@ -528,7 +538,11 @@ if run_btn or st.session_state.should_run:
             st.error("请输入有效的 6 位数字股票代码！")
             st.stop()
 
-        with st.spinner(f"正在获取 {st.session_state.current_symbol} 的数据..."):
+        loading = show_page_loading(
+            title="加载中...",
+            subtitle=f"正在获取 {st.session_state.current_symbol} 的数据",
+        )
+        try:
             end_calendar = date.today() - timedelta(days=int(end_offset))
             window = _resolve_trading_window(end_calendar, int(trading_days))
 
@@ -654,6 +668,9 @@ if run_btn or st.session_state.should_run:
                         type="primary",
                         width="stretch",
                     )
+
+        finally:
+            loading.empty()
 
     except Exception as e:
         show_user_error("发生错误，请稍后重试。", e)

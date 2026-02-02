@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from layout import setup_page
 from navigation import show_right_nav
 from supabase_client import save_user_settings
+from ui_helpers import show_page_loading
 
 setup_page(page_title="设置", page_icon="⚙️")
 
@@ -32,11 +33,14 @@ def on_save_settings():
         "gemini_api_key": st.session_state.gemini_api_key,
     }
 
-    with st.spinner("正在保存到云端..."):
+    loading = show_page_loading(title="加载中...", subtitle="正在保存到云端")
+    try:
         if save_user_settings(user_id, settings):
             st.toast("✅ 配置已保存到云端", icon="☁️")
         else:
             st.toast("❌ 保存失败，请检查网络", icon="⚠️")
+    finally:
+        loading.empty()
 
 
 col1, col2 = st.columns([2, 1])

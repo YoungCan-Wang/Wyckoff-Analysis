@@ -10,6 +10,7 @@ import akshare as ak
 from download_history import add_download_history
 from fetch_a_share_csv import get_all_stocks
 from layout import setup_page, show_user_error
+from ui_helpers import show_page_loading
 from navigation import show_right_nav
 
 
@@ -157,7 +158,8 @@ run = st.button("🚀 获取数据", type="primary")
 
 if run:
     try:
-        with st.spinner("正在获取数据..."):
+        loading = show_page_loading(title="加载中...", subtitle="正在获取数据")
+        try:
             if source["id"] == "macro_china_cpi_monthly":
                 df = source["fn"]()
             else:
@@ -178,6 +180,8 @@ if run:
                         end_date=ed,
                         adjust=adjust,
                     )
+        finally:
+            loading.empty()
         st.session_state.custom_export_df = df
         st.session_state.custom_export_source_id = source["id"]
 

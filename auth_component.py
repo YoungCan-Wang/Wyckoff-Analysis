@@ -2,6 +2,7 @@ import os
 import streamlit as st
 from streamlit_cookies_manager import EncryptedCookieManager
 from supabase_client import get_supabase_client, load_user_settings
+from ui_helpers import show_page_loading
 from supabase import AuthApiError
 import time
 
@@ -37,16 +38,25 @@ def _cookie_manager() -> EncryptedCookieManager | None:
         st.session_state.cookie_manager = manager
     for _ in range(3):
         if manager.ready():
-            break
+            st.session_state.cookies_pending = False
+            st.session_state.cookies_pending_count = 0
+            return manager
         time.sleep(0.2)
-    if not manager.ready():
-        st.session_state.user = None
-        st.session_state.access_token = None
-        st.session_state.refresh_token = None
-        st.session_state.cookie_manager = None
-        st.warning("登录状态无法恢复，已清空本地登录信息。请重新登录。")
-        st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
+
+    pending_count = int(st.session_state.get("cookies_pending_count", 0)) + 1
+    st.session_state.cookies_pending_count = pending_count
+    if pending_count <= 3:
+        st.session_state.cookies_pending = True
         return None
+
+    st.session_state.cookies_pending = False
+    st.warning("登录状态无法恢复，已清空本地登录信息。请重新登录。")
+    st.caption("提示：如果浏览器阻止第三方 Cookie，也可能导致该问题。")
+    st.session_state.user = None
+    st.session_state.access_token = None
+    st.session_state.refresh_token = None
+    st.session_state.cookie_manager = None
+    return None
     return manager
 
 
@@ -105,7 +115,10 @@ def login_form():
 
                 if submit:
                     try:
-                        with st.spinner("正在登录..."):
+                        loading = show_page_loading(
+                            title="加载中...", subtitle="正在登录"
+                        )
+                        try:
                             response = supabase.auth.sign_in_with_password(
                                 {"email": email, "password": password}
                             )
@@ -130,6 +143,8 @@ def login_form():
                             st.success("登录成功！")
                             time.sleep(0.5)
                             st.rerun()
+                        finally:
+                            loading.empty()
                     except AuthApiError as e:
                         st.error(f"登录失败: {e.message}")
                     except Exception as e:
@@ -163,13 +178,18 @@ def login_form():
                         st.error("密码长度至少为 6 位")
                     else:
                         try:
-                            with st.spinner("正在注册..."):
+                            loading = show_page_loading(
+                                title="加载中...", subtitle="正在注册"
+                            )
+                            try:
                                 response = supabase.auth.sign_up(
                                     {"email": new_email, "password": new_password}
                                 )
                                 st.success(
                                     "注册成功！请检查邮箱并点击验证链接完成激活。"
                                 )
+                            finally:
+                                loading.empty()
                         except AuthApiError as e:
                             st.error(f"注册失败: {e.message}")
                         except Exception as e:
