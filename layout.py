@@ -1,4 +1,5 @@
 import os
+import time
 
 import streamlit as st
 
@@ -43,7 +44,8 @@ def require_auth() -> None:
         return
     if st.session_state.get("cookies_pending"):
         show_page_loading()
-        st.stop()
+        time.sleep(0.3)
+        st.rerun()
     empty_container = st.empty()
     with empty_container.container():
         login_form()

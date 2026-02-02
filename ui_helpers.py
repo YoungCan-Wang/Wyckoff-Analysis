@@ -9,11 +9,13 @@ def show_page_loading(
     placeholder = st.empty()
     placeholder.markdown(
         f"""
-        <div style="text-align:center; padding: 24px 12px;">
-            <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
-            <div style="font-size: 16px; font-weight: 600;">{title}</div>
-            <div style="font-size: 13px; color: #666; margin-top: 6px;">
-                {subtitle}
+        <div style="width: 100%; min-height: 40vh; display: flex; align-items: center; justify-content: center;">
+            <div style="text-align:center; padding: 24px 12px;">
+                <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
+                <div style="font-size: 16px; font-weight: 600;">{title}</div>
+                <div style="font-size: 13px; color: #666; margin-top: 6px;">
+                    {subtitle}
+                </div>
             </div>
         </div>
         """,
