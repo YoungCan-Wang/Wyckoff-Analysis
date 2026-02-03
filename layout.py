@@ -61,6 +61,23 @@ def setup_page(
 ) -> None:
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
     init_session_state()
+    with st.sidebar:
+        with st.expander("Auth Debug", expanded=False):
+            st.write(
+                {
+                    "has_user": bool(st.session_state.get("user")),
+                    "user_email": getattr(st.session_state.get("user"), "email", None),
+                    "has_access_token": bool(st.session_state.get("access_token")),
+                    "has_refresh_token": bool(st.session_state.get("refresh_token")),
+                    "cookies_pending": bool(
+                        st.session_state.get("cookies_pending", False)
+                    ),
+                    "cookie_manager_ready": bool(
+                        st.session_state.get("cookie_manager")
+                    ),
+                    "env_cookie_secret": bool(os.getenv("COOKIE_SECRET")),
+                }
+            )
     if require_login:
         require_auth()
 

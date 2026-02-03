@@ -27,6 +27,11 @@ def _cookie_manager(clear_on_fail: bool = True) -> EncryptedCookieManager | None
     if manager is None:
         secret = os.getenv("COOKIE_SECRET")
         if not secret:
+            try:
+                secret = st.secrets["COOKIE_SECRET"]
+            except Exception:
+                secret = None
+        if not secret:
             st.error(
                 "COOKIE_SECRET 未配置，无法持久化登录状态。请在环境变量或 secrets 中设置。"
             )
