@@ -64,10 +64,11 @@ def setup_page(
     with st.sidebar:
         with st.expander("Auth Debug", expanded=False):
             cookie_manager = st.session_state.get("cookie_manager")
+            user = st.session_state.get("user") or {}
             st.write(
                 {
                     "has_user": bool(st.session_state.get("user")),
-                    "user_email": getattr(st.session_state.get("user"), "email", None),
+                    "user_email": user.get("email") if isinstance(user, dict) else None,
                     "has_access_token": bool(st.session_state.get("access_token")),
                     "has_refresh_token": bool(st.session_state.get("refresh_token")),
                     "cookies_pending": bool(

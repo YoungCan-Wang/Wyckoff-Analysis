@@ -19,7 +19,8 @@ st.title("⚙️ 设置 (Settings)")
 st.markdown("配置您的 API Key 和通知服务，让 Akshare 更加智能。")
 
 # 获取当前用户 ID
-user_id = st.session_state.get("user").id if st.session_state.get("user") else None
+user = st.session_state.get("user") or {}
+user_id = user.get("id") if isinstance(user, dict) else None
 
 
 def on_save_settings():

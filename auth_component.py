@@ -10,6 +10,23 @@ _ACCESS_TOKEN_KEY = "sb_access_token"
 _REFRESH_TOKEN_KEY = "sb_refresh_token"
 
 
+def _user_payload(user) -> dict | None:
+    if user is None:
+        return None
+    if isinstance(user, dict):
+        return {
+            "id": user.get("id"),
+            "email": user.get("email"),
+        }
+    if hasattr(user, "model_dump"):
+        data = user.model_dump()
+        return {"id": data.get("id"), "email": data.get("email")}
+    if hasattr(user, "dict"):
+        data = user.dict()
+        return {"id": data.get("id"), "email": data.get("email")}
+    return {"id": getattr(user, "id", None), "email": getattr(user, "email", None)}
+
+
 def _safe_get_supabase_client():
     try:
         return get_supabase_client()
@@ -127,7 +144,7 @@ def login_form():
                             response = supabase.auth.sign_in_with_password(
                                 {"email": email, "password": password}
                             )
-                            st.session_state.user = response.user
+                            st.session_state.user = _user_payload(response.user)
                             st.session_state.access_token = (
                                 response.session.access_token
                             )
@@ -144,7 +161,8 @@ def login_form():
                                 )
                                 cookies.save()
                             # 登录成功，加载用户配置
-                            load_user_settings(response.user.id)
+                            if response.user is not None:
+                                load_user_settings(response.user.id)
                             st.success("登录成功！")
                             time.sleep(0.5)
                             st.rerun()
@@ -223,10 +241,11 @@ def check_auth():
         try:
             session = supabase.auth.set_session(access_token, refresh_token)
             if session:
-                st.session_state.user = session.user
+                st.session_state.user = _user_payload(session.user)
                 st.session_state.access_token = session.access_token
                 st.session_state.refresh_token = session.refresh_token
-                load_user_settings(session.user.id)
+                if session.user is not None:
+                    load_user_settings(session.user.id)
                 return True
         except Exception:
             cookies.pop(_ACCESS_TOKEN_KEY, None)
@@ -237,11 +256,12 @@ def check_auth():
     try:
         session = supabase.auth.get_session()
         if session:
-            st.session_state.user = session.user
+            st.session_state.user = _user_payload(session.user)
             st.session_state.access_token = session.access_token
             st.session_state.refresh_token = session.refresh_token
             # 恢复会话成功，加载用户配置
-            load_user_settings(session.user.id)
+            if session.user is not None:
+                load_user_settings(session.user.id)
             return True
     except:
         pass

@@ -46,7 +46,9 @@ setup_page(page_title="A股历史行情导出工具", page_icon="📈")
 # === Logged In User Info ===
 with st.sidebar:
     if st.session_state.get("user"):
-        st.caption(f"当前用户: {st.session_state.user.email}")
+        st.caption(
+            f"当前用户: {st.session_state.user.get('email') if isinstance(st.session_state.user, dict) else ''}"
+        )
         if st.button("退出登录"):
             logout()
     st.divider()
