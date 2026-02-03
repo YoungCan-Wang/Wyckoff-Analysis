@@ -1,10 +1,8 @@
 import os
-import time
 
 import streamlit as st
 
 from auth_component import check_auth, login_form
-from ui_helpers import show_page_loading
 
 
 def _set_default(key: str, value) -> None:
@@ -16,7 +14,6 @@ def init_session_state() -> None:
     _set_default("user", None)
     _set_default("access_token", None)
     _set_default("refresh_token", None)
-    _set_default("cookie_manager", None)
     _set_default("search_history", [])
     _set_default("current_symbol", "300364")
     _set_default("should_run", False)
@@ -27,8 +24,6 @@ def init_session_state() -> None:
     _set_default("custom_export_df", None)
     _set_default("custom_export_source_id", "")
     _set_default("wyckoff_payload", None)
-    _set_default("cookies_pending", False)
-    _set_default("cookies_pending_count", 0)
 
     _set_default("feishu_webhook", os.getenv("FEISHU_WEBHOOK_URL", ""))
     if st.session_state.feishu_webhook is None:
@@ -42,10 +37,6 @@ def init_session_state() -> None:
 def require_auth() -> None:
     if check_auth():
         return
-    if st.session_state.get("cookies_pending"):
-        show_page_loading()
-        time.sleep(0.3)
-        st.rerun()
     empty_container = st.empty()
     with empty_container.container():
         login_form()
@@ -63,7 +54,6 @@ def setup_page(
     init_session_state()
     with st.sidebar:
         with st.expander("Auth Debug", expanded=False):
-            cookie_manager = st.session_state.get("cookie_manager")
             user = st.session_state.get("user") or {}
             st.write(
                 {
@@ -71,11 +61,6 @@ def setup_page(
                     "user_email": user.get("email") if isinstance(user, dict) else None,
                     "has_access_token": bool(st.session_state.get("access_token")),
                     "has_refresh_token": bool(st.session_state.get("refresh_token")),
-                    "cookies_pending": bool(
-                        st.session_state.get("cookies_pending", False)
-                    ),
-                    "cookie_manager_ready": cookie_manager is not None,
-                    "env_cookie_secret": bool(os.getenv("COOKIE_SECRET")),
                 }
             )
     if require_login:
