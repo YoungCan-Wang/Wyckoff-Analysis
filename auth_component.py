@@ -22,7 +22,7 @@ def _safe_get_supabase_client():
         return None
 
 
-def _cookie_manager() -> EncryptedCookieManager | None:
+def _cookie_manager(clear_on_fail: bool = True) -> EncryptedCookieManager | None:
     manager = st.session_state.get("cookie_manager")
     if manager is None:
         secret = os.getenv("COOKIE_SECRET")
@@ -51,10 +51,11 @@ def _cookie_manager() -> EncryptedCookieManager | None:
 
     st.session_state.cookies_pending = False
     st.session_state.cookies_pending_count = 0
-    st.session_state.user = None
-    st.session_state.access_token = None
-    st.session_state.refresh_token = None
-    st.session_state.cookie_manager = None
+    if clear_on_fail:
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
+        st.session_state.cookie_manager = None
     return None
     return manager
 
@@ -128,7 +129,7 @@ def login_form():
                             st.session_state.refresh_token = (
                                 response.session.refresh_token
                             )
-                            cookies = _cookie_manager()
+                            cookies = _cookie_manager(clear_on_fail=False)
                             if cookies is not None:
                                 cookies[_ACCESS_TOKEN_KEY] = (
                                     response.session.access_token
@@ -204,10 +205,11 @@ def check_auth():
         return True
 
     # 1. 如果 Session 中已有用户，直接通过
-    if "user" in st.session_state and st.session_state.user:
+    user = st.session_state.get("user")
+    if user is not None:
         return True
 
-    cookies = _cookie_manager()
+    cookies = _cookie_manager(clear_on_fail=True)
     if cookies is None:
         return False
     access_token = cookies.get(_ACCESS_TOKEN_KEY)
@@ -254,7 +256,7 @@ def logout():
     st.session_state.user = None
     st.session_state.access_token = None
     st.session_state.refresh_token = None
-    cookies = _cookie_manager()
+    cookies = _cookie_manager(clear_on_fail=False)
     if cookies is None:
         return
     cookies.pop(_ACCESS_TOKEN_KEY, None)
