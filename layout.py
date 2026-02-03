@@ -63,6 +63,7 @@ def setup_page(
     init_session_state()
     with st.sidebar:
         with st.expander("Auth Debug", expanded=False):
+            cookie_manager = st.session_state.get("cookie_manager")
             st.write(
                 {
                     "has_user": bool(st.session_state.get("user")),
@@ -72,9 +73,7 @@ def setup_page(
                     "cookies_pending": bool(
                         st.session_state.get("cookies_pending", False)
                     ),
-                    "cookie_manager_ready": bool(
-                        st.session_state.get("cookie_manager")
-                    ),
+                    "cookie_manager_ready": cookie_manager is not None,
                     "env_cookie_secret": bool(os.getenv("COOKIE_SECRET")),
                 }
             )
