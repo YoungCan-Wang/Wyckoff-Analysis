@@ -3,58 +3,54 @@ import streamlit as st
 
 def show_right_nav():
     """
-    Keep a floating right-side nav for layout, but use native navigation
-    buttons so the session is preserved.
+    Create a right-side sticky navigation column and return the content column.
     """
-    st.markdown(
-        """
-        <style>
-        .element-container:has(#float-nav-anchor) {
-            display: none;
-        }
-        .element-container:has(#float-nav-anchor) + .element-container {
-            position: fixed;
-            right: 18px;
-            top: 50%;
-            transform: translateY(-50%);
-            z-index: 99999;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            background: var(--secondary-background-color);
-            border-radius: 16px;
-            padding: 12px 8px;
-            border: 1px solid rgba(128, 128, 128, 0.2);
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        }
-        @media (max-width: 768px) {
-            .element-container:has(#float-nav-anchor) + .element-container {
-                right: 8px;
-            }
-        }
-        .element-container:has(#float-nav-anchor) + .element-container [data-testid="stPageLink-NavLink"] {
-            padding: 6px 10px;
-            border-radius: 10px;
-        }
-        .element-container:has(#float-nav-anchor) + .element-container [data-testid="stPageLink-NavLink"]:hover {
-            background: #FF4B4B;
-            color: white;
-        }
-        .element-container:has(#float-nav-anchor) + .element-container .stButton > button {
-            border-radius: 12px;
-            width: 100%;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    content_col, nav_col = st.columns([0.82, 0.18], gap="large")
 
-    st.markdown('<div id="float-nav-anchor"></div>', unsafe_allow_html=True)
-    with st.container():
-        st.page_link("streamlit_app.py", label="🏠")
-        st.page_link("pages/CustomExport.py", label="🧰")
-        st.page_link("pages/DownloadHistory.py", label="🕘")
-        st.page_link("pages/WyckoffScreeners.py", label="🧭")
-        st.page_link("pages/Settings.py", label="⚙️")
-        st.page_link("pages/Changelog.py", label="📢")
-        st.link_button("⭐", "https://github.com/YoungCan-Wang/Wyckoff-Analysis")
+    with nav_col:
+        st.markdown(
+            """
+            <style>
+            #nav-rail-anchor {
+                display: none;
+            }
+            div[data-testid="stVerticalBlock"]:has(#nav-rail-anchor) {
+                position: sticky;
+                top: 96px;
+                align-self: flex-start;
+            }
+            div[data-testid="stVerticalBlock"]:has(#nav-rail-anchor) [data-testid="stPageLink-NavLink"] {
+                padding: 6px 10px;
+                border-radius: 10px;
+            }
+            div[data-testid="stVerticalBlock"]:has(#nav-rail-anchor) [data-testid="stPageLink-NavLink"]:hover {
+                background: #FF4B4B;
+                color: white;
+            }
+            div[data-testid="stVerticalBlock"]:has(#nav-rail-anchor) .stButton > button {
+                border-radius: 12px;
+                width: 100%;
+            }
+            @media (max-width: 900px) {
+                div[data-testid="stVerticalBlock"]:has(#nav-rail-anchor) {
+                    position: static;
+                }
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div id="nav-rail-anchor"></div>', unsafe_allow_html=True)
+        st.page_link("streamlit_app.py", label="🏠 首页")
+        st.page_link("pages/CustomExport.py", label="🧰 自定义导出")
+        st.page_link("pages/DownloadHistory.py", label="🕘 下载历史")
+        st.page_link("pages/WyckoffScreeners.py", label="🧭 沙里淘金")
+        st.page_link("pages/Settings.py", label="⚙️ 设置")
+        st.page_link("pages/Changelog.py", label="📢 更新日志")
+        st.link_button(
+            "⭐ GitHub",
+            "https://github.com/YoungCan-Wang/Wyckoff-Analysis",
+            use_container_width=True,
+        )
+
+    return content_col
