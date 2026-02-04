@@ -9,7 +9,10 @@ def show_right_nav():
     st.markdown(
         """
         <style>
-        .float-nav {
+        .element-container:has(#float-nav-anchor) {
+            display: none;
+        }
+        .element-container:has(#float-nav-anchor) + .element-container {
             position: fixed;
             right: 18px;
             top: 50%;
@@ -25,19 +28,19 @@ def show_right_nav():
             box-shadow: 0 4px 20px rgba(0,0,0,0.1);
         }
         @media (max-width: 768px) {
-            .float-nav {
+            .element-container:has(#float-nav-anchor) + .element-container {
                 right: 8px;
             }
         }
-        .float-nav [data-testid="stPageLink-NavLink"] {
+        .element-container:has(#float-nav-anchor) + .element-container [data-testid="stPageLink-NavLink"] {
             padding: 6px 10px;
             border-radius: 10px;
         }
-        .float-nav [data-testid="stPageLink-NavLink"]:hover {
+        .element-container:has(#float-nav-anchor) + .element-container [data-testid="stPageLink-NavLink"]:hover {
             background: #FF4B4B;
             color: white;
         }
-        .float-nav .stButton > button {
+        .element-container:has(#float-nav-anchor) + .element-container .stButton > button {
             border-radius: 12px;
             width: 100%;
         }
@@ -46,8 +49,8 @@ def show_right_nav():
         unsafe_allow_html=True,
     )
 
+    st.markdown('<div id="float-nav-anchor"></div>', unsafe_allow_html=True)
     with st.container():
-        st.markdown('<div class="float-nav">', unsafe_allow_html=True)
         st.page_link("streamlit_app.py", label="🏠")
         st.page_link("pages/CustomExport.py", label="🧰")
         st.page_link("pages/DownloadHistory.py", label="🕘")
@@ -55,4 +58,3 @@ def show_right_nav():
         st.page_link("pages/Settings.py", label="⚙️")
         st.page_link("pages/Changelog.py", label="📢")
         st.link_button("⭐", "https://github.com/YoungCan-Wang/Wyckoff-Analysis")
-        st.markdown("</div>", unsafe_allow_html=True)
