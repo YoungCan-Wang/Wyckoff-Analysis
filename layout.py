@@ -52,17 +52,6 @@ def setup_page(
 ) -> None:
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
     init_session_state()
-    with st.sidebar:
-        with st.expander("Auth Debug", expanded=False):
-            user = st.session_state.get("user") or {}
-            st.write(
-                {
-                    "has_user": bool(st.session_state.get("user")),
-                    "user_email": user.get("email") if isinstance(user, dict) else None,
-                    "has_access_token": bool(st.session_state.get("access_token")),
-                    "has_refresh_token": bool(st.session_state.get("refresh_token")),
-                }
-            )
     if require_login:
         require_auth()
 
