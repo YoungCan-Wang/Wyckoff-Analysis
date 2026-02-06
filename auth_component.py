@@ -33,6 +33,46 @@ def _safe_get_supabase_client():
         return None
 
 
+def _extract_user_from_response(response):
+    if response is None:
+        return None
+    if hasattr(response, "user"):
+        return response.user
+    if isinstance(response, dict):
+        return response.get("user")
+    return None
+
+
+def _restore_user_from_tokens(supabase) -> dict | None:
+    access_token = st.session_state.get("access_token")
+    refresh_token = st.session_state.get("refresh_token")
+    if not access_token or not refresh_token:
+        return None
+
+    try:
+        supabase.auth.set_session(access_token, refresh_token)
+    except Exception:
+        return None
+
+    try:
+        user_resp = supabase.auth.get_user(access_token)
+    except TypeError:
+        try:
+            user_resp = supabase.auth.get_user()
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+    user_payload = _user_payload(_extract_user_from_response(user_resp))
+    if not user_payload or not user_payload.get("id"):
+        return None
+
+    st.session_state.user = user_payload
+    load_user_settings(user_payload["id"])
+    return user_payload
+
+
 def login_form():
     """显示登录/注册表单"""
     supabase = _safe_get_supabase_client()
@@ -95,16 +135,24 @@ def login_form():
                             response = supabase.auth.sign_in_with_password(
                                 {"email": email, "password": password}
                             )
-                            st.session_state.user = _user_payload(response.user)
+                            user_payload = _user_payload(response.user)
+                            if not user_payload or not user_payload.get("id"):
+                                raise RuntimeError("登录成功但未拿到用户信息")
+
+                            st.session_state.user = user_payload
+                            session = getattr(response, "session", None)
                             st.session_state.access_token = (
-                                response.session.access_token
+                                getattr(session, "access_token", None)
+                                if session is not None
+                                else None
                             )
                             st.session_state.refresh_token = (
-                                response.session.refresh_token
+                                getattr(session, "refresh_token", None)
+                                if session is not None
+                                else None
                             )
                             # 登录成功，加载用户配置
-                            if response.user is not None:
-                                load_user_settings(response.user.id)
+                            load_user_settings(user_payload["id"])
                             st.success("登录成功！")
                             time.sleep(0.5)
                             st.rerun()
@@ -167,14 +215,16 @@ def check_auth():
     """
     supabase = _safe_get_supabase_client()
     if supabase is None:
-        return True
+        return False
 
     # 1. 如果 Session 中已有用户，直接通过
     user = st.session_state.get("user")
-    if user is not None:
+    if isinstance(user, dict) and user.get("id"):
         return True
 
-    return False
+    # 2. 尝试从 access/refresh token 恢复用户
+    restored = _restore_user_from_tokens(supabase)
+    return restored is not None
 
 
 def logout():

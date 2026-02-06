@@ -59,6 +59,18 @@ def load_stock_list():
     return get_all_stocks()
 
 
+CACHE_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+def _maybe_cleanup_cache() -> None:
+    now_ts = time.time()
+    last_ts = float(st.session_state.get("cache_cleanup_last_ts", 0))
+    if now_ts - last_ts < CACHE_CLEANUP_INTERVAL_SECONDS:
+        return
+    cleanup_cache(ttl_days=30)
+    st.session_state.cache_cleanup_last_ts = now_ts
+
+
 # 增加网络请求重试机制，应对 RemoteDisconnected 等反爬限制
 @retry(
     stop=stop_after_attempt(5),
@@ -109,7 +121,7 @@ def _fetch_hist_with_retry(symbol, window, adjust):
         start_date=min(start_date, meta.start_date) if meta else start_date,
         end_date=max(end_date, meta.end_date) if meta else end_date,
     )
-    cleanup_cache(ttl_days=30)
+    _maybe_cleanup_cache()
     return df
 
 
@@ -289,11 +301,10 @@ with content_col:
                     key="stock_selector",
                 )
 
-                current_code = selected_stock.split(" ")[0]
+                stock_parts = selected_stock.split(maxsplit=1)
+                current_code = stock_parts[0] if stock_parts else ""
                 current_name_from_select = (
-                    selected_stock.split(" ")[1]
-                    if len(selected_stock.split(" ")) > 1
-                    else ""
+                    stock_parts[1] if len(stock_parts) > 1 else ""
                 )
                 if current_code != st.session_state.current_symbol:
                     st.session_state.current_symbol = current_code
