@@ -68,7 +68,7 @@ setup_page(page_title="AI 分析", page_icon="🤖")
 content_col = show_right_nav()
 with content_col:
     st.title("🤖 AI 分析")
-    st.markdown("基于 Alpha 虚拟投委会系统提示词，对选定股票的 OHLCV 数据进行深度研报分析。")
+    st.markdown("选定股票或筛出候选后，一键生成多维度深度研报，供你决策参考。")
 
     # 1) 供应商与模型（首期仅 Gemini）
     st.subheader("API 与模型")
@@ -127,7 +127,7 @@ with content_col:
                 st.rerun()
         else:
             with st.container(border=True):
-                st.markdown("**在本页执行沙里淘金**")
+                st.markdown("**先筛选值得关注的股票**")
                 tactic_fg = st.radio(
                     "战术",
                     options=["抗跌主力", "突破临界", "异常吸筹/出货", "启动龙头"],
