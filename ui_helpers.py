@@ -1,3 +1,4 @@
+import html
 import streamlit as st
 
 
@@ -5,7 +6,13 @@ def show_page_loading(
     *,
     title: str = "加载中...",
     subtitle: str = "正在准备页面内容",
+    quote: str | None = None,
 ) -> st.delta_generator.DeltaGenerator:
+    """展示加载占位，可选展示一句名人名言（如股市大牛语录）。"""
+    quote_html = ""
+    if quote:
+        safe = html.escape(quote)
+        quote_html = f'<div style="font-size: 12px; color: #888; margin-top: 16px; font-style: italic; max-width: 360px; margin-left: auto; margin-right: auto;">"{safe}"</div>'
     placeholder = st.empty()
     placeholder.markdown(
         f"""
@@ -16,6 +23,7 @@ def show_page_loading(
                 <div style="font-size: 13px; color: #666; margin-top: 6px;">
                     {subtitle}
                 </div>
+                {quote_html}
             </div>
         </div>
         """,
