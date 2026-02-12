@@ -11,6 +11,11 @@ from constants import TABLE_STOCK_CACHE_DATA, TABLE_STOCK_CACHE_META
 from supabase_client import get_supabase_client
 
 
+def _parse_iso_datetime(value: str) -> datetime:
+    """Parse ISO datetime strings and accept trailing 'Z' timezone markers."""
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
 @dataclass
 class CacheMeta:
     symbol: str
@@ -70,9 +75,9 @@ def get_cache_meta(symbol: str, adjust: str) -> Optional[CacheMeta]:
             symbol=row["symbol"],
             adjust=row["adjust"],
             source=row["source"],
-            start_date=datetime.fromisoformat(row["start_date"]).date(),
-            end_date=datetime.fromisoformat(row["end_date"]).date(),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            start_date=_parse_iso_datetime(row["start_date"]).date(),
+            end_date=_parse_iso_datetime(row["end_date"]).date(),
+            updated_at=_parse_iso_datetime(row["updated_at"]),
         )
     except APIError:
         return None
