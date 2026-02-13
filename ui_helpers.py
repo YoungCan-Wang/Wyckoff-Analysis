@@ -75,20 +75,18 @@ def show_page_loading(
             "</div>"
         )
 
-    loading_html = textwrap.dedent(
-        f"""
-        <div style="width: 100%; min-height: 40vh; display: flex; align-items: center; justify-content: center; flex-direction: column;">
-            <div class="loader"></div>
-            <div style="text-align:center; padding: 24px 12px;">
-                <div style="font-size: 16px; font-weight: 600; color: #333;">{safe_title}</div>
-                <div style="font-size: 13px; color: #666; margin-top: 6px;">
-                    {safe_subtitle}
-                </div>
-                {quote_html}
-            </div>
+    loading_html = f"""
+<div style="width: 100%; min-height: 40vh; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+    <div class="loader"></div>
+    <div style="text-align:center; padding: 24px 12px;">
+        <div style="font-size: 16px; font-weight: 600; color: #333;">{safe_title}</div>
+        <div style="font-size: 13px; color: #666; margin-top: 6px;">
+            {safe_subtitle}
         </div>
-        """
-    ).strip()
+        {quote_html}
+    </div>
+</div>
+"""
 
     placeholder = st.empty()
     placeholder.markdown(loading_html, unsafe_allow_html=True)
