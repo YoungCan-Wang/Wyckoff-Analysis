@@ -118,11 +118,11 @@ def login_form():
     with col2:
         st.markdown(
             """
-            <div style="text-align: center; margin-bottom: 2rem;">
-                <h1>🔐</h1>
-                <h2>欢迎回来</h2>
-                <p style="color: #666;">请登录以继续使用 Akshare 智能投研平台</p>
-            </div>
+<div style="text-align: center; margin-bottom: 2rem;">
+    <h1>🔐</h1>
+    <h2>欢迎回来</h2>
+    <p style="color: #666;">请登录以继续使用 Akshare 智能投研平台</p>
+</div>
             """,
             unsafe_allow_html=True,
         )

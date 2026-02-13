@@ -22,6 +22,7 @@ def call_llm(
     system_prompt: str,
     user_message: str,
     *,
+    images: Optional[list] = None,
     base_url: Optional[str] = None,
     timeout: int = 120,
 ) -> str:
@@ -34,6 +35,7 @@ def call_llm(
         api_key: 对应供应商的 API Key。
         system_prompt: 系统提示词（Alpha 投委会等）。
         user_message: 用户消息（拼装好的 OHLCV 等）。
+        images: 可选图片列表（PIL Image 或 bytes），仅部分模型支持。
         base_url: 仅 OpenAI 兼容时使用，Gemini 忽略。
         timeout: 请求超时秒数。
 
@@ -55,6 +57,7 @@ def call_llm(
             api_key=api_key.strip(),
             system_prompt=system_prompt,
             user_message=user_message,
+            images=images,
             timeout=timeout,
         )
     # 后续可加: elif provider == "openai": return _call_openai(...)
@@ -66,6 +69,7 @@ def _call_gemini(
     api_key: str,
     system_prompt: str,
     user_message: str,
+    images: Optional[list],
     timeout: int,
 ) -> str:
     import google.generativeai as genai
@@ -81,8 +85,13 @@ def _call_gemini(
         "top_k": 40,
         "max_output_tokens": 8192,
     }
+
+    contents = [user_message]
+    if images:
+        contents.extend(images)
+
     response = generative_model.generate_content(
-        user_message,
+        contents,
         generation_config=generation_config,
         request_options={"timeout": timeout},
     )

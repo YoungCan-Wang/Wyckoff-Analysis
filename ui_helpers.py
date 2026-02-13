@@ -1,6 +1,58 @@
 import html
+import textwrap
 
 import streamlit as st
+
+
+def inject_custom_css():
+    """注入全局自定义 CSS"""
+    st.markdown(
+        """
+        <style>
+        /* 全局字体优化 */
+        .stApp {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+        }
+        
+        /* 按钮样式优化 */
+        .stButton button {
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.2s ease-in-out;
+        }
+        .stButton button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        /* 卡片式容器 */
+        .css-1r6slb0, .css-12w0qpk {
+            border-radius: 12px;
+            padding: 1rem;
+            background-color: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        /* 加载动画 CSS */
+        .loader {
+            width: 48px;
+            height: 48px;
+            border: 5px solid #FFF;
+            border-bottom-color: #FF4B4B;
+            border-radius: 50%;
+            display: inline-block;
+            box-sizing: border-box;
+            animation: rotation 1s linear infinite;
+        }
+
+        @keyframes rotation {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def show_page_loading(
@@ -12,34 +64,30 @@ def show_page_loading(
     """展示加载占位，可选展示一句名人名言（如股市大牛语录）。"""
     safe_title = html.escape(str(title or ""))
     safe_subtitle = html.escape(str(subtitle or ""))
-    safe_quote = html.escape(str(quote or "")) if quote else ""
+
+    quote_html = ""
+    if quote:
+        safe_quote = html.escape(str(quote))
+        quote_html = (
+            '<div style="font-size: 12px; color: #888; margin-top: 16px; '
+            'font-style: italic; max-width: 360px; margin-left: auto; margin-right: auto;">'
+            f'"{safe_quote}"'
+            "</div>"
+        )
+
+    loading_html = f"""
+<div style="width: 100%; min-height: 40vh; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+    <div class="loader"></div>
+    <div style="text-align:center; padding: 24px 12px;">
+        <div style="font-size: 16px; font-weight: 600; color: #333;">{safe_title}</div>
+        <div style="font-size: 13px; color: #666; margin-top: 6px;">
+            {safe_subtitle}
+        </div>
+        {quote_html}
+    </div>
+</div>
+"""
 
     placeholder = st.empty()
-    with placeholder.container():
-        left, center, right = st.columns([1, 2, 1])
-        with center:
-            st.markdown("<div style='height:10vh;'></div>", unsafe_allow_html=True)
-            st.markdown(
-                "<div style='text-align:center;font-size:36px;line-height:1;'>⏳</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"<div style='text-align:center;font-size:42px;font-weight:700;margin-top:10px;'>{safe_title}</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"<div style='text-align:center;font-size:30px;color:#666;margin-top:6px;'>{safe_subtitle}</div>",
-                unsafe_allow_html=True,
-            )
-            if safe_quote:
-                st.markdown(
-                    (
-                        "<div style='text-align:center;font-size:20px;color:#888;"
-                        "margin-top:16px;font-style:italic;'>"
-                        f"“{safe_quote}”"
-                        "</div>"
-                    ),
-                    unsafe_allow_html=True,
-                )
-
+    placeholder.markdown(loading_html, unsafe_allow_html=True)
     return placeholder
