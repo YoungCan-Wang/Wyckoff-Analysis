@@ -1,4 +1,5 @@
 import html
+
 import streamlit as st
 
 
@@ -9,24 +10,36 @@ def show_page_loading(
     quote: str | None = None,
 ) -> st.delta_generator.DeltaGenerator:
     """展示加载占位，可选展示一句名人名言（如股市大牛语录）。"""
-    quote_html = ""
-    if quote:
-        safe = html.escape(quote)
-        quote_html = f'<div style="font-size: 12px; color: #888; margin-top: 16px; font-style: italic; max-width: 360px; margin-left: auto; margin-right: auto;">"{safe}"</div>'
+    safe_title = html.escape(str(title or ""))
+    safe_subtitle = html.escape(str(subtitle or ""))
+    safe_quote = html.escape(str(quote or "")) if quote else ""
+
     placeholder = st.empty()
-    placeholder.markdown(
-        f"""
-        <div style="width: 100%; min-height: 40vh; display: flex; align-items: center; justify-content: center;">
-            <div style="text-align:center; padding: 24px 12px;">
-                <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
-                <div style="font-size: 16px; font-weight: 600;">{title}</div>
-                <div style="font-size: 13px; color: #666; margin-top: 6px;">
-                    {subtitle}
-                </div>
-                {quote_html}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with placeholder.container():
+        left, center, right = st.columns([1, 2, 1])
+        with center:
+            st.markdown("<div style='height:10vh;'></div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div style='text-align:center;font-size:36px;line-height:1;'>⏳</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"<div style='text-align:center;font-size:42px;font-weight:700;margin-top:10px;'>{safe_title}</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"<div style='text-align:center;font-size:30px;color:#666;margin-top:6px;'>{safe_subtitle}</div>",
+                unsafe_allow_html=True,
+            )
+            if safe_quote:
+                st.markdown(
+                    (
+                        "<div style='text-align:center;font-size:20px;color:#888;"
+                        "margin-top:16px;font-style:italic;'>"
+                        f"“{safe_quote}”"
+                        "</div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+
     return placeholder
