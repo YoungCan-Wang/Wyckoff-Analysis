@@ -76,8 +76,24 @@ def show_page_loading(
         )
 
     loading_html = f"""
+<style>
+.loading-spinner {{
+    width: 48px;
+    height: 48px;
+    border: 4px solid #e5e7eb;
+    border-bottom-color: #ef4444;
+    border-radius: 50%;
+    display: inline-block;
+    box-sizing: border-box;
+    animation: loading-spin 0.8s linear infinite;
+}}
+@keyframes loading-spin {{
+    0% {{ transform: rotate(0deg); }}
+    100% {{ transform: rotate(360deg); }}
+}}
+</style>
 <div style="width: 100%; min-height: 40vh; display: flex; align-items: center; justify-content: center; flex-direction: column;">
-    <div class="loader"></div>
+    <div class="loading-spinner"></div>
     <div style="text-align:center; padding: 24px 12px;">
         <div style="font-size: 16px; font-weight: 600; color: #333;">{safe_title}</div>
         <div style="font-size: 13px; color: #666; margin-top: 6px;">
