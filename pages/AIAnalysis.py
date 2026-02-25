@@ -31,6 +31,7 @@ from wyckoff_engine import (
     run_screener,
     ScreenerConfig,
 )
+from single_stock_logic import render_single_stock_page
 
 # 等待时随机展示的股市名人名言（本地列表）
 STOCK_QUOTES = [
@@ -96,11 +97,19 @@ with content_col:
     st.subheader("分析内容")
     analysis_type = st.radio(
         "分析类型",
-        options=["stock_list", "find_gold"],
-        format_func=lambda x: "指定股票代码 (stock_list)" if x == "stock_list" else "沙里淘金结果 (find_gold)",
+        options=["single_stock", "stock_list", "find_gold"],
+        format_func=lambda x: {
+            "single_stock": "单股分析 (威科夫大师模式)",
+            "stock_list": "指定股票代码 (批量研报)",
+            "find_gold": "沙里淘金结果 (批量研报)"
+        }.get(x, x),
         horizontal=True,
         key="ai_analysis_type",
     )
+
+    if analysis_type == "single_stock":
+        render_single_stock_page(provider, model, api_key)
+        st.stop()  # 单股模式独占页面下方
 
     symbols: list[str] = []
     if analysis_type == "stock_list":

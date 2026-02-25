@@ -1,8 +1,22 @@
+import re
+
 import streamlit as st
+from supabase import AuthApiError
+
 from supabase_client import get_supabase_client, load_user_settings
 from ui_helpers import show_page_loading
-from supabase import AuthApiError
-import time
+
+_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+_MIN_PASSWORD_LEN = 6
+
+
+def _normalize_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def _is_valid_email(email: str) -> bool:
+    return bool(_EMAIL_PATTERN.match(email))
+
 
 def _user_payload(user) -> dict | None:
     if user is None:
@@ -52,6 +66,8 @@ def _restore_user_from_tokens(supabase) -> dict | None:
     try:
         supabase.auth.set_session(access_token, refresh_token)
     except Exception:
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
         return None
 
     try:
@@ -102,11 +118,11 @@ def login_form():
     with col2:
         st.markdown(
             """
-            <div style="text-align: center; margin-bottom: 2rem;">
-                <h1>🔐</h1>
-                <h2>欢迎回来</h2>
-                <p style="color: #666;">请登录以继续使用 Akshare 智能投研平台</p>
-            </div>
+<div style="text-align: center; margin-bottom: 2rem;">
+    <h1>🔐</h1>
+    <h2>欢迎回来</h2>
+    <p style="color: #666;">请登录以继续使用 Akshare 智能投研平台</p>
+</div>
             """,
             unsafe_allow_html=True,
         )
@@ -127,41 +143,45 @@ def login_form():
                 submit = st.form_submit_button("登录", type="primary", width="stretch")
 
                 if submit:
-                    try:
-                        loading = show_page_loading(
-                            title="加载中...", subtitle="正在登录"
-                        )
+                    email = _normalize_email(email)
+                    if not email or not password:
+                        st.error("请填写邮箱和密码")
+                    elif not _is_valid_email(email):
+                        st.error("请输入有效的邮箱地址")
+                    else:
                         try:
-                            response = supabase.auth.sign_in_with_password(
-                                {"email": email, "password": password}
+                            loading = show_page_loading(
+                                title="加载中...", subtitle="正在登录"
                             )
-                            user_payload = _user_payload(response.user)
-                            if not user_payload or not user_payload.get("id"):
-                                raise RuntimeError("登录成功但未拿到用户信息")
+                            try:
+                                response = supabase.auth.sign_in_with_password(
+                                    {"email": email, "password": password}
+                                )
+                                user_payload = _user_payload(response.user)
+                                if not user_payload or not user_payload.get("id"):
+                                    raise RuntimeError("登录成功但未拿到用户信息")
 
-                            st.session_state.user = user_payload
-                            session = getattr(response, "session", None)
-                            st.session_state.access_token = (
-                                getattr(session, "access_token", None)
-                                if session is not None
-                                else None
-                            )
-                            st.session_state.refresh_token = (
-                                getattr(session, "refresh_token", None)
-                                if session is not None
-                                else None
-                            )
-                            # 登录成功，加载用户配置
-                            load_user_settings(user_payload["id"])
-                            st.success("登录成功！")
-                            time.sleep(0.5)
-                            st.rerun()
-                        finally:
-                            loading.empty()
-                    except AuthApiError as e:
-                        st.error(f"登录失败: {e.message}")
-                    except Exception as e:
-                        st.error(f"登录失败: {str(e)}")
+                                st.session_state.user = user_payload
+                                session = getattr(response, "session", None)
+                                st.session_state.access_token = (
+                                    getattr(session, "access_token", None)
+                                    if session is not None
+                                    else None
+                                )
+                                st.session_state.refresh_token = (
+                                    getattr(session, "refresh_token", None)
+                                    if session is not None
+                                    else None
+                                )
+                                load_user_settings(user_payload["id"])
+                                st.success("登录成功！")
+                                st.rerun()
+                            finally:
+                                loading.empty()
+                        except AuthApiError:
+                            st.error("登录失败：邮箱或密码错误，或账号尚未完成验证")
+                        except Exception as e:
+                            st.error(f"登录失败: {str(e)}")
 
         with tab2:
             with st.form("register_form", clear_on_submit=False):
@@ -185,17 +205,22 @@ def login_form():
                 )
 
                 if submit_reg:
-                    if new_password != confirm_password:
+                    new_email = _normalize_email(new_email)
+                    if not new_email:
+                        st.error("请输入邮箱")
+                    elif not _is_valid_email(new_email):
+                        st.error("请输入有效的邮箱地址")
+                    elif new_password != confirm_password:
                         st.error("两次输入的密码不一致")
-                    elif len(new_password) < 6:
-                        st.error("密码长度至少为 6 位")
+                    elif len(new_password) < _MIN_PASSWORD_LEN:
+                        st.error(f"密码长度至少为 {_MIN_PASSWORD_LEN} 位")
                     else:
                         try:
                             loading = show_page_loading(
                                 title="加载中...", subtitle="正在注册"
                             )
                             try:
-                                response = supabase.auth.sign_up(
+                                supabase.auth.sign_up(
                                     {"email": new_email, "password": new_password}
                                 )
                                 st.success(
@@ -217,12 +242,10 @@ def check_auth():
     if supabase is None:
         return False
 
-    # 1. 如果 Session 中已有用户，直接通过
     user = st.session_state.get("user")
     if isinstance(user, dict) and user.get("id"):
         return True
 
-    # 2. 尝试从 access/refresh token 恢复用户
     restored = _restore_user_from_tokens(supabase)
     return restored is not None
 
@@ -234,7 +257,7 @@ def logout():
         return
     try:
         supabase.auth.sign_out()
-    except:
+    except Exception:
         pass
     st.session_state.user = None
     st.session_state.access_token = None

@@ -26,7 +26,7 @@ from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 from download_history import add_download_history
 from auth_component import logout
 from layout import setup_page, show_user_error
-from ui_helpers import show_page_loading
+from ui_helpers import show_page_loading, inject_custom_css
 from navigation import show_right_nav
 from stock_cache import (
     cleanup_cache,
@@ -42,6 +42,7 @@ from stock_cache import (
 load_dotenv()
 
 setup_page(page_title="A股历史行情导出工具", page_icon="📈")
+inject_custom_css()
 
 # === Logged In User Info ===
 with st.sidebar:

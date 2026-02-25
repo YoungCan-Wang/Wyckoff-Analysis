@@ -1,5 +1,6 @@
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, timedelta, datetime
 
@@ -739,6 +740,8 @@ with content_col:
         group_power = st.checkbox("板块共振排序", value=True)
         debug_log = st.checkbox("显示调试信息", value=False)
         use_cache = st.checkbox("使用缓存", value=True)
+        max_workers = int(st.number_input("并发拉取数", min_value=1, max_value=16, value=10, step=1))
+        st.caption("并发数越大越快，但过高可能触发数据源限流")
 
 
     st.subheader("淘金池")
@@ -764,9 +767,9 @@ with content_col:
             }.get(v, v),
         )
         limit_count = st.number_input(
-            "股票数量上限", min_value=50, max_value=2000, value=500, step=50
+            "股票数量上限", min_value=50, max_value=2000, value=100, step=50
         )
-        st.caption("板块股票较多，建议限制数量，避免被封禁")
+        st.caption("首次测试建议 100–200 只；缓存命中后可适当调大")
 
     run = st.button("开始淘金", type="primary")
 
@@ -819,24 +822,38 @@ with content_col:
         end = window.end_trade_date.strftime("%Y%m%d")
 
         progress = st.progress(0)
+        status_text = st.empty()
         data_map: dict[str, pd.DataFrame] = {}
         source_map: dict[str, str] = {}
         errors: dict[str, str] = {}
         total = len(symbols)
 
-        for idx, symbol in enumerate(symbols, start=1):
+        def _fetch_one(sym: str) -> tuple[str, pd.DataFrame | None, str | None, str | None]:
             try:
-                df, source = _load_hist_with_source(
-                    symbol, window, adjust="qfq", use_cache=use_cache
+                df, src = _load_hist_with_source(
+                    sym, window, adjust="qfq", use_cache=use_cache
                 )
-                data_map[symbol] = df
-                source_map[symbol] = source
+                return (sym, df, src, None)
             except Exception as exc:
-                errors[symbol] = str(exc)
-            progress.progress(idx / total)
+                return (sym, None, None, str(exc))
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_fetch_one, sym): sym for sym in symbols}
+            for future in as_completed(futures):
+                sym, df, src, err = future.result()
+                completed += 1
+                progress.progress(completed / total)
+                status_text.caption(f"已拉取 {completed}/{total} 只股票")
+                if err:
+                    errors[sym] = err
+                else:
+                    data_map[sym] = df
+                    source_map[sym] = src
 
         progress.progress(1.0)
         progress.empty()
+        status_text.empty()
 
         benchmark_df = None
         benchmark_source = ""
@@ -868,78 +885,8 @@ with content_col:
             "jump_stats": jump_stats if tactic == "突破临界" else None,
         }
 
-    payload = st.session_state.wyckoff_payload
+    payload = st.session_state.get("wyckoff_payload")
     if payload:
         _render_results(
             payload, group_power=group_power, debug_log=debug_log, use_cache=use_cache
         )
-
-    symbols = _parse_symbols(pool_mode, symbols_input, board, int(limit_count))
-    symbols = [s for s in symbols if s]
-    if not symbols:
-        st.warning("请先输入股票代码或选择板块")
-        st.stop()
-
-    window = _resolve_trading_window(
-        end_calendar_day=date.today() - timedelta(days=1),
-        trading_days=int(cfg.trading_days),
-    )
-
-    start = window.start_trade_date.strftime("%Y%m%d")
-    end = window.end_trade_date.strftime("%Y%m%d")
-
-    progress = st.progress(0)
-    data_map: dict[str, pd.DataFrame] = {}
-    source_map: dict[str, str] = {}
-    errors: dict[str, str] = {}
-    total = len(symbols)
-
-    for idx, symbol in enumerate(symbols, start=1):
-        try:
-            df, source = _load_hist_with_source(
-                symbol, window, adjust="qfq", use_cache=use_cache
-            )
-            data_map[symbol] = df
-            source_map[symbol] = source
-        except Exception as exc:
-            errors[symbol] = str(exc)
-        progress.progress(idx / total)
-
-    progress.progress(1.0)
-    progress.empty()
-
-    benchmark_df = None
-    benchmark_source = ""
-    results: dict[str, list[tuple[str, float]]] = {}
-    if tactic == "抗跌主力":
-        try:
-            benchmark_df, benchmark_source = _fetch_index_hist_with_source(
-                cfg.resister.benchmark_code, start, end, use_cache=use_cache
-            )
-        except Exception as exc:
-            errors[cfg.resister.benchmark_code] = f"benchmark failed: {exc}"
-        results["resisters"] = screen_resisters(data_map, benchmark_df, cfg.resister)
-    elif tactic == "突破临界":
-        jumpers, jump_stats = screen_jumpers(data_map, cfg.jumper)
-        results["jumpers"] = jumpers
-    elif tactic == "异常吸筹/出货":
-        results["anomalies"] = screen_anomalies(data_map, cfg.anomaly)
-    else:
-        results["first_board"] = screen_first_board(data_map, cfg.first_board)
-
-    st.session_state.wyckoff_payload = {
-        "results": results,
-        "errors": errors,
-        "source_map": source_map,
-        "benchmark_source": benchmark_source,
-        "symbols_count": len(symbols),
-        "data_count": len(data_map),
-        "tactic": tactic,
-        "jump_stats": jump_stats if tactic == "突破临界" else None,
-    }
-
-payload = st.session_state.get("wyckoff_payload")
-if payload:
-    _render_results(
-        payload, group_power=group_power, debug_log=debug_log, use_cache=use_cache
-    )
