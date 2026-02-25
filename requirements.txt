@@ -1,6 +1,7 @@
 akshare>=1.18.9
 pandas>=2.3.3
 streamlit>=1.52.2
+streamlit-javascript>=0.1.5
 google-generativeai>=0.8.3
 tavily-python>=0.3.0
 sqlalchemy>=2.0.0

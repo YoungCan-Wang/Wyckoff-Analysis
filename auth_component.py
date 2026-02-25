@@ -6,6 +6,16 @@ from supabase import AuthApiError
 from supabase_client import get_supabase_client, load_user_settings
 from ui_helpers import show_page_loading
 
+try:
+    from token_storage import clear_tokens_from_storage, persist_tokens_to_storage
+except ImportError:
+
+    def persist_tokens_to_storage(a: str, r: str) -> bool:
+        return False
+
+    def clear_tokens_from_storage() -> bool:
+        return False
+
 _EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _MIN_PASSWORD_LEN = 6
 
@@ -174,6 +184,10 @@ def login_form():
                                     else None
                                 )
                                 load_user_settings(user_payload["id"])
+                                persist_tokens_to_storage(
+                                    st.session_state.access_token or "",
+                                    st.session_state.refresh_token or "",
+                                )
                                 st.success("登录成功！")
                                 st.rerun()
                             finally:
@@ -259,6 +273,7 @@ def logout():
         supabase.auth.sign_out()
     except Exception:
         pass
+    clear_tokens_from_storage()
     st.session_state.user = None
     st.session_state.access_token = None
     st.session_state.refresh_token = None

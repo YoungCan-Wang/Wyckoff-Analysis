@@ -13,6 +13,13 @@ import akshare as ak
 
 from utils import extract_symbols_from_text, stock_sector_em
 from layout import setup_page
+from wyckoff_engine import (
+    _resister_bench_cum,
+    screen_one_anomaly,
+    screen_one_first_board,
+    screen_one_jumper,
+    screen_one_resister,
+)
 from fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
@@ -343,130 +350,6 @@ with content_col:
             bs.logout()
 
 
-    def _calc_cumulative_pct(df: pd.DataFrame) -> float:
-        changes = df["pct_chg"].dropna() / 100.0
-        return float((changes + 1).prod() - 1)
-
-
-    def screen_resisters(
-        data_map: dict[str, pd.DataFrame],
-        benchmark_df: pd.DataFrame,
-        cfg: ResisterConfig,
-    ) -> list[tuple[str, float]]:
-        if benchmark_df is None or benchmark_df.empty:
-            return []
-        bench = benchmark_df.sort_values("date").tail(cfg.lookback_window)
-        if len(bench) < cfg.lookback_window:
-            return []
-        bench_cum = _calc_cumulative_pct(bench)
-        if bench_cum * 100 >= cfg.benchmark_drop_threshold:
-            return []
-        results: list[tuple[str, float]] = []
-        for symbol, df in data_map.items():
-            window = df.sort_values("date").tail(cfg.lookback_window)
-            if len(window) < cfg.lookback_window:
-                continue
-            stock_cum = _calc_cumulative_pct(window)
-            score = (stock_cum - bench_cum) * 100
-            if stock_cum >= 0 or score >= cfg.relative_strength_threshold:
-                results.append((symbol, score))
-        return results
-
-
-    def screen_anomalies(
-        data_map: dict[str, pd.DataFrame], cfg: AnomalyConfig
-    ) -> list[tuple[str, float]]:
-        results: list[tuple[str, float]] = []
-        for symbol, df in data_map.items():
-            df = df.sort_values("date")
-            if len(df) < cfg.volume_window + 5:
-                continue
-            recent = df.iloc[-1]
-            if recent["high"] <= recent["low"]:
-                continue
-            body = abs(recent["close"] - recent["open"])
-            range_val = recent["high"] - recent["low"]
-            upper = recent["high"] - max(recent["open"], recent["close"])
-            lower = min(recent["open"], recent["close"]) - recent["low"]
-            vol_ma = df["volume"].rolling(window=cfg.volume_window).mean().iloc[-1]
-            if vol_ma <= 0:
-                continue
-            vol_ratio = recent["volume"] / vol_ma
-            pct_chg = float(recent["pct_chg"])
-
-            high_stall = (
-                vol_ratio >= cfg.volume_spike_ratio
-                and pct_chg < cfg.stall_pct_limit
-                and (upper >= 2 * body or recent["close"] < recent["open"])
-            )
-            low_support = (
-                vol_ratio >= cfg.volume_spike_ratio
-                and pct_chg > cfg.panic_pct_floor
-                and lower >= 2 * body
-            )
-            if high_stall or low_support:
-                score = float(vol_ratio)
-                results.append((symbol, score))
-        return results
-
-
-    def screen_jumpers(
-        data_map: dict[str, pd.DataFrame],
-        cfg: JumperConfig,
-    ) -> tuple[list[tuple[str, float]], dict[str, int]]:
-        results: list[tuple[str, float]] = []
-        stats = {
-            "total": 0,
-            "box_pass": 0,
-            "squeeze_pass": 0,
-            "volume_pass": 0,
-            "position_pass": 0,
-        }
-        window = max(cfg.consolidation_window, 20)
-        for symbol, df in data_map.items():
-            stats["total"] += 1
-            df = df.sort_values("date")
-            if len(df) < window:
-                continue
-            recent = df.iloc[-window:]
-            high = recent["high"].max()
-            low = recent["low"].min()
-            last_close = recent.iloc[-1]["close"]
-            if last_close <= 0:
-                continue
-            box_range = (high - low) / last_close
-            if box_range > cfg.box_range:
-                continue
-            stats["box_pass"] += 1
-
-            short = recent.tail(cfg.squeeze_window)
-            short_high = short["high"].max()
-            short_low = short["low"].min()
-            short_close = short.iloc[-1]["close"]
-            if short_close <= 0:
-                continue
-            short_amp = (short_high - short_low) / short_close
-            if short_amp > cfg.squeeze_amplitude:
-                continue
-            stats["squeeze_pass"] += 1
-
-            vol_short = short["volume"].mean()
-            vol_long = recent["volume"].tail(cfg.volume_long_window).mean()
-            if vol_long <= 0:
-                continue
-            if vol_short >= vol_long * cfg.volume_dry_ratio:
-                continue
-            stats["volume_pass"] += 1
-
-            near_top = last_close >= low + (high - low) * 0.8
-            near_bottom = last_close <= low + (high - low) * 0.2
-            if near_top or near_bottom:
-                stats["position_pass"] += 1
-                score = float(short_amp * 100)
-                results.append((symbol, score))
-        return results, stats
-
-
     def _estimate_market_cap(symbol: str) -> float:
         try:
             df = ak.stock_individual_info_em(symbol=symbol)
@@ -485,65 +368,7 @@ with content_col:
             return 0.0
 
 
-    def screen_first_board(
-        data_map: dict[str, pd.DataFrame],
-        cfg: FirstBoardConfig,
-    ) -> list[tuple[str, float]]:
-        results: list[tuple[str, float]] = []
-        for symbol, df in data_map.items():
-            df = df.sort_values("date")
-            if len(df) < 2:
-                continue
-            if cfg.exclude_st:
-                name = _stock_name_map().get(symbol, "")
-                if "ST" in name.upper():
-                    continue
-            if cfg.exclude_new_days > 0:
-                list_date = _stock_list_date(symbol)
-                if list_date is not None:
-                    if (date.today() - list_date).days < cfg.exclude_new_days:
-                        continue
-            last = df.iloc[-1]
-            prev = df.iloc[-2]
-            limit = 20.0 if symbol.startswith(("300", "301", "688")) else 10.0
-            threshold = limit * 0.98
-
-            # Ensure numeric type for comparison
-            curr_pct = float(last["pct_chg"])
-            last_prev_pct = float(prev["pct_chg"])
-
-            is_limit_up = curr_pct >= threshold
-            prev_limit = last_prev_pct >= threshold
-            if not is_limit_up or prev_limit:
-                continue
-
-            # Check if there are other limit ups in the lookback window
-            recent_limits = df.tail(cfg.lookback_limit_days).copy()
-            recent_limits["pct_chg"] = pd.to_numeric(
-                recent_limits["pct_chg"], errors="coerce"
-            )
-            if (recent_limits["pct_chg"] >= threshold).sum() > 1:
-                continue
-            breakout_window = df.tail(cfg.breakout_window)
-            if last["close"] < breakout_window["close"].max():
-                continue
-            if abs(last["high"] - last["low"]) < 1e-6:
-                continue
-            if cfg.min_market_cap > 0 or cfg.max_market_cap > 0:
-                cap = _estimate_market_cap(symbol)
-                if cap:
-                    if cfg.min_market_cap > 0 and cap < cfg.min_market_cap:
-                        continue
-                    if cfg.max_market_cap > 0 and cap > cfg.max_market_cap:
-                        continue
-            score = float(last["pct_chg"])
-            results.append((symbol, score))
-        return results
-
-
-    def _render_results(
-        payload: dict, group_power: bool, debug_log: bool, use_cache: bool
-    ) -> None:
+    def _render_results(payload: dict, group_power: bool) -> None:
         label_map = {
             "resisters": "抗跌主力（相对强弱）",
             "anomalies": "异常吸筹/出货（量价背离）",
@@ -562,23 +387,6 @@ with content_col:
         benchmark_source = payload.get("benchmark_source", "")
 
         st.subheader("淘金结果")
-        if debug_log:
-            st.caption(
-                f"调试: 输入股票数={payload.get('symbols_count', 0)}，成功数据={payload.get('data_count', 0)}，失败={len(errors)}"
-            )
-            if use_cache and source_map:
-                cache_hits = sum(1 for source in source_map.values() if source == "cache")
-                st.caption(f"缓存命中: {cache_hits}/{len(source_map)}")
-            if payload.get("tactic") == "突破临界" and payload.get("jump_stats"):
-                stats = payload["jump_stats"]
-                st.caption(
-                    "跳跃者过滤: "
-                    f"箱体通过={stats['box_pass']}，"
-                    f"挤压通过={stats['squeeze_pass']}，"
-                    f"缩量通过={stats['volume_pass']}，"
-                    f"位置通过={stats['position_pass']}"
-                )
-
         if source_map:
             source_counts: dict[str, int] = {}
             for source in source_map.values():
@@ -738,7 +546,6 @@ with content_col:
             )
 
         group_power = st.checkbox("板块共振排序", value=True)
-        debug_log = st.checkbox("显示调试信息", value=False)
         use_cache = st.checkbox("使用缓存", value=True)
         max_workers = int(st.number_input("并发拉取数", min_value=1, max_value=16, value=10, step=1))
         st.caption("并发数越大越快，但过高可能触发数据源限流")
@@ -837,42 +644,82 @@ with content_col:
             except Exception as exc:
                 return (sym, None, None, str(exc))
 
-        completed = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_fetch_one, sym): sym for sym in symbols}
-            for future in as_completed(futures):
-                sym, df, src, err = future.result()
-                completed += 1
-                progress.progress(completed / total)
-                status_text.caption(f"已拉取 {completed}/{total} 只股票")
-                if err:
-                    errors[sym] = err
-                else:
-                    data_map[sym] = df
-                    source_map[sym] = src
-
-        progress.progress(1.0)
-        progress.empty()
-        status_text.empty()
-
         benchmark_df = None
         benchmark_source = ""
-        results: dict[str, list[tuple[str, float]]] = {}
+        bench_cum: float | None = None
         if tactic == "抗跌主力":
+            status_text.caption("拉取基准指数…")
             try:
                 benchmark_df, benchmark_source = _fetch_index_hist_with_source(
                     cfg.resister.benchmark_code, start, end, use_cache=use_cache
                 )
+                bench_cum = _resister_bench_cum(benchmark_df, cfg.resister)
             except Exception as exc:
                 errors[cfg.resister.benchmark_code] = f"benchmark failed: {exc}"
-            results["resisters"] = screen_resisters(data_map, benchmark_df, cfg.resister)
-        elif tactic == "突破临界":
-            jumpers, jump_stats = screen_jumpers(data_map, cfg.jumper)
-            results["jumpers"] = jumpers
-        elif tactic == "异常吸筹/出货":
-            results["anomalies"] = screen_anomalies(data_map, cfg.anomaly)
-        else:
-            results["first_board"] = screen_first_board(data_map, cfg.first_board)
+
+        results: dict[str, list[tuple[str, float]]] = {
+            "resisters": [],
+            "jumpers": [],
+            "anomalies": [],
+            "first_board": [],
+        }
+        jump_stats: dict[str, int] = {
+            "total": 0,
+            "box_pass": 0,
+            "squeeze_pass": 0,
+            "volume_pass": 0,
+            "position_pass": 0,
+        }
+        name_map = _stock_name_map()
+
+        def _screen_one(sym: str, df: pd.DataFrame) -> None:
+            try:
+                if tactic == "抗跌主力" and bench_cum is not None:
+                    hit = screen_one_resister(sym, df, bench_cum, cfg.resister)
+                    if hit:
+                        results["resisters"].append(hit)
+                elif tactic == "突破临界":
+                    hit = screen_one_jumper(sym, df, cfg.jumper, jump_stats)
+                    if hit:
+                        results["jumpers"].append(hit)
+                elif tactic == "异常吸筹/出货":
+                    hit = screen_one_anomaly(sym, df, cfg.anomaly)
+                    if hit:
+                        results["anomalies"].append(hit)
+                elif tactic == "启动龙头":
+                    hit = screen_one_first_board(
+                        sym, df, cfg.first_board,
+                        stock_name_map=name_map,
+                        list_date_fn=_stock_list_date,
+                        market_cap_fn=_estimate_market_cap,
+                    )
+                    if hit:
+                        results["first_board"].append(hit)
+            except Exception:
+                pass
+
+        completed = 0
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_fetch_one, sym): sym for sym in symbols}
+                for future in as_completed(futures):
+                    sym, df, src, err = future.result()
+                    completed += 1
+                    progress.progress(completed / total)
+                    status_text.caption(f"已拉取 {completed}/{total}，筛出 {sum(len(v) for v in results.values())} 只")
+                    if err:
+                        errors[sym] = err
+                    else:
+                        data_map[sym] = df
+                        source_map[sym] = src
+                        _screen_one(sym, df)
+        except Exception as exc:
+            st.error(f"拉取或筛选出错: {exc}")
+
+        progress.progress(1.0)
+        status_text.caption(f"✅ 完成 {len(data_map)}/{total}，筛出 {sum(len(v) for v in results.values())} 只")
+        progress.empty()
+        status_text.empty()
 
         st.session_state.wyckoff_payload = {
             "results": results,
@@ -887,6 +734,4 @@ with content_col:
 
     payload = st.session_state.get("wyckoff_payload")
     if payload:
-        _render_results(
-            payload, group_power=group_power, debug_log=debug_log, use_cache=use_cache
-        )
+        _render_results(payload, group_power=group_power)
