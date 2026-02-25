@@ -65,15 +65,10 @@ def show_page_loading(
     safe_title = html.escape(str(title or ""))
     safe_subtitle = html.escape(str(subtitle or ""))
 
-    quote_html = ""
+    quote_block = ""
     if quote:
         safe_quote = html.escape(str(quote))
-        quote_html = (
-            '<div style="font-size: 12px; color: #888; margin-top: 16px; '
-            'font-style: italic; max-width: 360px; margin-left: auto; margin-right: auto;">'
-            f'"{safe_quote}"'
-            "</div>"
-        )
+        quote_block = f'<p style="font-size:12px;color:#888;margin-top:16px;font-style:italic;">"{safe_quote}"</p>'
 
     loading_html = f"""
 <style>
@@ -92,15 +87,11 @@ def show_page_loading(
     100% {{ transform: rotate(360deg); }}
 }}
 </style>
-<div style="width: 100%; min-height: 40vh; display: flex; align-items: center; justify-content: center; flex-direction: column;">
-    <div class="loading-spinner"></div>
-    <div style="text-align:center; padding: 24px 12px;">
-        <div style="font-size: 16px; font-weight: 600; color: #333;">{safe_title}</div>
-        <div style="font-size: 13px; color: #666; margin-top: 6px;">
-            {safe_subtitle}
-        </div>
-        {quote_html}
-    </div>
+<div style="width:100%;min-height:40vh;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:24px 12px">
+    <span class="loading-spinner"></span>
+    <p style="font-size:16px;font-weight:600;color:#333;margin:24px 0 6px">{safe_title}</p>
+    <p style="font-size:13px;color:#666;margin:0">{safe_subtitle}</p>
+    {quote_block}
 </div>
 """
 
