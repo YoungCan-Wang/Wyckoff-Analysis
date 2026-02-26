@@ -21,7 +21,7 @@ from llm_client import call_llm
 from utils import stock_sector_em
 from utils.feishu import send_feishu_notification
 
-TRADING_DAYS = 60
+TRADING_DAYS = 500
 MAX_SYMBOLS = int(os.getenv("STEP3_MAX_SYMBOLS", "6"))
 FEISHU_MAX_LEN = 2000
 
