@@ -24,8 +24,11 @@ from fetch_a_share_csv import (
 )
 from wyckoff_engine import (
     FunnelConfig,
+    layer1_filter,
+    layer2_strength,
+    layer3_sector_resonance,
+    layer4_triggers,
     normalize_hist_from_fetch,
-    run_funnel,
 )
 from data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
 from utils.feishu import send_feishu_notification
@@ -111,10 +114,30 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     start_s = window.start_trade_date.strftime("%Y%m%d")
     end_s = window.end_trade_date.strftime("%Y%m%d")
 
-    # 股票池：主板 + 创业板
-    main_stocks = [s["code"] for s in get_stocks_by_board("main") if s.get("code")]
-    chinext_stocks = [s["code"] for s in get_stocks_by_board("chinext") if s.get("code")]
-    all_symbols = _normalize_symbols(main_stocks + chinext_stocks)
+    # 股票池：主板 + 创业板 - ST（预过滤，减少无效拉取）
+    main_items = get_stocks_by_board("main")
+    chinext_items = get_stocks_by_board("chinext")
+    merged_code_to_name: dict[str, str] = {}
+    for item in main_items + chinext_items:
+        code = str(item.get("code", "")).strip()
+        if not code:
+            continue
+        if code not in merged_code_to_name:
+            merged_code_to_name[code] = str(item.get("name", "")).strip()
+    merged_symbols = _normalize_symbols(list(merged_code_to_name.keys()))
+    st_symbols = [
+        sym for sym in merged_symbols
+        if "ST" in merged_code_to_name.get(sym, "").upper()
+    ]
+    st_set = set(st_symbols)
+    all_symbols = [sym for sym in merged_symbols if sym not in st_set]
+    total_batches = (len(all_symbols) + BATCH_SIZE - 1) // BATCH_SIZE if all_symbols else 0
+    print(
+        "[funnel] 股票池统计: "
+        f"main={len(main_items)}, chinext={len(chinext_items)}, "
+        f"merged={len(merged_symbols)}, st_excluded={len(st_symbols)}, "
+        f"final={len(all_symbols)}, batches={total_batches} (batch_size={BATCH_SIZE})"
+    )
 
     # 批量元数据
     print(f"[funnel] 加载行业映射...")
@@ -134,11 +157,12 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     except Exception as e:
         print(f"[funnel] 大盘基准加载失败: {e}")
 
-    # 并发拉取日线
-    df_map: dict[str, pd.DataFrame] = {}
+    # 并发拉取日线 + 分批漏斗（每批先做 L1/L2，最后统一做 L3/L4）
+    l1_passed_set: set[str] = set()
+    l2_passed_set: set[str] = set()
+    l2_df_map: dict[str, pd.DataFrame] = {}
     fetch_ok = 0
     fetch_fail = 0
-    total_batches = (len(all_symbols) + BATCH_SIZE - 1) // BATCH_SIZE if all_symbols else 0
 
     print(
         f"[funnel] 开始拉取 {len(all_symbols)} 只股票日线 "
@@ -149,6 +173,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         batch = all_symbols[i: i + BATCH_SIZE]
         batch_ok = 0
         batch_fail = 0
+        batch_df_map: dict[str, pd.DataFrame] = {}
         batch_started = time.monotonic()
         print(f"[funnel] 批次#{batch_no}/{total_batches} 启动，股票数={len(batch)}")
 
@@ -167,7 +192,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
                 if df is not None:
                     batch_ok += 1
                     fetch_ok += 1
-                    df_map[sym] = df
+                    batch_df_map[sym] = df
                 else:
                     batch_fail += 1
                     fetch_fail += 1
@@ -191,43 +216,52 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
                 ft.cancel()
             ex.shutdown(wait=False, cancel_futures=True)
 
+        batch_l1 = layer1_filter(batch, name_map, market_cap_map, batch_df_map, cfg)
+        batch_l2 = layer2_strength(batch_l1, batch_df_map, bench_df, cfg)
+        l1_passed_set.update(batch_l1)
+        l2_passed_set.update(batch_l2)
+        for sym in batch_l2:
+            df = batch_df_map.get(sym)
+            if df is not None:
+                l2_df_map[sym] = df
+
         batch_elapsed = time.monotonic() - batch_started
         print(
             f"[funnel] 批次#{batch_no} 完成: 成功={batch_ok}, 失败={batch_fail}, "
-            f"耗时={batch_elapsed:.1f}s, 累计成功={fetch_ok}, 累计失败={fetch_fail}"
+            f"L1={len(batch_l1)}, L2={len(batch_l2)}, "
+            f"耗时={batch_elapsed:.1f}s, 累计成功={fetch_ok}, 累计失败={fetch_fail}, "
+            f"累计L1={len(l1_passed_set)}, 累计L2={len(l2_passed_set)}"
         )
         if i + BATCH_SIZE < len(all_symbols) and BATCH_SLEEP > 0:
             time.sleep(BATCH_SLEEP)
 
     print(f"[funnel] 日线拉取完成: 成功={fetch_ok}, 失败={fetch_fail}")
 
-    # 运行 4 层漏斗
-    result = run_funnel(
-        all_symbols=all_symbols,
-        df_map=df_map,
-        bench_df=bench_df,
-        name_map=name_map,
-        market_cap_map=market_cap_map,
-        sector_map=sector_map,
-        cfg=cfg,
-    )
-
-    total_hits = sum(len(v) for v in result.triggers.values())
+    # 汇总阶段：全局做 L3/L4（L3 依赖全局行业分布）
+    l2_symbols = sorted(l2_passed_set)
+    l3_symbols, top_sectors = layer3_sector_resonance(l2_symbols, sector_map, cfg)
+    triggers = layer4_triggers(l3_symbols, l2_df_map, cfg)
+    total_hits = sum(len(v) for v in triggers.values())
     metrics = {
         "total_symbols": len(all_symbols),
+        "pool_main": len(main_items),
+        "pool_chinext": len(chinext_items),
+        "pool_merged": len(merged_symbols),
+        "pool_st_excluded": len(st_symbols),
+        "pool_batches": total_batches,
         "fetch_ok": fetch_ok,
         "fetch_fail": fetch_fail,
-        "layer1": len(result.layer1_symbols),
-        "layer2": len(result.layer2_symbols),
-        "layer3": len(result.layer3_symbols),
-        "top_sectors": result.top_sectors,
+        "layer1": len(l1_passed_set),
+        "layer2": len(l2_symbols),
+        "layer3": len(l3_symbols),
+        "top_sectors": top_sectors,
         "total_hits": total_hits,
-        "by_trigger": {k: len(v) for k, v in result.triggers.items()},
+        "by_trigger": {k: len(v) for k, v in triggers.items()},
     }
     print(f"[funnel] L1={metrics['layer1']}, L2={metrics['layer2']}, "
           f"L3={metrics['layer3']}, 命中={total_hits}, "
-          f"Top行业={result.top_sectors}, 各触发={metrics['by_trigger']}")
-    return result.triggers, metrics
+          f"Top行业={top_sectors}, 各触发={metrics['by_trigger']}")
+    return triggers, metrics
 
 
 def run(webhook_url: str) -> tuple[bool, list[dict]]:
@@ -255,6 +289,11 @@ def run(webhook_url: str) -> tuple[bool, list[dict]]:
     )
 
     lines = [
+        (
+            f"**股票池**: 主板{metrics['pool_main']} + 创业板{metrics['pool_chinext']} "
+            f"-> 去重{metrics['pool_merged']} -> 去ST{metrics['pool_st_excluded']} "
+            f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
+        ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
