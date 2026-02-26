@@ -5,7 +5,6 @@ Wyckoff Funnel 定时任务：4 层漏斗筛选 → 飞书发送
 Layer 1: 剥离垃圾 → Layer 2: 强弱甄别 → Layer 3: 板块共振 → Layer 4: 威科夫狙击
 """
 from __future__ import annotations
-
 import os
 import socket
 import sys
@@ -46,7 +45,6 @@ BATCH_TIMEOUT = 600
 BATCH_SIZE = 200
 BATCH_SLEEP = 5
 MAX_WORKERS = 8
-STEP3_MAX_SYMBOLS = 6
 
 
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
@@ -287,6 +285,14 @@ def run(webhook_url: str) -> tuple[bool, list[dict]]:
         code_to_reasons.keys(),
         key=lambda c: -code_to_best_score.get(c, 0),
     )
+    unique_hit_count = len(sorted_codes)
+    selected_for_ai = sorted_codes
+
+    print(
+        f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
+        f"AI输入=全量命中股票{len(selected_for_ai)}, "
+        f"AI分析={len(selected_for_ai)}"
+    )
 
     lines = [
         (
@@ -295,17 +301,18 @@ def run(webhook_url: str) -> tuple[bool, list[dict]]:
             f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
+        f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)} -> AI操作池6只",
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
-        "**筛选结果（代码 名称 | 筛选理由）**",
+        "**命中列表（按优先级）代码 名称 | 筛选理由 | 分值**",
         "",
     ]
-    for code in sorted_codes:
+    for code in selected_for_ai:
         name = name_map.get(code, code)
         reasons = "、".join(code_to_reasons[code])
-        lines.append(f"• {code} {name} | {reasons}")
+        lines.append(f"• {code} {name} | {reasons} | score={code_to_best_score.get(code, 0):.2f}")
 
-    if not sorted_codes:
+    if not selected_for_ai:
         lines.append("无")
 
     content = "\n".join(lines)
@@ -318,6 +325,6 @@ def run(webhook_url: str) -> tuple[bool, list[dict]]:
             "name": name_map.get(c, c),
             "tag": "、".join(code_to_reasons[c]),
         }
-        for c in sorted_codes[:STEP3_MAX_SYMBOLS]
+        for c in selected_for_ai
     ]
     return (ok, symbols_for_report)

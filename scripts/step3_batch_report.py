@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -20,14 +20,47 @@ from utils.feishu import send_feishu_notification
 from wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
-MAX_SYMBOLS = 6
-FEISHU_MAX_LEN = 2000
+FEISHU_MAX_LEN = 12000
 GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
+OPERATION_TARGET = 6
 
 RECENT_DAYS = 15
 HIGHLIGHT_DAYS = 60
 HIGHLIGHT_PCT_THRESHOLD = 5.0
 HIGHLIGHT_VOL_RATIO = 2.0
+
+
+def _dump_model_input(
+    items: list[dict],
+    model: str,
+    system_prompt: str,
+    user_message: str,
+) -> str:
+    logs_dir = os.getenv("LOGS_DIR", "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    path = os.path.join(logs_dir, f"step3_model_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    symbols_line = ", ".join(f"{x.get('code', '')}:{x.get('name', '')}" for x in items)
+    body = (
+        f"[step3] model={model}\n"
+        f"[step3] symbols={symbols_line}\n"
+        f"[step3] system_prompt_len={len(system_prompt)}\n"
+        f"[step3] user_message_len={len(user_message)}\n"
+        "\n===== SYSTEM PROMPT =====\n"
+        f"{system_prompt}\n"
+        "\n===== USER MESSAGE =====\n"
+        f"{user_message}\n"
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(body)
+    print(f"[step3] 模型输入已落盘: {path}")
+    print(
+        f"[step3] 模型输入摘要: model={model}, symbols={len(items)}, "
+        f"system_prompt_len={len(system_prompt)}, user_message_len={len(user_message)}"
+    )
+    print("[step3] USER_MESSAGE_BEGIN")
+    print(user_message)
+    print("[step3] USER_MESSAGE_END")
+    return path
 
 
 def _compress_report(report: str, max_len: int = FEISHU_MAX_LEN) -> str:
@@ -133,9 +166,7 @@ def run(
         else:
             items.append(s)
 
-    if len(items) > MAX_SYMBOLS:
-        print(f"[step3] 超过上限 {MAX_SYMBOLS}，已截断")
-    items = items[:MAX_SYMBOLS]
+    print(f"[step3] AI 输入股票数={len(items)}（全量命中输入）")
 
     end_day = date.today() - timedelta(days=1)
     window = _resolve_trading_window(end_calendar_day=end_day, trading_days=TRADING_DAYS)
@@ -162,10 +193,14 @@ def run(
         return (True, "no_data_but_no_error")
 
     user_message = (
-        "以下是通过 Wyckoff Funnel 4 层漏斗从全市场初筛出的候选名单。\n"
-        "请执行冷血审视、证伪淘汰、推演最小阻力路径，并按机密电报格式输出最终决断。\n\n"
+        "以下是通过 Wyckoff Funnel 命中的全量候选名单。\n"
+        "请先从全部输入中筛出“值得加入自选观察池”的标的（数量不限），"
+        f"再从观察池中严格挑选“可操作池”{OPERATION_TARGET}只。\n"
+        f"输出必须包含两个部分：1) 观察池（不限） 2) 操作池（固定{OPERATION_TARGET}只，不足{OPERATION_TARGET}只要说明不足原因）。\n"
+        "硬约束：可操作池必须是观察池子集，且两部分只能使用输入列表中的股票代码。\n\n"
         + "\n".join(parts)
     )
+    _dump_model_input(items=items, model=model, system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT, user_message=user_message)
 
     report = ""
     models_to_try = [model]
@@ -180,7 +215,7 @@ def run(
                 api_key=api_key,
                 system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT,
                 user_message=user_message,
-                timeout=120,
+                timeout=300,
             )
             break
         except Exception as e:
