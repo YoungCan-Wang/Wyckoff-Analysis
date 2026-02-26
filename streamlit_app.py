@@ -23,6 +23,7 @@ from fetch_a_share_csv import (
     _stock_name_from_code,
 )
 from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
+from utils.feishu import send_feishu_notification
 from download_history import add_download_history
 from auth_component import logout
 from layout import setup_page, show_user_error
@@ -160,30 +161,6 @@ def _friendly_error_message(e: Exception, symbol: str, trading_days: int) -> str
     if "empty data returned" in msg:
         return f"数据源返回空 (可能停牌或上市不足 {trading_days} 天)"
     return f"未知错误: {msg}"
-
-
-def send_feishu_notification(webhook_url: str, title: str, content: str):
-    """发送飞书卡片消息"""
-    if not webhook_url:
-        return False
-
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "msg_type": "interactive",
-        "card": {
-            "header": {"title": {"tag": "plain_text", "content": title}},
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": content}}
-            ],
-        },
-    }
-
-    try:
-        resp = requests.post(webhook_url, headers=headers, json=payload, timeout=10)
-        return resp.status_code == 200
-    except Exception as e:
-        print(f"Feishu notification failed: {e}")
-        return False
 
 
 content_col = show_right_nav()
