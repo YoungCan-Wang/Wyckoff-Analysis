@@ -10,6 +10,8 @@ from typing import Optional
 # 首期仅实现 Gemini；后续可增加 openai
 SUPPORTED_PROVIDERS = ("gemini",)
 GEMINI_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-3.1-pro-preview",
     "gemini-3-pro-preview",
     "gemini-3-flash-preview"
 )

@@ -219,75 +219,14 @@ def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
 
 
 def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame:
-    start = window.start_trade_date.strftime("%Y%m%d")
-    end = window.end_trade_date.strftime("%Y%m%d")
-    try:
-        df = ak.stock_zh_a_hist(
-            symbol=symbol,
-            period="daily",
-            start_date=start,
-            end_date=end,
-            adjust=adjust,
-        )
-        if df is None or df.empty:
-            raise RuntimeError(
-                f"empty data returned for symbol={symbol}, start={start}, end={end}, adjust={adjust!r}"
-            )
-        return df
-    except Exception:
-        df = _fetch_hist_baostock(symbol=symbol, window=window)
-        df = df.rename(
-            columns={
-                "date": "日期",
-                "open": "开盘",
-                "high": "最高",
-                "low": "最低",
-                "close": "收盘",
-                "volume": "成交量",
-                "amount": "成交额",
-                "pctChg": "涨跌幅",
-            }
-        )
-        return df
-
-
-def _fetch_hist_baostock(symbol: str, window: TradingWindow) -> pd.DataFrame:
-    import baostock as bs
-
-    def normalize_code(code: str) -> str:
-        if code.startswith("sh.") or code.startswith("sz."):
-            return code
-        if code.startswith(("600", "601", "603", "605", "688")):
-            return f"sh.{code}"
-        return f"sz.{code}"
-
-    bs_code = normalize_code(symbol)
-    start = window.start_trade_date.strftime("%Y-%m-%d")
-    end = window.end_trade_date.strftime("%Y-%m-%d")
-
-    login = bs.login()
-    if login.error_code != "0":
-        raise RuntimeError(f"baostock login failed: {login.error_msg}")
-    try:
-        rs = bs.query_history_k_data_plus(
-            code=bs_code,
-            fields="date,open,high,low,close,volume,amount,pctChg",
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag="2",
-        )
-        if rs.error_code != "0":
-            raise RuntimeError(f"baostock query failed: {rs.error_msg}")
-        data_list = []
-        while rs.next():
-            data_list.append(rs.get_row_data())
-        if not data_list:
-            raise RuntimeError(f"baostock empty data for {symbol}")
-        df = pd.DataFrame(data_list, columns=rs.fields)
-        return df
-    finally:
-        bs.logout()
+    """个股日线：akshare→baostock→efinance→tushare fallback"""
+    from data_source import fetch_stock_hist
+    return fetch_stock_hist(
+        symbol=symbol,
+        start=window.start_trade_date,
+        end=window.end_trade_date,
+        adjust=adjust or "",
+    )
 
 
 def _build_export(df: pd.DataFrame, sector: str) -> pd.DataFrame:

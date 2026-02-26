@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+"""通用工具函数：文件名、行业、文本解析等"""
 import os
 import re
 

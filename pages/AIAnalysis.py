@@ -27,10 +27,11 @@ from fetch_a_share_csv import (
 )
 from utils import extract_symbols_from_text, stock_sector_em
 from wyckoff_engine import (
+    FunnelConfig,
     normalize_hist_from_fetch,
-    run_screener,
-    ScreenerConfig,
+    run_funnel,
 )
+from data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
 from single_stock_logic import render_single_stock_page
 
 # 等待时随机展示的股市名人名言（本地列表）
@@ -52,12 +53,10 @@ STOCK_QUOTES = [
     "买在分歧，卖在一致。——情绪流龙头战法",
 ]
 
-# 沙里淘金 tactic 与 results key 的对应
-WYCKOFF_TACTIC_TO_KEY = {
-    "抗跌主力": "resisters",
-    "突破临界": "jumpers",
-    "异常吸筹/出货": "anomalies",
-    "启动龙头": "first_board",
+TRIGGER_LABELS = {
+    "spring": "Spring（终极震仓）",
+    "lps": "LPS（缩量回踩）",
+    "evr": "Effort vs Result（放量不跌）",
 }
 
 TRADING_DAYS_OHLCV = 60
@@ -101,7 +100,7 @@ with content_col:
         format_func=lambda x: {
             "single_stock": "单股分析 (威科夫大师模式)",
             "stock_list": "指定股票代码 (批量研报)",
-            "find_gold": "沙里淘金结果 (批量研报)"
+            "find_gold": "Wyckoff Funnel (批量研报)"
         }.get(x, x),
         horizontal=True,
         key="ai_analysis_type",
@@ -126,24 +125,18 @@ with content_col:
         elif len(_normalize_symbols(candidates)) > MAX_SYMBOLS:
             st.caption(f"已自动截取前 {MAX_SYMBOLS} 个代码：{', '.join(symbols)}")
     else:
-        # 沙里淘金：本页直接执行，无需跳转
+        # Wyckoff Funnel：本页直接执行，无需跳转
         find_gold_result: list[tuple[str, float]] = st.session_state.get("ai_find_gold_result") or []
         if find_gold_result:
             symbols = [s for s, _ in find_gold_result[:MAX_SYMBOLS]]
-            st.caption(f"将使用本次淘金结果中的 {len(symbols)} 只股票：{', '.join(symbols)}")
-            if st.button("重新淘金", key="ai_reset_find_gold"):
+            st.caption(f"将使用漏斗结果中的 {len(symbols)} 只股票：{', '.join(symbols)}")
+            if st.button("重新漏斗筛选", key="ai_reset_find_gold"):
                 del st.session_state["ai_find_gold_result"]
                 st.rerun()
         else:
             with st.container(border=True):
-                st.markdown("**先筛选值得关注的股票**")
-                tactic_fg = st.radio(
-                    "战术",
-                    options=["抗跌主力", "突破临界", "异常吸筹/出货", "启动龙头"],
-                    horizontal=True,
-                    key="ai_find_gold_tactic",
-                )
-                pool_mode = st.radio("股票池", options=["手动输入", "板块"], horizontal=True, key="ai_pool_mode")
+                st.markdown("**先通过 Wyckoff Funnel 筛选值得关注的股票**")
+                pool_mode = st.radio("股票池", options=["板块", "手动输入"], horizontal=True, key="ai_pool_mode")
                 symbols_input_fg = ""
                 board_fg = "all"
                 limit_fg = 500
@@ -157,13 +150,13 @@ with content_col:
                 else:
                     board_fg = st.selectbox(
                         "板块",
-                        options=["all", "main", "chinext", "star", "bse"],
-                        format_func=lambda v: {"all": "全部 A 股", "main": "主板", "chinext": "创业板", "star": "科创板", "bse": "北交所"}.get(v, v),
+                        options=["all", "main", "chinext"],
+                        format_func=lambda v: {"all": "全部主板+创业板", "main": "主板", "chinext": "创业板"}.get(v, v),
                         key="ai_find_gold_board",
                     )
-                    limit_fg = int(st.number_input("股票数量上限", min_value=50, max_value=2000, value=500, step=50, key="ai_find_gold_limit"))
+                    limit_fg = int(st.number_input("股票数量上限", min_value=50, max_value=5000, value=500, step=100, key="ai_find_gold_limit"))
 
-                run_find_gold = st.button("执行沙里淘金", type="primary", key="ai_run_find_gold")
+                run_find_gold = st.button("执行 Wyckoff Funnel", type="primary", key="ai_run_find_gold")
                 if run_find_gold:
                     if pool_mode == "手动输入":
                         candidates_fg = extract_symbols_from_text(symbols_input_fg or "")
@@ -179,7 +172,14 @@ with content_col:
                     except Exception as e:
                         st.error(f"交易日窗口解析失败：{e}")
                         st.stop()
-                    start_s, end_s = window_fg.start_trade_date.strftime("%Y%m%d"), window_fg.end_trade_date.strftime("%Y%m%d")
+                    start_s = window_fg.start_trade_date.strftime("%Y%m%d")
+                    end_s = window_fg.end_trade_date.strftime("%Y%m%d")
+
+                    with st.spinner("加载行业 & 市值数据..."):
+                        sector_map_fg = fetch_sector_map()
+                        market_cap_fg = fetch_market_cap_map()
+                    name_map_fg = {s.get("code", ""): s.get("name", "") for s in get_all_stocks() if isinstance(s, dict) and s.get("code")}
+
                     progress_ph = st.empty()
                     progress_bar = progress_ph.progress(0)
                     data_map_fg: dict[str, pd.DataFrame] = {}
@@ -191,57 +191,30 @@ with content_col:
                             pass
                         progress_bar.progress((idx + 1) / len(pool_symbols))
                     progress_ph.empty()
-                    benchmark_df_fg = None
-                    if tactic_fg == "抗跌主力":
-                        try:
-                            df_idx = ak.index_zh_a_hist(symbol="000001", period="daily", start_date=start_s, end_date=end_s)
-                            if df_idx is not None and not df_idx.empty:
-                                benchmark_df_fg = normalize_hist_from_fetch(df_idx)
-                        except Exception:
-                            pass
-                    cfg = ScreenerConfig(trading_days=500)
-                    stock_name_map_fg = {s.get("code", ""): s.get("name", "") for s in get_all_stocks() if isinstance(s, dict) and s.get("code")}
 
-                    def _list_date(s: str):
-                        try:
-                            df_i = ak.stock_individual_info_em(symbol=s)
-                            if df_i is None or df_i.empty:
-                                return None
-                            row = df_i.loc[df_i["item"] == "上市日期", "value"]
-                            if row.empty:
-                                return None
-                            return datetime.strptime(str(row.iloc[0]).strip(), "%Y-%m-%d").date()
-                        except Exception:
-                            return None
+                    bench_df_fg = None
+                    try:
+                        bench_df_fg = fetch_index_hist("000001", start_s, end_s)
+                    except Exception:
+                        pass
 
-                    def _market_cap(s: str):
-                        try:
-                            df_i = ak.stock_individual_info_em(symbol=s)
-                            if df_i is None or df_i.empty:
-                                return 0.0
-                            row = df_i.loc[df_i["item"] == "总市值", "value"]
-                            if row.empty:
-                                return 0.0
-                            raw = str(row.iloc[0]).strip()
-                            if raw.endswith("亿"):
-                                return float(raw.replace("亿", "")) * 10000
-                            if raw.endswith("万"):
-                                return float(raw.replace("万", ""))
-                            return float(raw)
-                        except Exception:
-                            return 0.0
-
-                    result_list = run_screener(
-                        tactic_fg,
-                        data_map_fg,
-                        benchmark_df_fg,
-                        cfg,
-                        stock_name_map=stock_name_map_fg,
-                        list_date_fn=_list_date,
-                        market_cap_fn=_market_cap,
+                    funnel_result = run_funnel(
+                        all_symbols=list(data_map_fg.keys()),
+                        df_map=data_map_fg,
+                        bench_df=bench_df_fg,
+                        name_map=name_map_fg,
+                        market_cap_map=market_cap_fg,
+                        sector_map=sector_map_fg,
                     )
+                    result_list: list[tuple[str, float]] = []
+                    seen: set[str] = set()
+                    for trig_key in ("spring", "lps", "evr"):
+                        for code, score in funnel_result.triggers.get(trig_key, []):
+                            if code not in seen:
+                                seen.add(code)
+                                result_list.append((code, score))
                     st.session_state["ai_find_gold_result"] = result_list
-                    st.toast(f"淘金完成，共 {len(result_list)} 只", icon="✅")
+                    st.toast(f"漏斗筛选完成，共 {len(result_list)} 只", icon="✅")
                     st.rerun()
                 st.stop()
 

@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-沙里淘金筛选逻辑：供 AI 分析页与沙里淘金页共用。
-输入为已标准化的 data_map（symbol -> DataFrame with date, open, high, low, close, volume, pct_chg）。
+Wyckoff Funnel 4 层漏斗筛选引擎
+
+Layer 1: 剥离垃圾 (ST / 北交所 / 科创板 / 市值 / 成交额)
+Layer 2: 强弱甄别 (MA50>MA200 多头排列, 或大盘连跌时守住 MA20)
+Layer 3: 板块共振 (行业分布 Top-N)
+Layer 4: 威科夫狙击 (Spring / LPS / Effort vs Result)
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
-from typing import Callable
+from typing import NamedTuple
 
+import numpy as np
 import pandas as pd
 
 
@@ -21,430 +25,333 @@ def normalize_hist_from_fetch(df: pd.DataFrame) -> pd.DataFrame:
         "最低": "low",
         "收盘": "close",
         "成交量": "volume",
+        "成交额": "amount",
         "涨跌幅": "pct_chg",
     }
     out = df.rename(columns=col_map)
-    keep = [c for c in ["date", "open", "high", "low", "close", "volume", "pct_chg"] if c in out.columns]
+    keep = [c for c in ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"] if c in out.columns]
     out = out[keep].copy()
     if "pct_chg" not in out.columns and "close" in out.columns:
         out["pct_chg"] = out["close"].astype(float).pct_change() * 100
-    for col in ["open", "high", "low", "close", "volume", "pct_chg"]:
+    for col in ["open", "high", "low", "close", "volume", "amount", "pct_chg"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
 
 
-@dataclass
-class ResisterConfig:
-    benchmark_code: str = "000001"
-    lookback_window: int = 3
-    benchmark_drop_threshold: float = -2.0
-    relative_strength_threshold: float = 2.0
-
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 
 @dataclass
-class JumperConfig:
-    consolidation_window: int = 60
-    box_range: float = 0.25
-    squeeze_window: int = 5
-    squeeze_amplitude: float = 0.05
-    volume_dry_ratio: float = 0.6
-    volume_long_window: int = 50
-
-
-@dataclass
-class AnomalyConfig:
-    volume_spike_ratio: float = 2.5
-    stall_pct_limit: float = 2.0
-    panic_pct_floor: float = -3.0
-    volume_window: int = 5
-
-
-@dataclass
-class FirstBoardConfig:
-    exclude_st: bool = True
-    exclude_new_days: int = 30
-    min_market_cap: float = 200000.0
-    max_market_cap: float = 10000000.0
-    lookback_limit_days: int = 10
-    breakout_window: int = 60
-
-
-@dataclass
-class ScreenerConfig:
+class FunnelConfig:
     trading_days: int = 500
-    resister: ResisterConfig = field(default_factory=ResisterConfig)
-    jumper: JumperConfig = field(default_factory=JumperConfig)
-    anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
-    first_board: FirstBoardConfig = field(default_factory=FirstBoardConfig)
+
+    # Layer 1
+    min_market_cap_yi: float = 20.0
+    min_avg_amount_wan: float = 5000.0
+    amount_avg_window: int = 20
+
+    # Layer 2
+    ma_short: int = 50
+    ma_long: int = 200
+    ma_hold: int = 20
+    bench_drop_days: int = 3
+    bench_drop_threshold: float = -2.0
+
+    # Layer 3
+    top_n_sectors: int = 3
+
+    # Layer 4 - Spring
+    spring_support_window: int = 60
+    spring_vol_ratio: float = 1.0
+
+    # Layer 4 - LPS
+    lps_lookback: int = 3
+    lps_ma: int = 20
+    lps_ma_tolerance: float = 0.01
+    lps_vol_dry_ratio: float = 0.35
+    lps_vol_ref_window: int = 60
+
+    # Layer 4 - Effort vs Result
+    evr_lookback: int = 3
+    evr_vol_ratio: float = 2.0
+    evr_vol_window: int = 20
+    evr_max_drop: float = 2.0
 
 
-def _calc_cumulative_pct(df: pd.DataFrame) -> float:
-    changes = df["pct_chg"].dropna() / 100.0
-    return float((changes + 1).prod() - 1)
+class FunnelResult(NamedTuple):
+    layer1_symbols: list[str]
+    layer2_symbols: list[str]
+    layer3_symbols: list[str]
+    top_sectors: list[str]
+    triggers: dict[str, list[tuple[str, float]]]
 
 
-def _resister_bench_cum(benchmark_df: pd.DataFrame | None, cfg: ResisterConfig) -> float | None:
-    """计算基准累计涨跌幅，不满足条件返回 None。"""
-    if benchmark_df is None or benchmark_df.empty:
-        return None
-    bench = benchmark_df.sort_values("date").tail(cfg.lookback_window)
-    if len(bench) < cfg.lookback_window:
-        return None
-    bench_cum = _calc_cumulative_pct(bench)
-    if bench_cum * 100 >= cfg.benchmark_drop_threshold:
-        return None
-    return bench_cum
+# ---------------------------------------------------------------------------
+# Layer 1: 剥离垃圾
+# ---------------------------------------------------------------------------
+
+def _is_main_or_chinext(code: str) -> bool:
+    return code.startswith(("600", "601", "603", "605", "000", "001", "002", "003", "300", "301"))
 
 
-def screen_one_resister(
-    symbol: str, df: pd.DataFrame, bench_cum: float, cfg: ResisterConfig
-) -> tuple[str, float] | None:
-    """单只股票抗跌主力筛选。"""
-    window = df.sort_values("date").tail(cfg.lookback_window)
-    if len(window) < cfg.lookback_window:
-        return None
-    stock_cum = _calc_cumulative_pct(window)
-    score = (stock_cum - bench_cum) * 100
-    if stock_cum >= 0 or score >= cfg.relative_strength_threshold:
-        return (symbol, score)
-    return None
-
-
-def screen_resisters(
-    data_map: dict[str, pd.DataFrame],
-    benchmark_df: pd.DataFrame | None,
-    cfg: ResisterConfig,
-) -> list[tuple[str, float]]:
-    if benchmark_df is None or benchmark_df.empty:
-        return []
-    bench = benchmark_df.sort_values("date").tail(cfg.lookback_window)
-    if len(bench) < cfg.lookback_window:
-        return []
-    bench_cum = _calc_cumulative_pct(bench)
-    if bench_cum * 100 >= cfg.benchmark_drop_threshold:
-        return []
-    results: list[tuple[str, float]] = []
-    for symbol, df in data_map.items():
-        window = df.sort_values("date").tail(cfg.lookback_window)
-        if len(window) < cfg.lookback_window:
+def layer1_filter(
+    symbols: list[str],
+    name_map: dict[str, str],
+    market_cap_map: dict[str, float],
+    df_map: dict[str, pd.DataFrame],
+    cfg: FunnelConfig,
+) -> list[str]:
+    """
+    硬过滤：剔除 ST、北交所/科创板、市值<阈值、近期均成交额<阈值。
+    market_cap_map 单位：亿元。若 market_cap_map 为空则跳过市值过滤。
+    """
+    cap_available = bool(market_cap_map)
+    passed: list[str] = []
+    for sym in symbols:
+        if not _is_main_or_chinext(sym):
             continue
-        stock_cum = _calc_cumulative_pct(window)
-        score = (stock_cum - bench_cum) * 100
-        if stock_cum >= 0 or score >= cfg.relative_strength_threshold:
-            results.append((symbol, score))
-    return results
-
-
-def screen_one_anomaly(symbol: str, df: pd.DataFrame, cfg: AnomalyConfig) -> tuple[str, float] | None:
-    """单只股票异常吸筹/出货筛选。"""
-    df = df.sort_values("date")
-    if len(df) < cfg.volume_window + 5:
-        return None
-    recent = df.iloc[-1]
-    if recent["high"] <= recent["low"]:
-        return None
-    body = abs(recent["close"] - recent["open"])
-    upper = recent["high"] - max(recent["open"], recent["close"])
-    lower = min(recent["open"], recent["close"]) - recent["low"]
-    vol_ma = df["volume"].rolling(window=cfg.volume_window).mean().iloc[-1]
-    if vol_ma <= 0:
-        return None
-    vol_ratio = recent["volume"] / vol_ma
-    pct_chg = float(recent["pct_chg"])
-    high_stall = (
-        vol_ratio >= cfg.volume_spike_ratio
-        and pct_chg < cfg.stall_pct_limit
-        and (upper >= 2 * body or recent["close"] < recent["open"])
-    )
-    low_support = (
-        vol_ratio >= cfg.volume_spike_ratio
-        and pct_chg > cfg.panic_pct_floor
-        and lower >= 2 * body
-    )
-    if high_stall or low_support:
-        return (symbol, float(vol_ratio))
-    return None
-
-
-def screen_anomalies(
-    data_map: dict[str, pd.DataFrame], cfg: AnomalyConfig
-) -> list[tuple[str, float]]:
-    results: list[tuple[str, float]] = []
-    for symbol, df in data_map.items():
-        df = df.sort_values("date")
-        if len(df) < cfg.volume_window + 5:
-            continue
-        recent = df.iloc[-1]
-        if recent["high"] <= recent["low"]:
-            continue
-        body = abs(recent["close"] - recent["open"])
-        range_val = recent["high"] - recent["low"]
-        upper = recent["high"] - max(recent["open"], recent["close"])
-        lower = min(recent["open"], recent["close"]) - recent["low"]
-        vol_ma = df["volume"].rolling(window=cfg.volume_window).mean().iloc[-1]
-        if vol_ma <= 0:
-            continue
-        vol_ratio = recent["volume"] / vol_ma
-        pct_chg = float(recent["pct_chg"])
-
-        high_stall = (
-            vol_ratio >= cfg.volume_spike_ratio
-            and pct_chg < cfg.stall_pct_limit
-            and (upper >= 2 * body or recent["close"] < recent["open"])
-        )
-        low_support = (
-            vol_ratio >= cfg.volume_spike_ratio
-            and pct_chg > cfg.panic_pct_floor
-            and lower >= 2 * body
-        )
-        if high_stall or low_support:
-            score = float(vol_ratio)
-            results.append((symbol, score))
-    return results
-
-
-def screen_one_jumper(
-    symbol: str, df: pd.DataFrame, cfg: JumperConfig, stats: dict | None = None
-) -> tuple[str, float] | None:
-    """单只股票突破临界筛选。stats 为可选的统计累加 dict。"""
-    window = max(cfg.consolidation_window, 20)
-    df = df.sort_values("date")
-    if stats is not None:
-        stats["total"] = stats.get("total", 0) + 1
-    if len(df) < window:
-        return None
-    recent = df.iloc[-window:]
-    high = recent["high"].max()
-    low = recent["low"].min()
-    last_close = recent.iloc[-1]["close"]
-    if last_close <= 0:
-        return None
-    box_range = (high - low) / last_close
-    if box_range > cfg.box_range:
-        return None
-    if stats is not None:
-        stats["box_pass"] = stats.get("box_pass", 0) + 1
-
-    short = recent.tail(cfg.squeeze_window)
-    short_high = short["high"].max()
-    short_low = short["low"].min()
-    short_close = short.iloc[-1]["close"]
-    if short_close <= 0:
-        return None
-    short_amp = (short_high - short_low) / short_close
-    if short_amp > cfg.squeeze_amplitude:
-        return None
-    if stats is not None:
-        stats["squeeze_pass"] = stats.get("squeeze_pass", 0) + 1
-
-    vol_short = short["volume"].mean()
-    vol_long = recent["volume"].tail(cfg.volume_long_window).mean()
-    if vol_long <= 0:
-        return None
-    if vol_short >= vol_long * cfg.volume_dry_ratio:
-        return None
-    if stats is not None:
-        stats["volume_pass"] = stats.get("volume_pass", 0) + 1
-
-    near_top = last_close >= low + (high - low) * 0.8
-    near_bottom = last_close <= low + (high - low) * 0.2
-    if near_top or near_bottom:
-        if stats is not None:
-            stats["position_pass"] = stats.get("position_pass", 0) + 1
-        return (symbol, float(short_amp * 100))
-    return None
-
-
-def screen_jumpers(
-    data_map: dict[str, pd.DataFrame],
-    cfg: JumperConfig,
-) -> tuple[list[tuple[str, float]], dict]:
-    results: list[tuple[str, float]] = []
-    stats = {
-        "total": 0,
-        "box_pass": 0,
-        "squeeze_pass": 0,
-        "volume_pass": 0,
-        "position_pass": 0,
-    }
-    window = max(cfg.consolidation_window, 20)
-    for symbol, df in data_map.items():
-        stats["total"] += 1
-        df = df.sort_values("date")
-        if len(df) < window:
-            continue
-        recent = df.iloc[-window:]
-        high = recent["high"].max()
-        low = recent["low"].min()
-        last_close = recent.iloc[-1]["close"]
-        if last_close <= 0:
-            continue
-        box_range = (high - low) / last_close
-        if box_range > cfg.box_range:
-            continue
-        stats["box_pass"] += 1
-
-        short = recent.tail(cfg.squeeze_window)
-        short_high = short["high"].max()
-        short_low = short["low"].min()
-        short_close = short.iloc[-1]["close"]
-        if short_close <= 0:
-            continue
-        short_amp = (short_high - short_low) / short_close
-        if short_amp > cfg.squeeze_amplitude:
-            continue
-        stats["squeeze_pass"] += 1
-
-        vol_short = short["volume"].mean()
-        vol_long = recent["volume"].tail(cfg.volume_long_window).mean()
-        if vol_long <= 0:
-            continue
-        if vol_short >= vol_long * cfg.volume_dry_ratio:
-            continue
-        stats["volume_pass"] += 1
-
-        near_top = last_close >= low + (high - low) * 0.8
-        near_bottom = last_close <= low + (high - low) * 0.2
-        if near_top or near_bottom:
-            stats["position_pass"] += 1
-            score = float(short_amp * 100)
-            results.append((symbol, score))
-    return results, stats
-
-
-def screen_one_first_board(
-    symbol: str,
-    df: pd.DataFrame,
-    cfg: FirstBoardConfig,
-    *,
-    stock_name_map: dict[str, str],
-    list_date_fn: Callable[[str], date | None],
-    market_cap_fn: Callable[[str], float],
-) -> tuple[str, float] | None:
-    """单只股票启动龙头筛选。"""
-    df = df.sort_values("date")
-    if len(df) < 2:
-        return None
-    if cfg.exclude_st:
-        name = stock_name_map.get(symbol, "")
+        name = name_map.get(sym, "")
         if "ST" in name.upper():
-            return None
-    if cfg.exclude_new_days > 0:
-        list_date = list_date_fn(symbol)
-        if list_date is not None and (date.today() - list_date).days < cfg.exclude_new_days:
-            return None
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    limit = 20.0 if symbol.startswith(("300", "301", "688")) else 10.0
-    threshold = limit * 0.98
-    curr_pct = float(last["pct_chg"])
-    last_prev_pct = float(prev["pct_chg"])
-    is_limit_up = curr_pct >= threshold
-    prev_limit = last_prev_pct >= threshold
-    if not is_limit_up or prev_limit:
-        return None
-    recent_limits = df.tail(cfg.lookback_limit_days).copy()
-    recent_limits["pct_chg"] = pd.to_numeric(recent_limits["pct_chg"], errors="coerce")
-    if (recent_limits["pct_chg"] >= threshold).sum() > 1:
-        return None
-    breakout_window = df.tail(cfg.breakout_window)
-    if last["close"] < breakout_window["close"].max():
-        return None
-    if abs(last["high"] - last["low"]) < 1e-6:
-        return None
-    if cfg.min_market_cap > 0 or cfg.max_market_cap > 0:
-        cap = market_cap_fn(symbol)
-        if cap:
-            if cfg.min_market_cap > 0 and cap < cfg.min_market_cap:
-                return None
-            if cfg.max_market_cap > 0 and cap > cfg.max_market_cap:
-                return None
-    return (symbol, float(last["pct_chg"]))
-
-
-def screen_first_board(
-    data_map: dict[str, pd.DataFrame],
-    cfg: FirstBoardConfig,
-    *,
-    stock_name_map: dict[str, str],
-    list_date_fn: Callable[[str], date | None],
-    market_cap_fn: Callable[[str], float],
-) -> list[tuple[str, float]]:
-    results: list[tuple[str, float]] = []
-    for symbol, df in data_map.items():
-        df = df.sort_values("date")
-        if len(df) < 2:
             continue
-        if cfg.exclude_st:
-            name = stock_name_map.get(symbol, "")
-            if "ST" in name.upper():
+        if cap_available:
+            cap = market_cap_map.get(sym, 0.0)
+            if cap < cfg.min_market_cap_yi:
                 continue
-        if cfg.exclude_new_days > 0:
-            list_date = list_date_fn(symbol)
-            if list_date is not None:
-                if (date.today() - list_date).days < cfg.exclude_new_days:
-                    continue
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-        limit = 20.0 if symbol.startswith(("300", "301", "688")) else 10.0
-        threshold = limit * 0.98
+        df = df_map.get(sym)
+        if df is None or df.empty:
+            continue
+        df_sorted = df.sort_values("date")
+        if "amount" in df_sorted.columns:
+            avg_amt = df_sorted["amount"].tail(cfg.amount_avg_window).mean()
+            if pd.notna(avg_amt) and avg_amt < cfg.min_avg_amount_wan * 10000:
+                continue
+        passed.append(sym)
+    return passed
 
-        curr_pct = float(last["pct_chg"])
-        last_prev_pct = float(prev["pct_chg"])
 
-        is_limit_up = curr_pct >= threshold
-        prev_limit = last_prev_pct >= threshold
-        if not is_limit_up or prev_limit:
-            continue
+# ---------------------------------------------------------------------------
+# Layer 2: 强弱甄别
+# ---------------------------------------------------------------------------
 
-        recent_limits = df.tail(cfg.lookback_limit_days).copy()
-        recent_limits["pct_chg"] = pd.to_numeric(recent_limits["pct_chg"], errors="coerce")
-        if (recent_limits["pct_chg"] >= threshold).sum() > 1:
+def layer2_strength(
+    symbols: list[str],
+    df_map: dict[str, pd.DataFrame],
+    bench_df: pd.DataFrame | None,
+    cfg: FunnelConfig,
+) -> list[str]:
+    """
+    MA50 > MA200 多头排列，OR 大盘连跌时仍守住 MA20。
+    """
+    bench_dropping = False
+    if bench_df is not None and not bench_df.empty:
+        bench_sorted = bench_df.sort_values("date")
+        if len(bench_sorted) >= cfg.bench_drop_days:
+            recent_bench = bench_sorted.tail(cfg.bench_drop_days)
+            bench_cum = (recent_bench["pct_chg"].dropna() / 100.0 + 1).prod() - 1
+            bench_dropping = bench_cum * 100 <= cfg.bench_drop_threshold
+
+    passed: list[str] = []
+    for sym in symbols:
+        df = df_map.get(sym)
+        if df is None or len(df) < cfg.ma_long:
             continue
-        breakout_window = df.tail(cfg.breakout_window)
-        if last["close"] < breakout_window["close"].max():
+        df_sorted = df.sort_values("date").copy()
+        close = df_sorted["close"].astype(float)
+        ma_short = close.rolling(cfg.ma_short).mean()
+        ma_long = close.rolling(cfg.ma_long).mean()
+        last_ma_short = ma_short.iloc[-1]
+        last_ma_long = ma_long.iloc[-1]
+
+        bullish_alignment = pd.notna(last_ma_short) and pd.notna(last_ma_long) and last_ma_short > last_ma_long
+
+        holding_ma20 = False
+        if bench_dropping:
+            ma_hold = close.rolling(cfg.ma_hold).mean()
+            last_ma_hold = ma_hold.iloc[-1]
+            last_close = close.iloc[-1]
+            if pd.notna(last_ma_hold) and last_close >= last_ma_hold:
+                holding_ma20 = True
+
+        if bullish_alignment or holding_ma20:
+            passed.append(sym)
+    return passed
+
+
+# ---------------------------------------------------------------------------
+# Layer 3: 板块共振
+# ---------------------------------------------------------------------------
+
+def layer3_sector_resonance(
+    symbols: list[str],
+    sector_map: dict[str, str],
+    cfg: FunnelConfig,
+) -> tuple[list[str], list[str]]:
+    """
+    统计行业分布，保留 Top-N 行业内的股票。
+    返回 (过滤后 symbols, top_sectors)。
+    """
+    counts: dict[str, int] = {}
+    for sym in symbols:
+        sector = sector_map.get(sym, "")
+        if sector:
+            counts[sector] = counts.get(sector, 0) + 1
+
+    if not counts:
+        return symbols, []
+
+    top_sectors = [s for s, _ in sorted(counts.items(), key=lambda x: -x[1])[:cfg.top_n_sectors]]
+    top_set = set(top_sectors)
+    filtered = [sym for sym in symbols if sector_map.get(sym, "") in top_set]
+    return filtered, top_sectors
+
+
+# ---------------------------------------------------------------------------
+# Layer 4: 威科夫狙击
+# ---------------------------------------------------------------------------
+
+def _detect_spring(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
+    """
+    Spring（终极震仓）：前一日 low 跌破近 N 日支撑位，今日收盘收回，且放量。
+    返回 score（收回幅度%）或 None。
+    """
+    if len(df) < cfg.spring_support_window + 2:
+        return None
+    df_s = df.sort_values("date")
+    support_zone = df_s.iloc[-(cfg.spring_support_window + 1):-1]
+    support_level = support_zone["close"].min()
+    prev = df_s.iloc[-2]
+    last = df_s.iloc[-1]
+
+    if prev["low"] >= support_level:
+        return None
+    if last["close"] <= support_level:
+        return None
+    vol_avg = df_s["volume"].tail(5).iloc[:-1].mean()
+    if vol_avg <= 0 or last["volume"] < vol_avg * cfg.spring_vol_ratio:
+        return None
+    recovery = (last["close"] - support_level) / support_level * 100
+    return float(recovery)
+
+
+def _detect_lps(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
+    """
+    LPS（最后支撑点缩量）：近 N 日回踩 MA20 且缩量。
+    返回 score（缩量比）或 None。
+    """
+    if len(df) < max(cfg.lps_vol_ref_window, cfg.lps_ma) + cfg.lps_lookback:
+        return None
+    df_s = df.sort_values("date").copy()
+    close = df_s["close"].astype(float)
+    ma = close.rolling(cfg.lps_ma).mean()
+    last_ma = ma.iloc[-1]
+    if pd.isna(last_ma) or last_ma <= 0:
+        return None
+
+    recent = df_s.tail(cfg.lps_lookback)
+    last_close = close.iloc[-1]
+    if last_close < last_ma:
+        return None
+
+    low_near_ma = recent["low"].min()
+    if abs(low_near_ma - last_ma) / last_ma > cfg.lps_ma_tolerance:
+        return None
+
+    recent_max_vol = recent["volume"].max()
+    ref_max_vol = df_s["volume"].tail(cfg.lps_vol_ref_window).max()
+    if ref_max_vol <= 0:
+        return None
+    vol_ratio = recent_max_vol / ref_max_vol
+    if vol_ratio > cfg.lps_vol_dry_ratio:
+        return None
+    return float(vol_ratio)
+
+
+def _detect_evr(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
+    """
+    Effort vs Result（努力无结果）：底部放巨量但价格不跌。
+    返回 score（量比）或 None。
+    """
+    if len(df) < cfg.evr_vol_window + cfg.evr_lookback:
+        return None
+    df_s = df.sort_values("date")
+    recent = df_s.tail(cfg.evr_lookback)
+
+    vol_avg_recent = recent["volume"].mean()
+    vol_avg_ref = df_s["volume"].tail(cfg.evr_vol_window).iloc[:cfg.evr_vol_window - cfg.evr_lookback].mean()
+    if vol_avg_ref <= 0:
+        return None
+    vol_ratio = vol_avg_recent / vol_avg_ref
+    if vol_ratio < cfg.evr_vol_ratio:
+        return None
+
+    max_drop = recent["pct_chg"].min()
+    if pd.isna(max_drop) or max_drop < -cfg.evr_max_drop:
+        return None
+
+    close_start = df_s.iloc[-(cfg.evr_lookback + 1)]["close"]
+    close_end = df_s.iloc[-1]["close"]
+    if close_end < close_start:
+        return None
+
+    return float(vol_ratio)
+
+
+def layer4_triggers(
+    symbols: list[str],
+    df_map: dict[str, pd.DataFrame],
+    cfg: FunnelConfig,
+) -> dict[str, list[tuple[str, float]]]:
+    """
+    在最终候选集上运行 Spring / LPS / EffortVsResult 检测。
+    """
+    results: dict[str, list[tuple[str, float]]] = {
+        "spring": [],
+        "lps": [],
+        "evr": [],
+    }
+    for sym in symbols:
+        df = df_map.get(sym)
+        if df is None or df.empty:
             continue
-        if abs(last["high"] - last["low"]) < 1e-6:
-            continue
-        if cfg.min_market_cap > 0 or cfg.max_market_cap > 0:
-            cap = market_cap_fn(symbol)
-            if cap:
-                if cfg.min_market_cap > 0 and cap < cfg.min_market_cap:
-                    continue
-                if cfg.max_market_cap > 0 and cap > cfg.max_market_cap:
-                    continue
-        score = float(last["pct_chg"])
-        results.append((symbol, score))
+        score = _detect_spring(df, cfg)
+        if score is not None:
+            results["spring"].append((sym, score))
+        score = _detect_lps(df, cfg)
+        if score is not None:
+            results["lps"].append((sym, score))
+        score = _detect_evr(df, cfg)
+        if score is not None:
+            results["evr"].append((sym, score))
     return results
 
 
-def run_screener(
-    tactic: str,
-    data_map: dict[str, pd.DataFrame],
-    benchmark_df: pd.DataFrame | None,
-    config: ScreenerConfig,
-    *,
-    stock_name_map: dict[str, str] | None = None,
-    list_date_fn: Callable[[str], date | None] | None = None,
-    market_cap_fn: Callable[[str], float] | None = None,
-) -> list[tuple[str, float]]:
-    """执行一种战术筛选，返回 (symbol, score) 列表。"""
-    if tactic == "抗跌主力":
-        return screen_resisters(data_map, benchmark_df, config.resister)
-    if tactic == "突破临界":
-        results, _ = screen_jumpers(data_map, config.jumper)
-        return results
-    if tactic == "异常吸筹/出货":
-        return screen_anomalies(data_map, config.anomaly)
-    if tactic == "启动龙头":
-        name_map = stock_name_map or {}
-        list_fn = list_date_fn or (lambda _: None)
-        cap_fn = market_cap_fn or (lambda _: 0.0)
-        return screen_first_board(
-            data_map, config.first_board,
-            stock_name_map=name_map,
-            list_date_fn=list_fn,
-            market_cap_fn=cap_fn,
-        )
-    return []
+# ---------------------------------------------------------------------------
+# run_funnel: 串联 4 层
+# ---------------------------------------------------------------------------
+
+def run_funnel(
+    all_symbols: list[str],
+    df_map: dict[str, pd.DataFrame],
+    bench_df: pd.DataFrame | None,
+    name_map: dict[str, str],
+    market_cap_map: dict[str, float],
+    sector_map: dict[str, str],
+    cfg: FunnelConfig | None = None,
+) -> FunnelResult:
+    if cfg is None:
+        cfg = FunnelConfig()
+
+    l1 = layer1_filter(all_symbols, name_map, market_cap_map, df_map, cfg)
+    l2 = layer2_strength(l1, df_map, bench_df, cfg)
+    l3, top_sectors = layer3_sector_resonance(l2, sector_map, cfg)
+    triggers = layer4_triggers(l3, df_map, cfg)
+
+    return FunnelResult(
+        layer1_symbols=l1,
+        layer2_symbols=l2,
+        layer3_symbols=l3,
+        top_sectors=top_sectors,
+        triggers=triggers,
+    )

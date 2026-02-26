@@ -1,0 +1,284 @@
+# -*- coding: utf-8 -*-
+"""
+Wyckoff Funnel 定时任务：4 层漏斗筛选 → 飞书发送
+
+Layer 1: 剥离垃圾 → Layer 2: 强弱甄别 → Layer 3: 板块共振 → Layer 4: 威科夫狙击
+"""
+from __future__ import annotations
+
+import os
+import socket
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import date, timedelta
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import pandas as pd
+
+from fetch_a_share_csv import (
+    _resolve_trading_window,
+    get_stocks_by_board,
+    _normalize_symbols,
+)
+from wyckoff_engine import (
+    FunnelConfig,
+    normalize_hist_from_fetch,
+    run_funnel,
+)
+from data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
+from utils.feishu import send_feishu_notification
+
+TRIGGER_LABELS = {
+    "spring": "Spring（终极震仓）",
+    "lps": "LPS（缩量回踩）",
+    "evr": "Effort vs Result（放量不跌）",
+}
+TRADING_DAYS = 500
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2
+SOCKET_TIMEOUT = 30
+BATCH_TIMEOUT = 600
+BATCH_SIZE = 200
+BATCH_SLEEP = 5
+MAX_WORKERS = 8
+STEP3_MAX_SYMBOLS = 6
+
+
+def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
+    return normalize_hist_from_fetch(df)
+
+
+def _fetch_hist(symbol: str, window, adjust: str) -> pd.DataFrame:
+    from fetch_a_share_csv import _fetch_hist as _fh
+    df = _fh(symbol=symbol, window=window, adjust=adjust)
+    return _normalize_hist(df)
+
+
+def _stock_name_map() -> dict[str, str]:
+    try:
+        from fetch_a_share_csv import get_all_stocks
+        items = get_all_stocks()
+        return {x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)}
+    except Exception:
+        return {}
+
+
+def _fetch_one_with_retry(sym: str, window, max_retries: int = MAX_RETRIES) -> tuple[str, pd.DataFrame | None]:
+    """在子进程中执行，进程级 socket 超时不影响主进程。"""
+    socket.setdefaulttimeout(SOCKET_TIMEOUT)
+    for attempt in range(max_retries):
+        try:
+            df = _fetch_hist(sym, window, "qfq")
+            return (sym, df)
+        except Exception:
+            if attempt < max_retries - 1:
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                time.sleep(delay)
+    return (sym, None)
+
+
+def _terminate_executor_processes(ex: ProcessPoolExecutor, batch_no: int) -> None:
+    """
+    批次超时时，主动终止仍存活的子进程，避免 wait=False 仅“逻辑结束”但进程继续跑。
+    这里使用私有属性是出于稳定性权衡：该任务更看重硬超时止损。
+    """
+    procs = getattr(ex, "_processes", {}) or {}
+    killed = 0
+    for proc in procs.values():
+        try:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=1)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join(timeout=1)
+                killed += 1
+        except Exception as e:
+            print(f"[funnel] 批次#{batch_no} 终止子进程异常: {e}")
+    if killed:
+        print(f"[funnel] 批次#{batch_no} 已强制终止 {killed} 个卡住子进程")
+
+
+def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
+    """执行 Wyckoff Funnel，返回 (triggers, metrics)。"""
+    cfg = FunnelConfig(trading_days=TRADING_DAYS)
+    window = _resolve_trading_window(
+        end_calendar_day=date.today() - timedelta(days=1),
+        trading_days=TRADING_DAYS,
+    )
+    start_s = window.start_trade_date.strftime("%Y%m%d")
+    end_s = window.end_trade_date.strftime("%Y%m%d")
+
+    # 股票池：主板 + 创业板
+    main_stocks = [s["code"] for s in get_stocks_by_board("main") if s.get("code")]
+    chinext_stocks = [s["code"] for s in get_stocks_by_board("chinext") if s.get("code")]
+    all_symbols = _normalize_symbols(main_stocks + chinext_stocks)
+
+    # 批量元数据
+    print(f"[funnel] 加载行业映射...")
+    sector_map = fetch_sector_map()
+    print(f"[funnel] 加载市值数据...")
+    market_cap_map = fetch_market_cap_map()
+    if not market_cap_map:
+        print("[funnel] ⚠️ 市值数据为空（TUSHARE_TOKEN 可能缺失/失效），Layer1 将跳过市值过滤")
+    print(f"[funnel] 加载股票名称...")
+    name_map = _stock_name_map()
+
+    # 大盘基准
+    bench_df = None
+    try:
+        bench_df = fetch_index_hist("000001", start_s, end_s)
+        print(f"[funnel] 大盘基准加载成功")
+    except Exception as e:
+        print(f"[funnel] 大盘基准加载失败: {e}")
+
+    # 并发拉取日线
+    df_map: dict[str, pd.DataFrame] = {}
+    fetch_ok = 0
+    fetch_fail = 0
+    total_batches = (len(all_symbols) + BATCH_SIZE - 1) // BATCH_SIZE if all_symbols else 0
+
+    print(
+        f"[funnel] 开始拉取 {len(all_symbols)} 只股票日线 "
+        f"(batch_size={BATCH_SIZE}, max_workers={MAX_WORKERS}, batch_timeout={BATCH_TIMEOUT}s)"
+    )
+    for i in range(0, len(all_symbols), BATCH_SIZE):
+        batch_no = i // BATCH_SIZE + 1
+        batch = all_symbols[i: i + BATCH_SIZE]
+        batch_ok = 0
+        batch_fail = 0
+        batch_started = time.monotonic()
+        print(f"[funnel] 批次#{batch_no}/{total_batches} 启动，股票数={len(batch)}")
+
+        ex = ProcessPoolExecutor(max_workers=MAX_WORKERS)
+        futures = {ex.submit(_fetch_one_with_retry, s, window): s for s in batch}
+        try:
+            for f in as_completed(futures, timeout=BATCH_TIMEOUT):
+                sym = futures[f]
+                try:
+                    _, df = f.result()
+                except Exception as e:
+                    print(f"[funnel] 批次#{batch_no} 拉取失败 {sym}: {e}")
+                    batch_fail += 1
+                    fetch_fail += 1
+                    continue
+                if df is not None:
+                    batch_ok += 1
+                    fetch_ok += 1
+                    df_map[sym] = df
+                else:
+                    batch_fail += 1
+                    fetch_fail += 1
+        except TimeoutError:
+            pending_symbols = [futures[ft] for ft in futures if not ft.done()]
+            timed_out = len(pending_symbols)
+            batch_fail += timed_out
+            fetch_fail += timed_out
+            print(
+                f"[funnel] 批次#{batch_no} 超时({BATCH_TIMEOUT}s)，"
+                f"已完成={batch_ok + batch_fail - timed_out}/{len(batch)}，"
+                f"未完成={timed_out}，将跳过剩余任务"
+            )
+            if pending_symbols:
+                preview = ", ".join(pending_symbols[:10])
+                suffix = "..." if len(pending_symbols) > 10 else ""
+                print(f"[funnel] 批次#{batch_no} 超时股票: {preview}{suffix}")
+            _terminate_executor_processes(ex, batch_no)
+        finally:
+            for ft in futures:
+                ft.cancel()
+            ex.shutdown(wait=False, cancel_futures=True)
+
+        batch_elapsed = time.monotonic() - batch_started
+        print(
+            f"[funnel] 批次#{batch_no} 完成: 成功={batch_ok}, 失败={batch_fail}, "
+            f"耗时={batch_elapsed:.1f}s, 累计成功={fetch_ok}, 累计失败={fetch_fail}"
+        )
+        if i + BATCH_SIZE < len(all_symbols) and BATCH_SLEEP > 0:
+            time.sleep(BATCH_SLEEP)
+
+    print(f"[funnel] 日线拉取完成: 成功={fetch_ok}, 失败={fetch_fail}")
+
+    # 运行 4 层漏斗
+    result = run_funnel(
+        all_symbols=all_symbols,
+        df_map=df_map,
+        bench_df=bench_df,
+        name_map=name_map,
+        market_cap_map=market_cap_map,
+        sector_map=sector_map,
+        cfg=cfg,
+    )
+
+    total_hits = sum(len(v) for v in result.triggers.values())
+    metrics = {
+        "total_symbols": len(all_symbols),
+        "fetch_ok": fetch_ok,
+        "fetch_fail": fetch_fail,
+        "layer1": len(result.layer1_symbols),
+        "layer2": len(result.layer2_symbols),
+        "layer3": len(result.layer3_symbols),
+        "top_sectors": result.top_sectors,
+        "total_hits": total_hits,
+        "by_trigger": {k: len(v) for k, v in result.triggers.items()},
+    }
+    print(f"[funnel] L1={metrics['layer1']}, L2={metrics['layer2']}, "
+          f"L3={metrics['layer3']}, 命中={total_hits}, "
+          f"Top行业={result.top_sectors}, 各触发={metrics['by_trigger']}")
+    return result.triggers, metrics
+
+
+def run(webhook_url: str) -> tuple[bool, list[dict]]:
+    """
+    执行 Wyckoff Funnel，漏斗完成后立即发送飞书通知。
+    返回 (成功与否, 用于研报的股票信息列表)。
+    每项为 {"code": str, "name": str, "tag": str}。
+    """
+    triggers, metrics = run_funnel_job()
+    name_map = _stock_name_map()
+
+    code_to_reasons: dict[str, list[str]] = {}
+    code_to_best_score: dict[str, float] = {}
+    for key, label in TRIGGER_LABELS.items():
+        for code, score in triggers.get(key, []):
+            if code not in code_to_reasons:
+                code_to_reasons[code] = []
+                code_to_best_score[code] = score
+            code_to_reasons[code].append(label)
+            code_to_best_score[code] = max(code_to_best_score.get(code, 0), score)
+
+    sorted_codes = sorted(
+        code_to_reasons.keys(),
+        key=lambda c: -code_to_best_score.get(c, 0),
+    )
+
+    lines = [
+        f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
+        f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
+        "",
+        "**筛选结果（代码 名称 | 筛选理由）**",
+        "",
+    ]
+    for code in sorted_codes:
+        name = name_map.get(code, code)
+        reasons = "、".join(code_to_reasons[code])
+        lines.append(f"• {code} {name} | {reasons}")
+
+    if not sorted_codes:
+        lines.append("无")
+
+    content = "\n".join(lines)
+    title = f"🔬 Wyckoff Funnel {date.today().strftime('%Y-%m-%d')}"
+    ok = send_feishu_notification(webhook_url, title, content)
+
+    symbols_for_report = [
+        {
+            "code": c,
+            "name": name_map.get(c, c),
+            "tag": "、".join(code_to_reasons[c]),
+        }
+        for c in sorted_codes[:STEP3_MAX_SYMBOLS]
+    ]
+    return (ok, symbols_for_report)
