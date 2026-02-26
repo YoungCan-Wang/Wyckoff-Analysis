@@ -15,6 +15,7 @@ Tushare Pro 客户端封装
 from __future__ import annotations
 
 import os
+import warnings
 
 
 def get_pro():
@@ -23,6 +24,12 @@ def get_pro():
     if not token:
         return None
     try:
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*Series\.fillna with 'method' is deprecated.*",
+            category=FutureWarning,
+            module=r"tushare\.pro\.data_pro",
+        )
         import tushare as ts
         ts.set_token(token)
         return ts.pro_api()
