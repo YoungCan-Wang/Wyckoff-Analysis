@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 阶段 3：批量 AI 研报
-拉取选中股票的 OHLCV → AI 分析 → 飞书发送
-
-环境变量：STEP3_MAX_SYMBOLS(6), GEMINI_MODEL_FALLBACK（主模型失败时备用）
+拉取选中股票的 OHLCV → 第五步特征工程 → AI 分析 → 飞书发送
 """
 from __future__ import annotations
 
@@ -15,22 +13,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 
-from ai_prompts import ALPHA_CIO_SYSTEM_PROMPT
-from fetch_a_share_csv import _resolve_trading_window, _fetch_hist, _build_export, _stock_name_from_code
+from ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
+from fetch_a_share_csv import _resolve_trading_window, _fetch_hist
 from llm_client import call_llm
-from utils import stock_sector_em
 from utils.feishu import send_feishu_notification
+from wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
-MAX_SYMBOLS = int(os.getenv("STEP3_MAX_SYMBOLS", "6"))
+MAX_SYMBOLS = 6
 FEISHU_MAX_LEN = 2000
+GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
+
+RECENT_DAYS = 15
+HIGHLIGHT_DAYS = 60
+HIGHLIGHT_PCT_THRESHOLD = 5.0
+HIGHLIGHT_VOL_RATIO = 2.0
 
 
 def _compress_report(report: str, max_len: int = FEISHU_MAX_LEN) -> str:
-    """优先保留结论、风险、操作建议，再按长度截断。"""
     if len(report) <= max_len:
         return report
-    # 简单策略：取前 max_len 字符，尽量在句号处截断
     truncated = report[:max_len]
     last_period = truncated.rfind("。")
     if last_period > max_len // 2:
@@ -38,55 +40,137 @@ def _compress_report(report: str, max_len: int = FEISHU_MAX_LEN) -> str:
     return truncated + "…"
 
 
+def generate_stock_payload(
+    stock_code: str,
+    stock_name: str,
+    wyckoff_tag: str,
+    df: pd.DataFrame,
+) -> str:
+    """
+    第五步：将 500 天 OHLCV 浓缩为发给 AI 的高密度文本。
+    1. 大背景（MA50 / MA200 / 乖离率）
+    2. 近 15 日量价切片（放量比 + 涨跌幅）
+    3. 近 60 日异动高光时刻
+    """
+    df = df.copy().sort_values("date").reset_index(drop=True)
+    close = df["close"].astype(float)
+    volume = df["volume"].astype(float)
+    df["ma50"] = close.rolling(50).mean()
+    df["ma200"] = close.rolling(200).mean()
+    df["vol_ma20"] = volume.rolling(20).mean()
+    df["pct_chg_calc"] = close.pct_change() * 100
+
+    latest = df.iloc[-1]
+    ma50_val = latest["ma50"]
+    ma200_val = latest["ma200"]
+    close_val = latest["close"]
+
+    if pd.notna(ma50_val) and pd.notna(ma200_val) and ma200_val > 0:
+        if ma50_val > ma200_val:
+            trend = "长期多头排列 (MA50 > MA200)"
+        else:
+            trend = "长期空头或震荡 (MA50 <= MA200)"
+        bias_200 = (close_val - ma200_val) / ma200_val * 100
+        background = (
+            f"  [结构背景] 现价:{close_val:.2f}, MA50:{ma50_val:.2f}, MA200:{ma200_val:.2f}。"
+            f"{trend}，年线乖离率:{bias_200:.1f}%"
+        )
+    else:
+        background = f"  [结构背景] 现价:{close_val:.2f}（数据不足以计算 MA200）"
+
+    header = f"• {stock_code} {stock_name} | 机器标签：{wyckoff_tag}\n{background}\n"
+
+    # 近 15 日量价切片
+    recent = df.tail(RECENT_DAYS)
+    recent_lines = ["  [近15日量价切片]:"]
+    for _, row in recent.iterrows():
+        vol_ratio = row["volume"] / row["vol_ma20"] if pd.notna(row["vol_ma20"]) and row["vol_ma20"] > 0 else 0
+        pct = row["pct_chg_calc"] if pd.notna(row["pct_chg_calc"]) else 0
+        date_str = str(row["date"])[5:10]
+        recent_lines.append(f"    {date_str}: 收{row['close']:.2f} ({pct:+.1f}%), 量比:{vol_ratio:.1f}x")
+
+    # 近 60 日异动高光
+    tail60 = df.tail(HIGHLIGHT_DAYS)
+    highlights = []
+    for _, row in tail60.iterrows():
+        pct = row["pct_chg_calc"] if pd.notna(row["pct_chg_calc"]) else 0
+        vol_ratio = row["volume"] / row["vol_ma20"] if pd.notna(row["vol_ma20"]) and row["vol_ma20"] > 0 else 0
+        if abs(pct) >= HIGHLIGHT_PCT_THRESHOLD or vol_ratio >= HIGHLIGHT_VOL_RATIO:
+            date_str = str(row["date"])[5:10]
+            tag_parts = []
+            if abs(pct) >= HIGHLIGHT_PCT_THRESHOLD:
+                tag_parts.append(f"涨跌{pct:+.1f}%")
+            if vol_ratio >= HIGHLIGHT_VOL_RATIO:
+                tag_parts.append(f"量比{vol_ratio:.1f}x")
+            highlights.append(f"    {date_str}: 收{row['close']:.2f} ({', '.join(tag_parts)})")
+
+    highlight_section = ""
+    if highlights:
+        highlight_section = "\n  [近60日异动高光]:\n" + "\n".join(highlights) + "\n"
+
+    return header + "\n".join(recent_lines) + "\n" + highlight_section + "\n"
+
+
 def run(
-    symbols: list[str],
+    symbols_info: list[dict] | list[str],
     webhook_url: str,
     api_key: str,
     model: str,
-) -> bool:
-    """拉取 symbols 的 OHLCV，生成批量研报并发送飞书。"""
-    if not symbols:
-        return True
+) -> tuple[bool, str]:
+    """
+    拉取 OHLCV → 第五步特征工程 → AI 研报 → 飞书发送。
+    symbols_info: list[{"code", "name", "tag"}] 或 list[str]（向后兼容）。
+    """
+    if not symbols_info:
+        print("[step3] 无输入股票，跳过")
+        return (True, "skipped_no_symbols")
 
-    if len(symbols) > MAX_SYMBOLS:
+    # 兼容旧调用（纯 str 列表）
+    items: list[dict] = []
+    for s in symbols_info:
+        if isinstance(s, str):
+            items.append({"code": s, "name": s, "tag": ""})
+        else:
+            items.append(s)
+
+    if len(items) > MAX_SYMBOLS:
         print(f"[step3] 超过上限 {MAX_SYMBOLS}，已截断")
-    symbols = symbols[:MAX_SYMBOLS]
+    items = items[:MAX_SYMBOLS]
 
     end_day = date.today() - timedelta(days=1)
     window = _resolve_trading_window(end_calendar_day=end_day, trading_days=TRADING_DAYS)
 
     parts: list[str] = []
     failed: list[tuple[str, str]] = []
-    for symbol in symbols:
+    for item in items:
+        code = item["code"]
+        name = item.get("name", code)
+        tag = item.get("tag", "")
         try:
-            df = _fetch_hist(symbol, window, "qfq")
-            sector = stock_sector_em(symbol, timeout=15)
-            df_export = _build_export(df, sector)
-            try:
-                name = _stock_name_from_code(symbol)
-            except Exception:
-                name = symbol
-            csv_text = df_export.to_csv(index=False, encoding="utf-8-sig")
-            parts.append(f"## {symbol} {name}\n\n```csv\n{csv_text}\n```")
+            df_raw = _fetch_hist(code, window, "qfq")
+            df = normalize_hist_from_fetch(df_raw)
+            payload = generate_stock_payload(code, name, tag, df)
+            parts.append(payload)
         except Exception as e:
-            failed.append((symbol, str(e)))
+            failed.append((code, str(e)))
 
     if not parts:
         if failed:
-            print(f"[step3] 全部获取失败: {failed}")
-        return True
+            detail = ", ".join(f"{s}({e})" for s, e in failed)
+            print(f"[step3] OHLCV 全部拉取失败: {detail}")
+            return (False, "data_all_failed")
+        return (True, "no_data_but_no_error")
 
     user_message = (
-        "请按 Alpha 投委会流程分析以下 OHLCV 数据（CSV 格式）。"
-        "输出精简研报，必须包含：**结论**、**风险**、**操作建议** 三部分，控制在 600 字以内。\n\n"
-        + "\n\n".join(parts)
+        "以下是通过 Wyckoff Funnel 4 层漏斗从全市场初筛出的候选名单。\n"
+        "请执行冷血审视、证伪淘汰、推演最小阻力路径，并按机密电报格式输出最终决断。\n\n"
+        + "\n".join(parts)
     )
 
     report = ""
     models_to_try = [model]
-    fallback = os.getenv("GEMINI_MODEL_FALLBACK", "").strip()
-    if fallback and fallback != model:
-        models_to_try.append(fallback)
+    if GEMINI_MODEL_FALLBACK and GEMINI_MODEL_FALLBACK != model:
+        models_to_try.append(GEMINI_MODEL_FALLBACK)
 
     for m in models_to_try:
         try:
@@ -94,7 +178,7 @@ def run(
                 provider="gemini",
                 model=m,
                 api_key=api_key,
-                system_prompt=ALPHA_CIO_SYSTEM_PROMPT,
+                system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT,
                 user_message=user_message,
                 timeout=120,
             )
@@ -102,11 +186,16 @@ def run(
         except Exception as e:
             print(f"[step3] 模型 {m} 失败: {e}")
             if m == models_to_try[-1]:
-                raise
+                return (False, "llm_failed")
 
     content = _compress_report(report)
     if failed:
         content += f"\n\n**获取失败**: {', '.join(f'{s}({e})' for s, e in failed)}"
 
     title = f"📄 批量研报 {date.today().strftime('%Y-%m-%d')}"
-    return send_feishu_notification(webhook_url, title, content)
+    sent = send_feishu_notification(webhook_url, title, content)
+    if not sent:
+        print("[step3] 飞书推送失败")
+        return (False, "feishu_failed")
+    print(f"[step3] 研报发送成功，股票数={len(items)}，拉取失败数={len(failed)}")
+    return (True, "ok")

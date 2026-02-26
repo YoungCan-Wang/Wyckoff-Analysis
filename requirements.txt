@@ -1,4 +1,7 @@
 akshare>=1.18.9
+baostock
+efinance>=0.2.0
+tushare>=1.2.89
 pandas>=2.3.3
 streamlit>=1.52.2
 streamlit-javascript>=0.1.5
@@ -8,7 +11,6 @@ sqlalchemy>=2.0.0
 tenacity>=8.2.0
 python-dotenv>=1.0.0
 supabase>=2.0.0
-baostock
 py-mini-racer>=0.6.0
 matplotlib>=3.8.0
 pillow>=10.0.0
