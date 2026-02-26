@@ -3,6 +3,7 @@ import os
 import streamlit as st
 
 from auth_component import check_auth, login_form
+from token_storage import restore_tokens_from_storage
 
 
 def _set_default(key: str, value) -> None:
@@ -32,6 +33,19 @@ def init_session_state() -> None:
     _set_default("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
     if st.session_state.gemini_api_key is None:
         st.session_state.gemini_api_key = ""
+
+    # 从 localStorage 恢复 token（刷新页面后登录态保持）
+    access = st.session_state.get("access_token") or ""
+    refresh = st.session_state.get("refresh_token") or ""
+    if (not access or not refresh) and not st.session_state.get("_token_restore_attempted"):
+        try:
+            st.session_state["_token_restore_attempted"] = True
+            restored_access, restored_refresh = restore_tokens_from_storage()
+            if restored_access and restored_refresh:
+                st.session_state.access_token = restored_access
+                st.session_state.refresh_token = restored_refresh
+        except Exception:
+            pass
 
 
 def require_auth() -> None:
