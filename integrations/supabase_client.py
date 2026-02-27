@@ -2,7 +2,7 @@ import os
 import streamlit as st
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
-from constants import TABLE_USER_SETTINGS
+from core.constants import TABLE_USER_SETTINGS
 
 
 def _get_supabase_client_base() -> Client:
@@ -71,6 +71,11 @@ def load_user_settings(user_id: str):
             # 仅当 session_state 为空时才覆盖，或者强制覆盖
             st.session_state.feishu_webhook = settings.get("feishu_webhook") or ""
             st.session_state.gemini_api_key = settings.get("gemini_api_key") or ""
+            st.session_state.tushare_token = settings.get("tushare_token") or ""
+            st.session_state.gemini_model = settings.get("gemini_model") or "gemini-2.5-flash"
+            st.session_state.tg_bot_token = settings.get("tg_bot_token") or ""
+            st.session_state.tg_chat_id = settings.get("tg_chat_id") or ""
+            st.session_state.my_portfolio_state = settings.get("my_portfolio_state") or ""
             return True
     except APIError as e:
         print(f"Supabase API Error in load_user_settings: {e.code} - {e.message}")

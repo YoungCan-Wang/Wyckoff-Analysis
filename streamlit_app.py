@@ -9,11 +9,11 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
+    retry_if_exception,
 )
 from dotenv import load_dotenv
 import pandas as pd
-from fetch_a_share_csv import (
+from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
     _build_export,
@@ -24,12 +24,12 @@ from fetch_a_share_csv import (
 )
 from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 from utils.feishu import send_feishu_notification
-from download_history import add_download_history
-from auth_component import logout
-from layout import setup_page, show_user_error
-from ui_helpers import show_page_loading, inject_custom_css
-from navigation import show_right_nav
-from stock_cache import (
+from core.download_history import add_download_history
+from app.auth_component import logout
+from app.layout import is_data_source_failure_message, setup_page, show_user_error
+from app.ui_helpers import show_page_loading, inject_custom_css
+from app.navigation import show_right_nav
+from core.stock_cache import (
     cleanup_cache,
     denormalize_hist_df,
     get_cache_meta,
@@ -74,10 +74,17 @@ def _maybe_cleanup_cache() -> None:
 
 
 # 增加网络请求重试机制，应对 RemoteDisconnected 等反爬限制
+def _should_retry_fetch(e: Exception) -> bool:
+    # 明确的“数据源全失败”不应重试，否则页面会长时间卡在加载中
+    if is_data_source_failure_message(str(e)):
+        return False
+    return True
+
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=3, max=30),
-    retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试，确保稳健
+    retry=retry_if_exception(_should_retry_fetch),
     reraise=True,
 )
 def _fetch_hist_with_retry(symbol, window, adjust):
@@ -160,6 +167,9 @@ def _friendly_error_message(e: Exception, symbol: str, trading_days: int) -> str
         return f"股票代码 {symbol} 未找到或已退市"
     if "empty data returned" in msg:
         return f"数据源返回空 (可能停牌或上市不足 {trading_days} 天)"
+    # 数据源拉取失败：直接展示原始提示（已标明哪些免费数据源失败）
+    if is_data_source_failure_message(msg):
+        return msg
     return f"未知错误: {msg}"
 
 
@@ -665,7 +675,11 @@ with content_col:
                 loading.empty()
 
         except Exception as e:
-            show_user_error("发生错误，请稍后重试。", e)
+            msg = str(e)
+            if is_data_source_failure_message(msg):
+                show_user_error(msg, None)
+            else:
+                show_user_error("发生错误，请稍后重试。", e)
 
     else:
         st.info("👈 请在左侧输入参数并点击“开始获取数据”")

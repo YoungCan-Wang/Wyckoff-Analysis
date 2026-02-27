@@ -52,8 +52,8 @@ streamlit run streamlit_app.py
 **命令行**：批量导出。
 
 ```bash
-python fetch_a_share_csv.py --symbol 300364
-python -u fetch_a_share_csv.py --symbols 000973 600798 601390
+python -m integrations.fetch_a_share_csv --symbol 300364
+python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 ```
 
 ---
@@ -95,22 +95,40 @@ python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 
 ### 常见报错
 
-|------|------|------|
-| `配置缺失: FEISHU_WEBHOOK_URL` | 未配置飞书 Secret | 在仓库 Secrets 添加 `FEISHU_WEBHOOK_URL` |
-| `配置缺失: GEMINI_API_KEY` | 未配置模型 Key 或已失效 | 更新 `GEMINI_API_KEY` 后重跑 |
-| `市值数据为空（TUSHARE_TOKEN 可能缺失/失效）` | `TUSHARE_TOKEN` 缺失/失效/额度问题 | 检查并更新 `TUSHARE_TOKEN`，确认账号权限 |
-| `[step3] 模型 ... 失败` / `llm_failed` | 模型不可用、限流、网络抖动 | 更换 `GEMINI_MODEL` 或稍后重试 |
-| `[step3] 飞书推送失败` / `feishu_failed` | Webhook 无效、限流、网络问题 | 重新生成飞书机器人 Webhook 并替换 Secret |
-| `阶段 3 私人再平衡: 跳过（MY_PORTFOLIO_STATE 未配置）` | 未配置账户状态 | 配置 `MY_PORTFOLIO_STATE` 后重跑 |
-| `阶段 3 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）` | 未配置 Telegram | 配置 Telegram Secrets 后重跑 |
-| `User location is not supported for the API use` | 模型地域限制 | 更换可用网络出口或供应商 |
-| Action 超时或明显慢于 2 小时 | 数据源抖动、重试变多 | 查看批次日志定位卡点，必要时手动重跑 |
+- `配置缺失: FEISHU_WEBHOOK_URL`
+  - 原因：未配置飞书 Secret
+  - 处理：在仓库 Secrets 添加 `FEISHU_WEBHOOK_URL`
+- `配置缺失: GEMINI_API_KEY`
+  - 原因：未配置模型 Key 或已失效
+  - 处理：更新 `GEMINI_API_KEY` 后重跑
+- `市值数据为空（TUSHARE_TOKEN 可能缺失/失效）`
+  - 原因：`TUSHARE_TOKEN` 缺失/失效/额度问题
+  - 处理：检查并更新 `TUSHARE_TOKEN`，确认账号权限
+- `[step3] 模型 ... 失败` / `llm_failed`
+  - 原因：模型不可用、限流、网络抖动
+  - 处理：更换 `GEMINI_MODEL` 或稍后重试
+- `[step3] 飞书推送失败` / `feishu_failed`
+  - 原因：Webhook 无效、限流、网络问题
+  - 处理：重新生成飞书机器人 Webhook 并替换 Secret
+- `阶段 3 私人再平衡: 跳过（MY_PORTFOLIO_STATE 未配置）`
+  - 原因：未配置账户状态
+  - 处理：配置 `MY_PORTFOLIO_STATE` 后重跑
+- `阶段 3 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）`
+  - 原因：未配置 Telegram
+  - 处理：配置 Telegram Secrets 后重跑
+- `User location is not supported for the API use`
+  - 原因：模型地域限制
+  - 处理：更换可用网络出口或供应商
+- `Action 超时或明显慢于 2 小时`
+  - 原因：数据源抖动、重试变多
+  - 处理：查看批次日志定位卡点，必要时手动重跑
 
 ### 私人决断（可选）
 
 若配置了持仓和 Telegram，选股和研报跑完后会单独发一份「针对你账户的买卖建议」到你的 Telegram，只有你能看到。不配则跳过，不影响选股和研报。
 
 账户格式见 `.env.example`。其中 `total_equity` 是可选字段，不填会自动按“`free_cash + 持仓最新市值`”推导。TG_CHAT_ID 需先给 bot 发 `/start`，再从 getUpdates 返回里取 chat.id。
+
 ---
 
 ## 交流
@@ -131,9 +149,10 @@ python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 
 ```text
 .
-├── fetch_a_share_csv.py    # 数据拉取、CSV 生成
 ├── streamlit_app.py        # Web 入口
-├── wyckoff_engine.py       # 4 层漏斗引擎
+├── app/                    # UI 组件（layout/auth/navigation）
+├── core/                   # 核心策略与领域逻辑
+├── integrations/           # 数据源/LLM/Supabase 适配层
 ├── scripts/
 │   ├── wyckoff_funnel.py   # 定时选股任务
 │   ├── step3_batch_report.py  # AI 研报
@@ -161,7 +180,7 @@ python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 `--adjust`：`""` 不复权，`qfq` 前复权，`hfq` 后复权。
 
 ```bash
-python fetch_a_share_csv.py --symbol 300364 --adjust qfq
+python -m integrations.fetch_a_share_csv --symbol 300364 --adjust qfq
 ```
 
 ### 常见问题

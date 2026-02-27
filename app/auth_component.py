@@ -3,11 +3,11 @@ import re
 import streamlit as st
 from supabase import AuthApiError
 
-from supabase_client import get_supabase_client, load_user_settings
-from ui_helpers import show_page_loading
+from integrations.supabase_client import get_supabase_client, load_user_settings
+from app.ui_helpers import show_page_loading
 
 try:
-    from token_storage import clear_tokens_from_storage, persist_tokens_to_storage
+    from core.token_storage import clear_tokens_from_storage, persist_tokens_to_storage
 except ImportError:
 
     def persist_tokens_to_storage(a: str, r: str) -> bool:
@@ -198,6 +198,7 @@ def login_form():
                             st.error(f"登录失败: {str(e)}")
 
         with tab2:
+            st.caption("注册好账号密码后，无需邮件确认即可登录。")
             with st.form("register_form", clear_on_submit=False):
                 new_email = st.text_input(
                     "邮箱", key="reg_email", placeholder="name@example.com"
@@ -238,7 +239,7 @@ def login_form():
                                     {"email": new_email, "password": new_password}
                                 )
                                 st.success(
-                                    "注册成功！请检查邮箱并点击验证链接完成激活。"
+                                    "注册成功！无需邮件确认，可直接登录。"
                                 )
                             finally:
                                 loading.empty()

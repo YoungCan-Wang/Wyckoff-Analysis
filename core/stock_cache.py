@@ -7,8 +7,8 @@ from typing import Optional
 import pandas as pd
 from postgrest.exceptions import APIError
 
-from constants import TABLE_STOCK_CACHE_DATA, TABLE_STOCK_CACHE_META
-from supabase_client import get_supabase_client
+from core.constants import TABLE_STOCK_CACHE_DATA, TABLE_STOCK_CACHE_META
+from integrations.supabase_client import get_supabase_client
 
 
 def _parse_iso_datetime(value: str) -> datetime:

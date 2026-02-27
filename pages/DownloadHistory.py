@@ -5,9 +5,9 @@ import sys
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from layout import setup_page
-from download_history import get_download_history
-from navigation import show_right_nav
+from app.layout import setup_page
+from core.download_history import get_download_history
+from app.navigation import show_right_nav
 
 
 setup_page(page_title="下载历史", page_icon="🕘")

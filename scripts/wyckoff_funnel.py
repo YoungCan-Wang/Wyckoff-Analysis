@@ -16,12 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 
-from fetch_a_share_csv import (
+from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
     get_stocks_by_board,
     _normalize_symbols,
 )
-from wyckoff_engine import (
+from core.wyckoff_engine import (
     FunnelConfig,
     layer1_filter,
     layer2_strength,
@@ -29,7 +29,7 @@ from wyckoff_engine import (
     layer4_triggers,
     normalize_hist_from_fetch,
 )
-from data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
+from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
 from utils.feishu import send_feishu_notification
 
 TRIGGER_LABELS = {
@@ -52,14 +52,14 @@ def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fetch_hist(symbol: str, window, adjust: str) -> pd.DataFrame:
-    from fetch_a_share_csv import _fetch_hist as _fh
+    from integrations.fetch_a_share_csv import _fetch_hist as _fh
     df = _fh(symbol=symbol, window=window, adjust=adjust)
     return _normalize_hist(df)
 
 
 def _stock_name_map() -> dict[str, str]:
     try:
-        from fetch_a_share_csv import get_all_stocks
+        from integrations.fetch_a_share_csv import get_all_stocks
         items = get_all_stocks()
         return {x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)}
     except Exception:

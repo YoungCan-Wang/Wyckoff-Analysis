@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import streamlit as st
-from supabase_client import get_supabase_client
+from integrations.supabase_client import get_supabase_client
 from postgrest.exceptions import APIError
-from constants import TABLE_DOWNLOAD_HISTORY
+from core.constants import TABLE_DOWNLOAD_HISTORY
 
 
 def _current_user_id() -> str | None:

@@ -5,10 +5,10 @@ import sys
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from layout import setup_page
-from navigation import show_right_nav
-from supabase_client import save_user_settings
-from ui_helpers import show_page_loading
+from app.layout import setup_page
+from app.navigation import show_right_nav
+from integrations.supabase_client import save_user_settings
+from app.ui_helpers import show_page_loading
 
 setup_page(page_title="设置", page_icon="⚙️")
 
@@ -33,6 +33,11 @@ with content_col:
         settings = {
             "feishu_webhook": st.session_state.feishu_webhook,
             "gemini_api_key": st.session_state.gemini_api_key,
+            "tushare_token": st.session_state.tushare_token,
+            "gemini_model": st.session_state.gemini_model,
+            "tg_bot_token": st.session_state.tg_bot_token,
+            "tg_chat_id": st.session_state.tg_chat_id,
+            "my_portfolio_state": st.session_state.my_portfolio_state,
         }
 
         loading = show_page_loading(title="加载中...", subtitle="正在保存到云端")
@@ -83,9 +88,54 @@ with content_col:
                 help="获取 Key: [Google AI Studio](https://aistudio.google.com/api-keys)",
             )
 
+            new_gemini_model = st.text_input(
+                "Gemini 模型",
+                value=st.session_state.gemini_model,
+                placeholder="gemini-2.0-flash",
+                help="如 gemini-2.0-flash、gemini-2.5-flash 等",
+            )
+
             if st.button("💾 保存 AI 配置", key="save_ai"):
-                if new_gemini_key != st.session_state.gemini_api_key:
-                    st.session_state.gemini_api_key = new_gemini_key
+                st.session_state.gemini_api_key = new_gemini_key
+                st.session_state.gemini_model = new_gemini_model
+                on_save_settings()
+
+        st.divider()
+
+        # 3. 数据源
+        st.subheader("📊 数据源配置")
+        with st.container(border=True):
+            st.markdown("**Tushare Token**（可选）用于行情、市值等。不配置时优先用 akshare/baostock/efinance，三者均失败时才需 Tushare。")
+            new_tushare = st.text_input(
+                "Tushare Token",
+                value=st.session_state.tushare_token,
+                type="password",
+                placeholder="Tushare Pro token",
+                key="tushare_input",
+            )
+            if st.button("💾 保存数据源配置", key="save_tushare"):
+                st.session_state.tushare_token = new_tushare
+                on_save_settings()
+
+        st.divider()
+
+        # 4. 私人决断（Step4）
+        st.subheader("🕶️ 私人决断（Step4）")
+        with st.container(border=True):
+            st.markdown("可选，用于 Telegram 私密推送买卖建议。")
+            new_tg_bot = st.text_input("Telegram Bot Token", value=st.session_state.tg_bot_token, type="password", key="tg_bot")
+            new_tg_chat = st.text_input("Telegram Chat ID", value=st.session_state.tg_chat_id, type="password", key="tg_chat")
+            new_portfolio = st.text_area(
+                "持仓 JSON（MY_PORTFOLIO_STATE）",
+                value=st.session_state.my_portfolio_state,
+                height=120,
+                placeholder='{"free_cash":100000,"positions":[...]}',
+                key="portfolio_input",
+            )
+            if st.button("💾 保存 Step4 配置", key="save_step4"):
+                st.session_state.tg_bot_token = new_tg_bot
+                st.session_state.tg_chat_id = new_tg_chat
+                st.session_state.my_portfolio_state = new_portfolio
                 on_save_settings()
 
         st.info("☁️ 您的配置已启用云端同步，将在所有登录设备间自动漫游。")

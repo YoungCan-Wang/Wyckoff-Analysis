@@ -11,21 +11,21 @@ import pandas as pd
 import streamlit as st
 
 from utils import extract_symbols_from_text
-from layout import setup_page
-from wyckoff_engine import (
+from app.layout import is_data_source_failure_message, setup_page
+from core.wyckoff_engine import (
     FunnelConfig,
     normalize_hist_from_fetch,
     run_funnel,
 )
-from fetch_a_share_csv import (
+from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
     get_all_stocks,
     get_stocks_by_board,
     _normalize_symbols,
 )
-from data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
-from navigation import show_right_nav
+from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
+from app.navigation import show_right_nav
 
 _CACHE_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "data", "wyckoff_cache")
@@ -37,6 +37,10 @@ content_col = show_right_nav()
 with content_col:
     st.title("🔬 Wyckoff Funnel")
     st.markdown("4 层漏斗：剥离垃圾 → 强弱甄别 → 板块共振 → 威科夫狙击")
+    st.warning(
+        "网页端执行「沙里淘金」耗时较长，受限流/超时影响**大概率失败**。"
+        "建议移步 GitHub 按 README 配置 GitHub Actions 定时任务（例如工作日 16:30 自动运行）。"
+    )
 
     TRIGGER_LABELS = {
         "spring": "Spring（终极震仓）",
@@ -215,7 +219,11 @@ with content_col:
                     elif df is not None:
                         data_map[sym] = df
         except Exception as exc:
-            st.error(f"拉取出错: {exc}")
+            msg = str(exc)
+            if is_data_source_failure_message(msg):
+                st.error(msg)
+            else:
+                st.error(f"拉取出错: {exc}")
 
         progress.progress(1.0)
         progress.empty()

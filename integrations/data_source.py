@@ -45,6 +45,9 @@ def _fetch_stock_akshare(symbol: str, start: str, end: str, adjust: str) -> pd.D
     )
     if df is None or df.empty:
         raise RuntimeError("akshare empty")
+    if "日期" in df.columns:
+        df = df.copy()
+        df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.strftime("%Y-%m-%d")
     return df
 
 
@@ -70,7 +73,9 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
         )
         if rs.error_code != "0":
             raise RuntimeError(f"baostock: {rs.error_msg}")
-        rows = [rs.get_row_data() for _ in range(rs.get_row_count())]
+        rows: list[list[str]] = []
+        while rs.next():
+            rows.append(rs.get_row_data())
         if not rows:
             raise RuntimeError("baostock empty")
         df = pd.DataFrame(rows, columns=rs.fields)
@@ -78,6 +83,10 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
             "date": "日期", "open": "开盘", "high": "最高", "low": "最低",
             "close": "收盘", "volume": "成交量", "amount": "成交额", "pctChg": "涨跌幅",
         })
+        df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.strftime("%Y-%m-%d")
+        for c in ["开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
         df["换手率"] = pd.NA
         df["振幅"] = pd.NA
         return df
@@ -96,6 +105,26 @@ def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
         df = result
     if df is None or (hasattr(df, "empty") and df.empty):
         raise RuntimeError("efinance empty")
+
+    # efinance 不同版本列名可能带单位后缀，如：涨跌幅(%)、成交额(元)
+    df = df.copy()
+    def _rename_prefix(std: str) -> None:
+        if std in df.columns:
+            return
+        for c in df.columns:
+            if str(c).startswith(std):
+                df.rename(columns={c: std}, inplace=True)
+                return
+
+    # 日期列兼容
+    if "日期" not in df.columns:
+        for c in df.columns:
+            if str(c).endswith("日期") or "日期" in str(c):
+                df.rename(columns={c: "日期"}, inplace=True)
+                break
+
+    for std in ["开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅", "换手率", "振幅"]:
+        _rename_prefix(std)
     # efinance: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 换手率
     out_cols = ["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅", "换手率", "振幅"]
     for c in ["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅"]:
@@ -146,26 +175,43 @@ def fetch_stock_hist(
     start_s = start.strftime("%Y%m%d") if isinstance(start, date) else str(start).replace("-", "")
     end_s = end.strftime("%Y%m%d") if isinstance(end, date) else str(end).replace("-", "")
 
+    failed_sources: list[str] = []
+
     # 1. akshare
     try:
         return _fetch_stock_akshare(symbol, start_s, end_s, adjust)
+    except ModuleNotFoundError as e:
+        failed_sources.append(f"akshare(缺少依赖 {e.name})")
     except Exception:
-        pass
+        failed_sources.append("akshare")
 
     # 2. baostock (仅前复权)
     try:
         return _fetch_stock_baostock(symbol, start_s, end_s)
     except Exception:
-        pass
+        failed_sources.append("baostock")
 
     # 3. efinance (仅前复权)
     try:
         return _fetch_stock_efinance(symbol, start_s, end_s)
+    except ModuleNotFoundError as e:
+        failed_sources.append(f"efinance(未安装: {e.name})")
     except Exception:
-        pass
+        failed_sources.append("efinance")
 
-    # 4. tushare
-    return _fetch_stock_tushare(symbol, start_s, end_s, adjust)
+    # 4. tushare（可选，未配置则直接报错）
+    from utils.tushare_client import get_pro
+    if get_pro() is not None:
+        try:
+            return _fetch_stock_tushare(symbol, start_s, end_s, adjust)
+        except Exception as e:
+            raise RuntimeError(
+                f"拉取失败（非程序错误）：免费数据源 {', '.join(failed_sources)} 均失败；tushare 也失败：{e}"
+            ) from e
+
+    raise RuntimeError(
+        f"拉取失败（非程序错误）：免费数据源 {', '.join(failed_sources)} 均无可用数据。可配置 Tushare Token 作为备用。"
+    )
 
 
 # --- 大盘指数 ---
@@ -174,11 +220,13 @@ def _fetch_index_tushare(code: str, start: str, end: str) -> pd.DataFrame:
     from utils.tushare_client import get_pro
     pro = get_pro()
     if pro is None:
-        raise RuntimeError("大盘数据需 TUSHARE_TOKEN，请配置 GitHub Secret 或 .env")
+        raise RuntimeError(
+            "拉取失败（非程序错误）：大盘指数需 Tushare Token，免费数据源（akshare 等）不支持大盘指数。请配置 TUSHARE_TOKEN。"
+        )
     ts_code = _index_to_ts_code(code)
     df = pro.index_daily(ts_code=ts_code, start_date=start, end_date=end)
     if df is None or df.empty:
-        raise RuntimeError("tushare index empty")
+        raise RuntimeError("拉取失败（非程序错误）：tushare 大盘指数返回空数据")
     df = df.copy()
     df["date"] = df["trade_date"].astype(str).str[:4] + "-" + df["trade_date"].astype(str).str[4:6] + "-" + df["trade_date"].astype(str).str[6:8]
     df["volume"] = pd.to_numeric(df["vol"], errors="coerce")
@@ -202,7 +250,7 @@ import os
 import time
 from pathlib import Path
 
-_DATA_CACHE_DIR = Path(__file__).resolve().parent / "data"
+_DATA_CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 _SECTOR_CACHE = _DATA_CACHE_DIR / "sector_map_cache.json"
 _MARKET_CAP_CACHE = _DATA_CACHE_DIR / "market_cap_cache.json"
 _CACHE_TTL = 24 * 60 * 60

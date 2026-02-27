@@ -11,14 +11,16 @@ import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from ai_prompts import PRIVATE_PM_SYSTEM_PROMPT
-from fetch_a_share_csv import _fetch_hist, _resolve_trading_window
-from llm_client import call_llm
+from integrations.ai_prompts import PRIVATE_PM_SYSTEM_PROMPT
+from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
+from integrations.llm_client import call_llm
 from scripts.step3_batch_report import generate_stock_payload
-from wyckoff_engine import normalize_hist_from_fetch
+from core.wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
 TELEGRAM_MAX_LEN = 3900
+DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
+DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -101,21 +103,27 @@ def _dump_model_input(
     system_prompt: str,
     user_message: str,
 ) -> str:
+    if not DEBUG_MODEL_IO:
+        return ""
+
     logs_dir = os.getenv("LOGS_DIR", "logs")
     os.makedirs(logs_dir, exist_ok=True)
     path = os.path.join(logs_dir, f"step4_model_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-    symbols_line = ", ".join(f"{x.code}:{x.name}" for x in portfolio.positions) or "(no_positions)"
+    symbols_line = ", ".join(f"{x.code}" for x in portfolio.positions) or "(no_positions)"
     body = (
         f"[step4] model={model}\n"
+        f"[step4] position_count={len(portfolio.positions)}\n"
         f"[step4] positions={symbols_line}\n"
-        f"[step4] free_cash={portfolio.free_cash}, total_equity={portfolio.total_equity}\n"
         f"[step4] system_prompt_len={len(system_prompt)}\n"
         f"[step4] user_message_len={len(user_message)}\n"
-        "\n===== SYSTEM PROMPT =====\n"
-        f"{system_prompt}\n"
-        "\n===== USER MESSAGE =====\n"
-        f"{user_message}\n"
     )
+    if DEBUG_MODEL_IO_FULL:
+        body += (
+            "\n===== SYSTEM PROMPT =====\n"
+            f"{system_prompt}\n"
+            "\n===== USER MESSAGE =====\n"
+            f"{user_message}\n"
+        )
     with open(path, "w", encoding="utf-8") as f:
         f.write(body)
     print(f"[step4] 模型输入已落盘: {path}")

@@ -40,8 +40,9 @@ jobs:
         run: |
           python -c "import streamlit; import akshare; import pandas; print('OK')"
 
-      - name: Py compile scripts
-        run: python -m py_compile scripts/*.py
+      - name: Py compile all modules
+        run: |
+          python -m py_compile $(find app core integrations pages scripts utils -name "*.py")
 
       - name: Daily job dry-run
         run: python scripts/daily_job.py --dry-run

@@ -23,7 +23,7 @@ class TradingWindow:
 
 
 def _trade_dates() -> list[date]:
-    cache_dir = Path(__file__).resolve().parent / "data"
+    cache_dir = Path(__file__).resolve().parent.parent / "data"
     cache_path = cache_dir / "trade_dates_cache.json"
     cache_ttl_seconds = 7 * 24 * 60 * 60
 
@@ -142,7 +142,7 @@ def get_all_stocks() -> list[dict[str, str]]:
     Returns:
         list of dict: [{"code": "000001", "name": "平安银行"}, ...]
     """
-    cache_dir = Path(__file__).resolve().parent / "data"
+    cache_dir = Path(__file__).resolve().parent.parent / "data"
     cache_path = cache_dir / "stock_list_cache.json"
     cache_ttl_seconds = 24 * 60 * 60
 
@@ -220,7 +220,7 @@ def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
 
 def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame:
     """个股日线：akshare→baostock→efinance→tushare fallback"""
-    from data_source import fetch_stock_hist
+    from integrations.data_source import fetch_stock_hist
     return fetch_stock_hist(
         symbol=symbol,
         start=window.start_trade_date,
