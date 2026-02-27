@@ -149,6 +149,7 @@ def run(
     webhook_url: str,
     api_key: str,
     model: str,
+    benchmark_context: dict | None = None,
 ) -> tuple[bool, str]:
     """
     拉取 OHLCV → 第五步特征工程 → AI 研报 → 飞书发送。
@@ -192,12 +193,29 @@ def run(
             return (False, "data_all_failed")
         return (True, "no_data_but_no_error")
 
+    benchmark_lines = []
+    if benchmark_context:
+        benchmark_lines.append("[宏观水温 / Benchmark Context]")
+        benchmark_lines.append(
+            f"regime={benchmark_context.get('regime')}, "
+            f"close={benchmark_context.get('close')}, "
+            f"ma50={benchmark_context.get('ma50')}, "
+            f"ma200={benchmark_context.get('ma200')}, "
+            f"ma50_slope_5d={benchmark_context.get('ma50_slope_5d')}"
+        )
+        benchmark_lines.append(
+            f"recent3_pct={benchmark_context.get('recent3_pct')}, "
+            f"recent3_cum_pct={benchmark_context.get('recent3_cum_pct')}, "
+            f"tuned={benchmark_context.get('tuned')}"
+        )
+
     user_message = (
-        "以下是通过 Wyckoff Funnel 命中的全量候选名单。\n"
-        "请先从全部输入中筛出“值得加入自选观察池”的标的（数量不限），"
-        f"再从观察池中严格挑选“可操作池”{OPERATION_TARGET}只。\n"
-        f"输出必须包含两个部分：1) 观察池（不限） 2) 操作池（固定{OPERATION_TARGET}只，不足{OPERATION_TARGET}只要说明不足原因）。\n"
-        "硬约束：可操作池必须是观察池子集，且两部分只能使用输入列表中的股票代码。\n\n"
+        ("{}\n\n".format("\n".join(benchmark_lines)) if benchmark_lines else "")
+        + "以下是通过 Wyckoff Funnel 命中的全量候选名单。\n"
+        + "请先从全部输入中筛出“值得加入自选观察池”的标的（数量不限），并明确每只的观察条件；"
+        + f"再从观察池中严格挑选“次日可买入的操作池”{OPERATION_TARGET}只。\n"
+        + f"输出必须包含两个部分：1) 观察池（不限，含观察条件） 2) 操作池（固定{OPERATION_TARGET}只）。\n"
+        + "硬约束：操作池必须是观察池子集，且两部分只能使用输入列表中的股票代码。\n\n"
         + "\n".join(parts)
     )
     _dump_model_input(items=items, model=model, system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT, user_message=user_message)

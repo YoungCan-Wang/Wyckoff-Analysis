@@ -9,7 +9,7 @@ Layer 4: 威科夫狙击 (Spring / LPS / Effort vs Result)
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import numpy as np
@@ -58,6 +58,11 @@ class FunnelConfig:
     ma_hold: int = 20
     bench_drop_days: int = 3
     bench_drop_threshold: float = -2.0
+    rs_window_long: int = 10
+    rs_window_short: int = 3
+    rs_min_long: float = 0.0
+    rs_min_short: float = 0.0
+    enable_rs_filter: bool = True
 
     # Layer 3
     top_n_sectors: int = 3
@@ -143,8 +148,36 @@ def layer2_strength(
 ) -> list[str]:
     """
     MA50 > MA200 多头排列，OR 大盘连跌时仍守住 MA20。
+    同时引入相对强度 RS 硬过滤：
+    RS_N = 个股近N日累计涨跌幅 - 大盘近N日累计涨跌幅
     """
+
+    def _cum_return_pct_from_series(pct_series: pd.Series) -> float | None:
+        s = pd.to_numeric(pct_series, errors="coerce").dropna()
+        if s.empty:
+            return None
+        return float(((s / 100.0 + 1.0).prod() - 1.0) * 100.0)
+
+    def _calc_rs(stock_df: pd.DataFrame, bench_sorted_df: pd.DataFrame) -> tuple[float | None, float | None]:
+        stock_p = stock_df[["date", "pct_chg"]].copy()
+        bench_p = bench_sorted_df[["date", "pct_chg"]].copy()
+        merged = stock_p.merge(bench_p, on="date", how="inner", suffixes=("_s", "_b"))
+        if merged.empty:
+            return (None, None)
+        w_long = max(int(cfg.rs_window_long), 1)
+        w_short = max(int(cfg.rs_window_short), 1)
+        if len(merged) < max(w_long, w_short):
+            return (None, None)
+        s_long = _cum_return_pct_from_series(merged["pct_chg_s"].tail(w_long))
+        b_long = _cum_return_pct_from_series(merged["pct_chg_b"].tail(w_long))
+        s_short = _cum_return_pct_from_series(merged["pct_chg_s"].tail(w_short))
+        b_short = _cum_return_pct_from_series(merged["pct_chg_b"].tail(w_short))
+        if s_long is None or b_long is None or s_short is None or b_short is None:
+            return (None, None)
+        return (s_long - b_long, s_short - b_short)
+
     bench_dropping = False
+    bench_sorted: pd.DataFrame | None = None
     if bench_df is not None and not bench_df.empty:
         bench_sorted = bench_df.sort_values("date")
         if len(bench_sorted) >= cfg.bench_drop_days:
@@ -174,7 +207,15 @@ def layer2_strength(
             if pd.notna(last_ma_hold) and last_close >= last_ma_hold:
                 holding_ma20 = True
 
-        if bullish_alignment or holding_ma20:
+        rs_ok = True
+        if cfg.enable_rs_filter and bench_sorted is not None and not bench_sorted.empty:
+            rs_long, rs_short = _calc_rs(df_sorted, bench_sorted)
+            if rs_long is None or rs_short is None:
+                rs_ok = False
+            else:
+                rs_ok = (rs_long >= cfg.rs_min_long) and (rs_short >= cfg.rs_min_short)
+
+        if (bullish_alignment or holding_ma20) and rs_ok:
             passed.append(sym)
     return passed
 

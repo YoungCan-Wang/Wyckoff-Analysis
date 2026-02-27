@@ -102,6 +102,93 @@ def _terminate_executor_processes(ex: ProcessPoolExecutor, batch_no: int) -> Non
         print(f"[funnel] 批次#{batch_no} 已强制终止 {killed} 个卡住子进程")
 
 
+def _analyze_benchmark_and_tune_cfg(
+    bench_df: pd.DataFrame | None,
+    cfg: FunnelConfig,
+) -> dict:
+    """
+    Step 0：大盘总闸
+    - 输出宏观水温（RISK_ON / NEUTRAL / RISK_OFF）
+    - 在 RISK_OFF 时动态收紧个股过滤阈值
+    """
+    context = {
+        "regime": "UNKNOWN",
+        "close": None,
+        "ma50": None,
+        "ma200": None,
+        "ma50_slope_5d": None,
+        "recent3_pct": [],
+        "recent3_cum_pct": None,
+        "tuned": {
+            "min_avg_amount_wan": cfg.min_avg_amount_wan,
+            "rs_min_long": cfg.rs_min_long,
+            "rs_min_short": cfg.rs_min_short,
+        },
+    }
+    if bench_df is None or bench_df.empty:
+        return context
+
+    b = bench_df.sort_values("date").copy()
+    b["close"] = pd.to_numeric(b["close"], errors="coerce")
+    b["pct_chg"] = pd.to_numeric(b["pct_chg"], errors="coerce")
+    if len(b) < 60:
+        return context
+
+    close = float(b["close"].iloc[-1])
+    ma50 = float(b["close"].rolling(50).mean().iloc[-1])
+    ma200 = float(b["close"].rolling(200).mean().iloc[-1])
+    ma50_prev = b["close"].rolling(50).mean().shift(5).iloc[-1]
+    ma50_slope_5d = None if pd.isna(ma50_prev) else float(ma50 - ma50_prev)
+    recent3 = b["pct_chg"].dropna().tail(3)
+    recent3_list = [float(x) for x in recent3.tolist()]
+    recent3_cum = None
+    if not recent3.empty:
+        recent3_cum = float(((recent3 / 100.0 + 1.0).prod() - 1.0) * 100.0)
+
+    regime = "NEUTRAL"
+    if (
+        pd.notna(ma200)
+        and pd.notna(ma50)
+        and ma50_slope_5d is not None
+        and recent3_cum is not None
+    ):
+        risk_off = (close < ma200) and (ma50 < ma200) and (ma50_slope_5d < 0) and (recent3_cum <= -2.0)
+        risk_on = (close > ma50 > ma200) and (ma50_slope_5d > 0) and (recent3_cum >= 0.0)
+        if risk_off:
+            regime = "RISK_OFF"
+        elif risk_on:
+            regime = "RISK_ON"
+
+    # 动态调参：风险越冷，过滤越严
+    if regime == "RISK_OFF":
+        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 10000.0)
+        cfg.rs_min_long = max(cfg.rs_min_long, 2.0)
+        cfg.rs_min_short = max(cfg.rs_min_short, 0.5)
+        if recent3_cum is not None and recent3_cum <= -4.0:
+            cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 15000.0)
+            cfg.rs_min_long = max(cfg.rs_min_long, 4.0)
+            cfg.rs_min_short = max(cfg.rs_min_short, 1.0)
+    elif regime == "RISK_ON":
+        cfg.rs_min_long = max(cfg.rs_min_long, 0.0)
+        cfg.rs_min_short = max(cfg.rs_min_short, 0.0)
+
+    context.update({
+        "regime": regime,
+        "close": close,
+        "ma50": ma50,
+        "ma200": ma200,
+        "ma50_slope_5d": ma50_slope_5d,
+        "recent3_pct": recent3_list,
+        "recent3_cum_pct": recent3_cum,
+        "tuned": {
+            "min_avg_amount_wan": cfg.min_avg_amount_wan,
+            "rs_min_long": cfg.rs_min_long,
+            "rs_min_short": cfg.rs_min_short,
+        },
+    })
+    return context
+
+
 def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     """执行 Wyckoff Funnel，返回 (triggers, metrics)。"""
     cfg = FunnelConfig(trading_days=TRADING_DAYS)
@@ -154,6 +241,17 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         print(f"[funnel] 大盘基准加载成功")
     except Exception as e:
         print(f"[funnel] 大盘基准加载失败: {e}")
+
+    # Step 0: 大盘总闸 + 动态阈值
+    benchmark_context = _analyze_benchmark_and_tune_cfg(bench_df, cfg)
+    print(
+        "[funnel] 大盘总闸: "
+        f"regime={benchmark_context['regime']}, "
+        f"close={benchmark_context['close']}, ma50={benchmark_context['ma50']}, ma200={benchmark_context['ma200']}, "
+        f"ma50_slope_5d={benchmark_context['ma50_slope_5d']}, recent3={benchmark_context['recent3_pct']}, "
+        f"recent3_cum={benchmark_context['recent3_cum_pct']}, "
+        f"tuned={benchmark_context['tuned']}"
+    )
 
     # 并发拉取日线 + 分批漏斗（每批先做 L1/L2，最后统一做 L3/L4）
     l1_passed_set: set[str] = set()
@@ -255,6 +353,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         "top_sectors": top_sectors,
         "total_hits": total_hits,
         "by_trigger": {k: len(v) for k, v in triggers.items()},
+        "benchmark_context": benchmark_context,
     }
     print(f"[funnel] L1={metrics['layer1']}, L2={metrics['layer2']}, "
           f"L3={metrics['layer3']}, 命中={total_hits}, "
@@ -262,13 +361,14 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     return triggers, metrics
 
 
-def run(webhook_url: str) -> tuple[bool, list[dict]]:
+def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     """
     执行 Wyckoff Funnel，漏斗完成后立即发送飞书通知。
-    返回 (成功与否, 用于研报的股票信息列表)。
+    返回 (成功与否, 用于研报的股票信息列表, 大盘上下文)。
     每项为 {"code": str, "name": str, "tag": str}。
     """
     triggers, metrics = run_funnel_job()
+    benchmark_context = metrics.get("benchmark_context", {}) or {}
     name_map = _stock_name_map()
 
     code_to_reasons: dict[str, list[str]] = {}
@@ -294,6 +394,14 @@ def run(webhook_url: str) -> tuple[bool, list[dict]]:
         f"AI分析={len(selected_for_ai)}"
     )
 
+    bench_line = "未知"
+    if benchmark_context:
+        bench_line = (
+            f"{benchmark_context.get('regime')} | close={benchmark_context.get('close')} "
+            f"ma50={benchmark_context.get('ma50')} ma200={benchmark_context.get('ma200')} "
+            f"3d={benchmark_context.get('recent3_pct')} cum3={benchmark_context.get('recent3_cum_pct')}"
+        )
+
     lines = [
         (
             f"**股票池**: 主板{metrics['pool_main']} + 创业板{metrics['pool_chinext']} "
@@ -301,6 +409,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict]]:
             f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
+        f"**大盘水温**: {bench_line}",
         f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)} -> AI操作池6只",
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
@@ -327,4 +436,4 @@ def run(webhook_url: str) -> tuple[bool, list[dict]]:
         }
         for c in selected_for_ai
     ]
-    return (ok, symbols_for_report)
+    return (ok, symbols_for_report, benchmark_context)

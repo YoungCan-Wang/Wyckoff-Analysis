@@ -73,6 +73,7 @@ def main() -> int:
     summary: list[dict] = []
     has_blocking_failure = False
     symbols_info: list[dict] = []
+    benchmark_context: dict = {}
 
     _log("开始定时任务", logs_path)
 
@@ -81,7 +82,7 @@ def main() -> int:
     step2_ok = False
     step2_err = None
     try:
-        step2_ok, symbols_info = run_step2(webhook)
+        step2_ok, symbols_info, benchmark_context = run_step2(webhook)
         step2_err = None if step2_ok else "飞书发送失败"
     except Exception as e:
         step2_err = str(e)
@@ -103,7 +104,9 @@ def main() -> int:
     if symbols_info:
         t0 = datetime.now(TZ)
         try:
-            step3_ok, step3_reason = run_step3(symbols_info, webhook, api_key, model)
+            step3_ok, step3_reason = run_step3(
+                symbols_info, webhook, api_key, model, benchmark_context=benchmark_context
+            )
             step3_err = None if step3_ok else STEP3_REASON_MAP.get(step3_reason, step3_reason)
         except Exception as e:
             step3_ok = False
