@@ -285,6 +285,11 @@ def run(
         + f"free_cash={portfolio.free_cash:.2f}\n"
         + f"total_equity={total_equity_for_prompt:.2f}\n"
         + f"position_count={len(portfolio.positions)}\n\n"
+        + "[交易执行硬约束]\n"
+        + "- 禁止单点价格指令，必须给“结构战区(Action Zone) + 盘面确认条件(Tape Condition)”。\n"
+        + "- 战区需围绕输入里的价格锚点（最新收盘价）描述，不得僵化为固定数字挂单。\n"
+        + "- 买入触发必须有量价确认条件；若放量下破战区，必须取消买入并观望。\n"
+        + "- 强势突破标的必须给“防踏空 1/3 试单”条件；若条件不满足，禁止追高。\n\n"
         + "[内部持仓量价切片]\n"
         + (positions_payload if positions_payload else "当前无持仓，仅现金。")
         + "\n\n[外部候选（来自 Step3 研报）]\n"

@@ -111,7 +111,9 @@ def _fetch_hist_with_retry(symbol, window, adjust):
             )
 
     df = _fetch_hist(symbol, window, adjust)
-    source = "akshare" if "换手率" in df.columns else "baostock"
+    source = str(df.attrs.get("source", "") or "").strip().lower()
+    if source not in {"akshare", "baostock", "efinance", "tushare"}:
+        source = cached_source or "unknown"
     normalized = normalize_hist_df(df)
 
     if cached_df is not None and not cached_df.empty:

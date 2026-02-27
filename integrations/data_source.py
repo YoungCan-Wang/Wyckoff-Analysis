@@ -6,10 +6,18 @@
 """
 from __future__ import annotations
 
+import atexit
+import threading
 from datetime import date
 from typing import Literal
 
 import pandas as pd
+
+
+_BAOSTOCK_LOGGED = False
+_BAOSTOCK_EXIT_HOOKED = False
+_BAOSTOCK_MODULE = None
+_BAOSTOCK_LOCK = threading.RLock()
 
 
 def _to_ts_code(symbol: str) -> str:
@@ -32,6 +40,12 @@ def _index_to_ts_code(code: str) -> str:
     return f"{s}.SZ"
 
 
+def _tag_source(df: pd.DataFrame, source: str) -> pd.DataFrame:
+    """在 DataFrame 上附加真实数据源标识，供上层缓存/展示使用。"""
+    df.attrs["source"] = source
+    return df
+
+
 # --- 个股 ---
 
 def _fetch_stock_akshare(symbol: str, start: str, end: str, adjust: str) -> pd.DataFrame:
@@ -52,17 +66,14 @@ def _fetch_stock_akshare(symbol: str, start: str, end: str, adjust: str) -> pd.D
 
 
 def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
-    import baostock as bs
     if symbol.startswith(("600", "601", "603", "605", "688")):
         bs_code = f"sh.{symbol}"
     else:
         bs_code = f"sz.{symbol}"
     start_dash = f"{start[:4]}-{start[4:6]}-{start[6:]}"
     end_dash = f"{end[:4]}-{end[4:6]}-{end[6:]}"
-    lg = bs.login()
-    if lg.error_code != "0":
-        raise RuntimeError(f"baostock login: {lg.error_msg}")
-    try:
+    with _BAOSTOCK_LOCK:
+        bs = _ensure_baostock_login()
         rs = bs.query_history_k_data_plus(
             bs_code,
             "date,open,high,low,close,volume,amount,pctChg",
@@ -76,22 +87,57 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
         rows: list[list[str]] = []
         while rs.next():
             rows.append(rs.get_row_data())
-        if not rows:
-            raise RuntimeError("baostock empty")
-        df = pd.DataFrame(rows, columns=rs.fields)
-        df = df.rename(columns={
-            "date": "日期", "open": "开盘", "high": "最高", "low": "最低",
-            "close": "收盘", "volume": "成交量", "amount": "成交额", "pctChg": "涨跌幅",
-        })
-        df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.strftime("%Y-%m-%d")
-        for c in ["开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-        df["换手率"] = pd.NA
-        df["振幅"] = pd.NA
-        return df
-    finally:
-        bs.logout()
+    if not rows:
+        raise RuntimeError("baostock empty")
+    df = pd.DataFrame(rows, columns=rs.fields)
+    df = df.rename(columns={
+        "date": "日期", "open": "开盘", "high": "最高", "low": "最低",
+        "close": "收盘", "volume": "成交量", "amount": "成交额", "pctChg": "涨跌幅",
+    })
+    df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.strftime("%Y-%m-%d")
+    for c in ["开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["换手率"] = pd.NA
+    df["振幅"] = pd.NA
+    return df
+
+
+def _baostock_logout_on_exit() -> None:
+    global _BAOSTOCK_LOGGED
+    with _BAOSTOCK_LOCK:
+        bs = _BAOSTOCK_MODULE
+        if not _BAOSTOCK_LOGGED or bs is None:
+            return
+        try:
+            bs.logout()
+        except Exception:
+            pass
+        _BAOSTOCK_LOGGED = False
+
+
+def _ensure_baostock_login():
+    """
+    进程内复用 baostock 会话，避免每只股票 login/logout 导致大量开销与阻塞日志。
+    运行特性说明：该会话在当前 Python 进程生命周期内复用，并由 atexit 在进程退出时回收。
+    若未来改为长生命周期守护进程/热重载模式，需要关注其“跨任务复用”行为是否符合预期。
+    """
+    global _BAOSTOCK_LOGGED, _BAOSTOCK_EXIT_HOOKED, _BAOSTOCK_MODULE
+    with _BAOSTOCK_LOCK:
+        import baostock as bs
+        _BAOSTOCK_MODULE = bs
+        if _BAOSTOCK_LOGGED:
+            return bs
+
+        lg = bs.login()
+        if lg.error_code != "0":
+            raise RuntimeError(f"baostock login: {lg.error_msg}")
+        _BAOSTOCK_LOGGED = True
+
+        if not _BAOSTOCK_EXIT_HOOKED:
+            atexit.register(_baostock_logout_on_exit)
+            _BAOSTOCK_EXIT_HOOKED = True
+        return bs
 
 
 def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -179,7 +225,7 @@ def fetch_stock_hist(
 
     # 1. akshare
     try:
-        return _fetch_stock_akshare(symbol, start_s, end_s, adjust)
+        return _tag_source(_fetch_stock_akshare(symbol, start_s, end_s, adjust), "akshare")
     except ModuleNotFoundError as e:
         failed_sources.append(f"akshare(缺少依赖 {e.name})")
     except Exception:
@@ -187,13 +233,13 @@ def fetch_stock_hist(
 
     # 2. baostock (仅前复权)
     try:
-        return _fetch_stock_baostock(symbol, start_s, end_s)
+        return _tag_source(_fetch_stock_baostock(symbol, start_s, end_s), "baostock")
     except Exception:
         failed_sources.append("baostock")
 
     # 3. efinance (仅前复权)
     try:
-        return _fetch_stock_efinance(symbol, start_s, end_s)
+        return _tag_source(_fetch_stock_efinance(symbol, start_s, end_s), "efinance")
     except ModuleNotFoundError as e:
         failed_sources.append(f"efinance(未安装: {e.name})")
     except Exception:
@@ -203,7 +249,9 @@ def fetch_stock_hist(
     from utils.tushare_client import get_pro
     if get_pro() is not None:
         try:
-            return _fetch_stock_tushare(symbol, start_s, end_s, adjust)
+            return _tag_source(
+                _fetch_stock_tushare(symbol, start_s, end_s, adjust), "tushare"
+            )
         except Exception as e:
             raise RuntimeError(
                 f"拉取失败（非程序错误）：免费数据源 {', '.join(failed_sources)} 均失败；tushare 也失败：{e}"
