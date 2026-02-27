@@ -119,8 +119,8 @@ with content_col:
 
         st.divider()
 
-        # 4. 私人决断（Step4）
-        st.subheader("🕶️ 私人决断（Step4）")
+        # 4. 私人决断
+        st.subheader("🕶️ 私人决断")
         with st.container(border=True):
             st.markdown("可选，用于 Telegram 私密推送买卖建议。")
             new_tg_bot = st.text_input("Telegram Bot Token", value=st.session_state.tg_bot_token, type="password", key="tg_bot")
