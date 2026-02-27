@@ -113,7 +113,11 @@ def generate_stock_payload(
     else:
         background = f"  [结构背景] 现价:{close_val:.2f}（数据不足以计算 MA200）"
 
-    header = f"• {stock_code} {stock_name} | 机器标签：{wyckoff_tag}\n{background}\n"
+    header = (
+        f"• {stock_code} {stock_name} | 机器标签：{wyckoff_tag}\n"
+        f"  [价格锚点] 最新实际收盘价={close_val:.2f}（执行建议需围绕该锚点给出结构战区，不得给单点预测价）。\n"
+        f"{background}\n"
+    )
 
     # 近 15 日量价切片
     recent = df.tail(RECENT_DAYS)
@@ -218,6 +222,11 @@ def run(
         + f"再从观察池中严格挑选“次日可买入的操作池”{OPERATION_TARGET}只。\n"
         + f"输出必须包含两个部分：1) 观察池（不限，含观察条件） 2) 操作池（固定{OPERATION_TARGET}只）。\n"
         + "硬约束：操作池必须是观察池子集，且两部分只能使用输入列表中的股票代码。\n\n"
+        + "交易执行硬约束：\n"
+        + "1) 禁止单点价格指令，必须给“结构战区(Action Zone) + 盘面确认条件(Tape Condition)”。\n"
+        + "2) 战区需围绕每只股票的“价格锚点（最新收盘价）”描述，但不得刻舟求剑。\n"
+        + "3) 买入触发必须包含量价确认条件（如缩量回踩/拒绝下破）；若放量下破，必须取消买入。\n"
+        + "4) 强势突破标的必须给“防踏空策略”：开盘强势确认后可先用计划仓位1/3试单，其余等待二次确认。\n\n"
         + "\n".join(parts)
     )
     _dump_model_input(items=items, model=model, system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT, user_message=user_message)

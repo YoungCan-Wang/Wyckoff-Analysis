@@ -6,6 +6,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 from datetime import date, timedelta
+import time
 import akshare as ak
 from core.download_history import add_download_history
 from integrations.fetch_a_share_csv import get_all_stocks
@@ -20,6 +21,13 @@ setup_page(page_title="自定义导出", page_icon="🧰")
 
 content_col = show_right_nav()
 with content_col:
+    # 首次进入页面时复用现有 Loading 组件（与页面其他操作保持一致）
+    if not st.session_state.get("_custom_export_entered", False):
+        loading = show_page_loading(title="加载中...", subtitle="正在准备页面内容")
+        time.sleep(0.2)
+        loading.empty()
+        st.session_state["_custom_export_entered"] = True
+
     st.title("🧰 自定义导出")
     st.markdown("选择一个数据源，配置参数后获取数据，再按需选择字段导出。")
 
@@ -79,7 +87,6 @@ with content_col:
     adjust = ""
     end_date = today
     start_date = end_date - timedelta(days=365)
-
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def _stock_name_map() -> dict[str, str]:

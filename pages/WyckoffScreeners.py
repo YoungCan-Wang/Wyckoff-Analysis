@@ -87,11 +87,12 @@ with content_col:
             cached = _load_cache(cache_key)
             if cached is not None and not cached.empty:
                 return cached, "cache"
-        df = _fetch_hist(symbol=symbol, window=window, adjust=adjust)
-        df = normalize_hist_from_fetch(df)
+        raw = _fetch_hist(symbol=symbol, window=window, adjust=adjust)
+        src = str(raw.attrs.get("source", "") or "").strip().lower() or "data_source"
+        df = normalize_hist_from_fetch(raw)
         if use_cache:
             _save_cache(cache_key, df)
-        return df, "data_source"
+        return df, src
 
     def _parse_symbols(pool_mode: str, text: str, board: str, limit_count: int) -> list[str]:
         if pool_mode == "手动输入":

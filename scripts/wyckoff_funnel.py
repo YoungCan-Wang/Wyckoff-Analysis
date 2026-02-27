@@ -9,7 +9,7 @@ import os
 import socket
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,13 +38,14 @@ TRIGGER_LABELS = {
     "evr": "Effort vs Result（放量不跌）",
 }
 TRADING_DAYS = 500
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 2
-SOCKET_TIMEOUT = 30
-BATCH_TIMEOUT = 600
-BATCH_SIZE = 200
-BATCH_SLEEP = 5
-MAX_WORKERS = 8
+MAX_RETRIES = int(os.getenv("FUNNEL_FETCH_RETRIES", "2"))
+RETRY_BASE_DELAY = float(os.getenv("FUNNEL_RETRY_BASE_DELAY", "1.0"))
+SOCKET_TIMEOUT = int(os.getenv("FUNNEL_SOCKET_TIMEOUT", "20"))
+FETCH_TIMEOUT = int(os.getenv("FUNNEL_FETCH_TIMEOUT", "45"))
+BATCH_TIMEOUT = int(os.getenv("FUNNEL_BATCH_TIMEOUT", "420"))
+BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "200"))
+BATCH_SLEEP = float(os.getenv("FUNNEL_BATCH_SLEEP", "2"))
+MAX_WORKERS = int(os.getenv("FUNNEL_MAX_WORKERS", "8"))
 
 
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
@@ -67,17 +68,47 @@ def _stock_name_map() -> dict[str, str]:
 
 
 def _fetch_one_with_retry(sym: str, window, max_retries: int = MAX_RETRIES) -> tuple[str, pd.DataFrame | None]:
-    """在子进程中执行，进程级 socket 超时不影响主进程。"""
+    """在子进程中执行，单票硬超时 + 重试，避免个别数据源卡死拖慢整批。"""
     socket.setdefaulttimeout(SOCKET_TIMEOUT)
     for attempt in range(max_retries):
         try:
-            df = _fetch_hist(sym, window, "qfq")
+            df = _run_with_timeout(sym, window, FETCH_TIMEOUT)
             return (sym, df)
         except Exception:
             if attempt < max_retries - 1:
-                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                delay = RETRY_BASE_DELAY * (attempt + 1)
                 time.sleep(delay)
     return (sym, None)
+
+
+def _run_with_timeout(sym: str, window, timeout_s: int) -> pd.DataFrame:
+    """
+    在 worker 进程内给单票请求加硬超时（Unix 下用 SIGALRM）。
+    若平台不支持 SIGALRM（例如 Windows），则退化为直接调用。
+    注意：在 Windows / 不支持 SIGALRM 的运行环境里，本函数不会提供单票硬超时，
+    仅依赖外层批次超时(BATCH_TIMEOUT)做兜底。
+    """
+    if timeout_s <= 0:
+        return _fetch_hist(sym, window, "qfq")
+
+    try:
+        import signal
+    except Exception:
+        return _fetch_hist(sym, window, "qfq")
+
+    if not hasattr(signal, "SIGALRM"):
+        return _fetch_hist(sym, window, "qfq")
+
+    def _alarm_handler(signum, frame):  # pragma: no cover - signal handler
+        raise TimeoutError(f"single fetch timeout>{timeout_s}s")
+
+    old = signal.signal(signal.SIGALRM, _alarm_handler)
+    signal.alarm(timeout_s)
+    try:
+        return _fetch_hist(sym, window, "qfq")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
 
 
 def _terminate_executor_processes(ex: ProcessPoolExecutor, batch_no: int) -> None:
@@ -262,7 +293,8 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
 
     print(
         f"[funnel] 开始拉取 {len(all_symbols)} 只股票日线 "
-        f"(batch_size={BATCH_SIZE}, max_workers={MAX_WORKERS}, batch_timeout={BATCH_TIMEOUT}s)"
+        f"(batch_size={BATCH_SIZE}, max_workers={MAX_WORKERS}, batch_timeout={BATCH_TIMEOUT}s, "
+        f"fetch_timeout={FETCH_TIMEOUT}s, retries={MAX_RETRIES})"
     )
     for i in range(0, len(all_symbols), BATCH_SIZE):
         batch_no = i // BATCH_SIZE + 1
@@ -292,7 +324,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
                 else:
                     batch_fail += 1
                     fetch_fail += 1
-        except TimeoutError:
+        except FuturesTimeoutError:
             pending_symbols = [futures[ft] for ft in futures if not ft.done()]
             timed_out = len(pending_symbols)
             batch_fail += timed_out
