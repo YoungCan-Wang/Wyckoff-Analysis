@@ -37,6 +37,10 @@ content_col = show_right_nav()
 with content_col:
     st.title("🔬 Wyckoff Funnel")
     st.markdown("4 层漏斗：剥离垃圾 → 强弱甄别 → 板块共振 → 威科夫狙击")
+    st.warning(
+        "网页端执行「沙里淘金」耗时较长，受限流/超时影响**大概率失败**。"
+        "建议移步 GitHub 按 README 配置 GitHub Actions 定时任务（例如工作日 16:30 自动运行）。"
+    )
 
     TRIGGER_LABELS = {
         "spring": "Spring（终极震仓）",
