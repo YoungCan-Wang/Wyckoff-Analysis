@@ -1,41 +1,121 @@
-# A 股历史行情 CSV 导出脚本（akshare）
+# A 股选股与行情工具
 
-> **Context for AI Agents:** This project is a Python-based tool for fetching and exporting Chinese A-Share stock data. It uses `akshare` for data, `streamlit` for the UI, and `supabase` for authentication.
+> 每天从全市场筛选出**最值得次日操作的 6 只股票**，并生成 AI 研报；同时支持行情数据查询与 CSV 导出。
 
-用 Python + [akshare](https://github.com/akfamily/akshare) 拉取指定 A 股近 N 个交易日的日线数据，并生成两份 CSV：
+用 [akshare](https://github.com/akfamily/akshare) + 自研 Wyckoff 漏斗做量化初筛，再用大模型做深度分析。适合想快速拿到每日「明日可买清单」的 A 股投资者。
 
-- `{股票代码}_{股票名}_hist_data.csv`：akshare 返回的原始字段
-- `{股票代码}_{股票名}_ohlcv.csv`：面向分析的增强 OHLCV（含成交额/换手率/振幅/均价/行业）
-
-示例：
-
-- `300364_中文在线_hist_data.csv`
-- `300364_中文在线_ohlcv.csv`
+**在线体验：** [https://wyckoff-analysis-youngcanphoenix.streamlit.app/](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)
 
 ---
 
-## 目录结构
+## 你能做什么
 
-```text
-.
-├── fetch_a_share_csv.py    # 核心逻辑：获取数据、处理数据、生成 CSV
-├── streamlit_app.py        # Web UI 入口
-├── supabase_client.py      # Supabase 客户端配置
-├── auth_component.py       # 登录/注册组件
-├── requirements.txt        # 依赖列表
-└── .env.example            # 环境变量示例
+| 功能 | 说明 |
+|------|------|
+| 📊 **每日选股** | 配置 GitHub Actions 后，工作日 16:30 自动跑 Wyckoff Funnel，从主板+创业板筛出 6 只，推送到飞书 |
+| 🤖 **AI 研报** | 对筛选结果生成观察池 + 操作池，含技术结构、阻力位、交易计划等 |
+| 📁 **行情导出** | Web 或命令行拉取指定股票日线，导出原始/增强两份 CSV（OHLCV 开高低收量等） |
+| 🔐 **登录与配置** | 支持登录、飞书 Webhook、API Key 云端同步 |
+
+---
+
+## 🚀 快速开始
+
+### 1. 环境
+
+需要 **Python 3.10+**。
+
+```bash
+cd akshare
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+```
+
+### 2. 配置
+
+复制 `.env.example` 为 `.env`，填入：
+
+- `SUPABASE_URL`、`SUPABASE_KEY`：登录用（项目依赖 Supabase）
+- `FEISHU_WEBHOOK_URL`（可选）：飞书推送地址
+
+### 3. 运行
+
+**Web 界面（推荐）**：浏览器里查数据、下 CSV。
+
+```bash
+streamlit run streamlit_app.py
+```
+
+**命令行**：批量导出。
+
+```bash
+python fetch_a_share_csv.py --symbol 300364
+python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 ```
 
 ---
 
-## ✨ 功能特性 (Features)
+## 📅 每日选股（Wyckoff Funnel）
 
-- 📊 **多维数据导出**: 支持原始行情 (Hist Data) 与 增强型 OHLCV (含换手率/振幅/板块) 双份导出。
-- 🖥️ **可视化交互**: 基于 Streamlit 的 Web 界面，支持移动端适配。
-- 🔐 **用户系统**: 集成 Supabase Auth，支持登录/注册与配置云端同步 (RLS 安全隔离)。
-- 🤖 **通知推送**: 支持飞书 Webhook 消息推送批量下载状态。
-- ⚡️ **批量处理**: 支持单只/批量股票代码解析与导出 (.zip 打包)。
-- 📝 **历史记录**: 自动记录最近查询与批量下载任务。
+从全市场（主板 + 创业板）多轮过滤，最终输出**最值得次日操作的 6 只股票**，并生成 AI 研报，推送到飞书。
+
+### 启用方式
+
+仓库内置工作流：`.github/workflows/wyckoff_funnel.yml`
+
+- **定时**：工作日 16:30（北京时间）
+- **手动**：Actions 页面选择 `Wyckoff Funnel` → `Run workflow`
+
+### 配置 GitHub Secrets
+
+`Settings` → `Secrets and variables` → `Actions`，添加：
+
+| 名称 | 必填 | 说明 |
+|------|------|------|
+| `FEISHU_WEBHOOK_URL` | 是 | 接收选股结果与研报 |
+| `GEMINI_API_KEY` | 是 | AI 研报 |
+| `TUSHARE_TOKEN` | 是 | 行情与市值数据 |
+| `GEMINI_MODEL` | 否 | 未配则用默认模型 |
+
+### 验证
+
+跑一次手动触发后，检查：
+
+- 日志中有 `阶段汇总` 且 `ok=True`
+- Artifacts 中有 `daily-job-logs-*`
+- 飞书收到漏斗结果 + 研报
+
+### 默认行为契约（当前版本）
+
+- 股票池范围：主板 + 创业板，自动剔除 ST。
+- 漏斗流程：`Layer1 -> Layer2 -> Layer3 -> Layer4`，其中日线按批次拉取并在批次内先做 L1/L2。
+- 宏观总闸：会注入大盘水温（RISK_ON / NEUTRAL / RISK_OFF）并动态调参。
+- AI 输入：向模型传入“漏斗命中的全量候选”，不是只传 6 只。
+- AI 输出目标：先产出观察池（数量不限，含观察条件），再产出操作池（固定 6 只）。
+- 飞书推送：长内容会自动分片发送，避免超长截断。
+
+### 执行时长与进度判断（SLA）
+
+- 常规耗时：约 `90~130` 分钟（受网络、数据源、候选规模影响）。
+- 关键进度日志：
+  - `[funnel] 批次#x/y 启动`：开始处理某一批股票。
+  - `[funnel] 批次#x 完成`：该批拉取与 L1/L2 已结束。
+  - `[funnel] L1=... L2=... L3=... 命中=...`：漏斗汇总完成。
+  - `[step3] AI 输入股票数=...`：已进入大模型研报阶段。
+  - `=== 阶段汇总 ===`：全流程结束（以该段为准）。
+
+### 故障排查矩阵（先看这个）
+
+| 症状（日志） | 常见原因 | 处理建议 |
+|------|------|------|
+| `配置缺失: FEISHU_WEBHOOK_URL` | 未配置飞书 Secret | 在仓库 Secrets 添加 `FEISHU_WEBHOOK_URL` |
+| `配置缺失: GEMINI_API_KEY` | 未配置模型 Key 或已失效 | 更新 `GEMINI_API_KEY` 后重跑 |
+| `市值数据为空（TUSHARE_TOKEN 可能缺失/失效）` | `TUSHARE_TOKEN` 缺失/失效/额度问题 | 检查并更新 `TUSHARE_TOKEN`，确认账号权限 |
+| `[step3] 模型 ... 失败` / `llm_failed` | 模型不可用、限流、网络抖动 | 更换 `GEMINI_MODEL` 或稍后重试 |
+| `[step3] 飞书推送失败` / `feishu_failed` | Webhook 无效、限流、网络问题 | 重新生成飞书机器人 Webhook 并替换 Secret |
+| Action 超时或明显慢于 2 小时 | 数据源抖动、重试变多 | 查看批次日志定位卡点，必要时手动重跑 |
 
 ---
 
@@ -45,153 +125,60 @@
 
 ---
 
-## 🚀 快速开始 (AI & Humans)
+## 附录
 
-### 1. 环境配置
+### 目录结构
 
-需要 **Python 3.10+**。
-
-```bash
-# 1. 进入目录
-cd akshare
-
-# 2. 创建虚拟环境
-python3 -m venv .venv
-
-# 3. 激活虚拟环境
-# macOS / Linux:
-source .venv/bin/activate
-# Windows:
-# .venv\Scripts\activate
-
-# 4. 安装依赖
-# 注意：必须安装 supabase 库，否则无法运行 Streamlit App
-python -m pip install -U pip
-python -m pip install -r requirements.txt
+```text
+.
+├── fetch_a_share_csv.py    # 数据拉取、CSV 生成
+├── streamlit_app.py        # Web 入口
+├── wyckoff_engine.py       # 4 层漏斗引擎
+├── scripts/
+│   ├── wyckoff_funnel.py   # 定时选股任务
+│   ├── step3_batch_report.py  # AI 研报
+│   └── daily_job.py        # 日终流水线
+├── requirements.txt
+└── .env.example
 ```
 
-### 2. 配置文件 (.env)
+### 交易日与时间窗口
 
-项目依赖 Supabase 进行用户认证。
+按交易日计算，自动跳过周末与节假日。
 
-1.  复制示例文件：
-    ```bash
-    cp .env.example .env
-    ```
-2.  修改 `.env` 文件，填入你的配置：
-    *   `SUPABASE_URL`: 你的 Supabase 项目 URL
-    *   `SUPABASE_KEY`: 你的 Supabase **anon** Key
-    *   `FEISHU_WEBHOOK_URL`: (可选) 飞书机器人 Webhook 地址
+- 结束日：系统日期 - 1 天，对齐到最近交易日
+- 开始日：从结束日向前回溯 N 个交易日（默认 500）
+- 参数：`--trading-days`、`--end-offset-days`
 
-### 3. 运行方式
+### CSV 输出说明
 
-#### 方式 A: Web 可视化界面 (推荐)
+- **hist_data.csv**：akshare 原始字段（日期、开高低收、成交量、成交额、振幅、换手率等）
+- **ohlcv.csv**：增强版（OHLCV + 均价、行业），便于回测与可视化
 
-直接在浏览器中查询、预览数据并一键下载 CSV。
+### 复权
 
-```bash
-# 确保已激活虚拟环境
-source .venv/bin/activate
-
-# 启动 Streamlit
-streamlit run streamlit_app.py
-```
-浏览器会自动打开 `http://localhost:8501`。
-
-#### 方式 B: 命令行脚本 (CLI)
-
-适合批量处理或无界面环境。
-
-```bash
-# 单只股票
-python fetch_a_share_csv.py --symbol 300364
-
-# 多只股票（直接给代码列表）
-python -u fetch_a_share_csv.py --symbols 000973 600798 601390
-
-# 多只股票（从混合文本中提取）
-python -u fetch_a_share_csv.py --symbols-text '000973 佛塑科技 600798鲁抗医药'
-```
-
----
-
-## 交易日/时间窗口规则（关键）
-
-本脚本按“交易日”计算时间窗口，自动跳过周末与法定节假日。
-
-- 结束日（end）：`系统日期 - 1 天（自然日）`，再对齐到 `<= end` 的最近交易日
-- 开始日（start）：从结束交易日向前回溯 `N` 个交易日（默认 50 个交易日，包含结束交易日）
-
-对应参数：
-
-- `--trading-days`：交易日数量（默认 500）
-- `--end-offset-days`：结束日的自然日偏移（默认 1）
-
----
-
-## CSV 字段说明
-
-### 1) hist_data.csv（原始字段）
-
-以 akshare `stock_zh_a_hist` 的返回为准，常见列包括：
-
-- `日期`
-- `股票代码`
-- `开盘` / `收盘` / `最高` / `最低`
-- `成交量` / `成交额`
-- `振幅` / `涨跌幅` / `涨跌额` / `换手率`
-
-### 2) ohlcv.csv（标准 OHLCV）
-
-固定列（便于喂给策略回测/可视化工具；列名为英文大驼峰）：
-
-- `Date`：YYYY-MM-DD
-- `Open, High, Low, Close`
-- `Volume`：成交量（股）
-- `Amount`：成交额（金额，数据源口径）
-- `TurnoverRate`：换手率（数值，非百分号字符串）
-- `Amplitude`：振幅（数值，非百分号字符串）
-- `AvgPrice`：`Amount / Volume`（Volume 为 0 时为空）
-- `Sector`：行业（来自 `stock_individual_info_em` 的 `行业` 字段，取不到则为空）
-
----
-
-## 复权说明（前复权/后复权）
-
-参数 `--adjust`：
-
-- `""`：不复权（默认）
-- `qfq`：前复权
-- `hfq`：后复权
-
-示例：
+`--adjust`：`""` 不复权，`qfq` 前复权，`hfq` 后复权。
 
 ```bash
 python fetch_a_share_csv.py --symbol 300364 --adjust qfq
 ```
 
----
+### 常见问题
 
-## 常见问题
+- **ImportError: create_client from supabase** → `pip install supabase>=2.0.0`
+- **macOS pip externally-managed-environment** → 用虚拟环境安装依赖
+- **文件名有空格** → 股票名本身带空格，脚本会做安全替换
 
-### 1) ImportError: cannot import name 'create_client' from 'supabase'
-这是因为未安装 `supabase` 库。请运行：
-```bash
-pip install supabase>=2.0.0
-```
+### Fork 与部署
 
-### 2) macOS 上 pip 报 externally-managed-environment
-请使用虚拟环境（venv）安装依赖，参考上文“快速开始”。
-
-### 3) 输出文件名里有空格
-这是数据源的股票名称本身带空格；脚本会按原样写入文件名（仅替换不允许的文件名字符）。
-
----
-
-## 部署 (Streamlit Community Cloud)
-
-1. Fork 本仓库到你的 GitHub。
-2. 访问 [share.streamlit.io](https://share.streamlit.io/) 并部署。
-3. **关键**：在 Streamlit Cloud 的 "Secrets" 设置中配置 `SUPABASE_URL` 和 `SUPABASE_KEY`，格式与 `.env` 文件一致。
+1. Fork 本仓库，克隆到本地
+2. 按上文配置 `.env` 后运行
+3. 部署到 [Streamlit Cloud](https://share.streamlit.io/)：入口选 `streamlit_app.py`，Secrets 配 `SUPABASE_URL`、`SUPABASE_KEY`、`COOKIE_SECRET`
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/)
+
+---
+
+## 版本更新
+
+详见 [`CHANGELOG.md`](CHANGELOG.md)。Web 端「版本更新日志」页面直接读取该文件。
