@@ -311,32 +311,57 @@ def _detect_lps(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
 
 def _detect_evr(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     """
-    Effort vs Result（努力无结果）：底部放巨量但价格不跌。
+    Effort vs Result（努力无结果）：
+    仅识别“相对低位的巨量滞涨/抗跌”，排除高位派发。
     返回 score（量比）或 None。
     """
-    if len(df) < cfg.evr_vol_window + cfg.evr_lookback:
+    if len(df) < cfg.evr_vol_window + 2:
         return None
-    df_s = df.sort_values("date")
-    recent = df_s.tail(cfg.evr_lookback)
+    df_s = df.sort_values("date").copy()
 
-    vol_avg_recent = recent["volume"].mean()
-    vol_avg_ref = df_s["volume"].tail(cfg.evr_vol_window).iloc[:cfg.evr_vol_window - cfg.evr_lookback].mean()
-    if vol_avg_ref <= 0:
-        return None
-    vol_ratio = vol_avg_recent / vol_avg_ref
-    if vol_ratio < cfg.evr_vol_ratio:
+    close = pd.to_numeric(df_s["close"], errors="coerce")
+    volume = pd.to_numeric(df_s["volume"], errors="coerce")
+    pct_chg = pd.to_numeric(df_s["pct_chg"], errors="coerce")
+    if close.isna().all() or volume.isna().all() or pct_chg.isna().all():
         return None
 
-    max_drop = recent["pct_chg"].min()
-    if pd.isna(max_drop) or max_drop < -cfg.evr_max_drop:
+    # 位阶保护：高位放量优先按派发处理，避免 EVR 误判
+    ma200 = close.rolling(200).mean()
+    ma200_last = ma200.iloc[-1]
+    close_last = close.iloc[-1]
+    if pd.notna(ma200_last) and pd.notna(close_last) and float(ma200_last) > 0:
+        bias_200 = (float(close_last) - float(ma200_last)) / float(ma200_last) * 100.0
+        if bias_200 > 30.0:
+            return None
+
+    # 基准量能取“最近窗口但剔除最后两天”，避免当前异动污染基线
+    vol_ref = volume.tail(cfg.evr_vol_window).iloc[:-2]
+    vol_ref_avg = float(vol_ref.mean()) if not vol_ref.empty else 0.0
+    if vol_ref_avg <= 0:
         return None
 
-    close_start = df_s.iloc[-(cfg.evr_lookback + 1)]["close"]
-    close_end = df_s.iloc[-1]["close"]
-    if close_end < close_start:
-        return None
+    # 仅检查最近两天是否出现“巨量 + 小实体（不大涨不大跌）”
+    for idx in (-1, -2):
+        vol_ratio = float(volume.iloc[idx] / vol_ref_avg) if vol_ref_avg > 0 else 0.0
+        if vol_ratio < cfg.evr_vol_ratio:
+            continue
 
-    return float(vol_ratio)
+        day_pct = pct_chg.iloc[idx]
+        if pd.isna(day_pct):
+            continue
+
+        # 结果约束：剔除大阴线/大阳线，保留“努力无结果”的滞涨/抗跌
+        if float(day_pct) < -cfg.evr_max_drop or float(day_pct) > 3.0:
+            continue
+
+        # 结构约束：最新收盘不能明显弱于三天前（防止下跌中继）
+        if len(close) >= 4:
+            close_3d_ago = close.iloc[-4]
+            if pd.notna(close_3d_ago) and float(close_last) < float(close_3d_ago) * 0.98:
+                continue
+        return vol_ratio
+
+    return None
 
 
 def layer4_triggers(

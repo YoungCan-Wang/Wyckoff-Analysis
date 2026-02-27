@@ -10,7 +10,8 @@ import socket
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,6 +47,8 @@ BATCH_TIMEOUT = int(os.getenv("FUNNEL_BATCH_TIMEOUT", "420"))
 BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "200"))
 BATCH_SLEEP = float(os.getenv("FUNNEL_BATCH_SLEEP", "2"))
 MAX_WORKERS = int(os.getenv("FUNNEL_MAX_WORKERS", "8"))
+CN_TZ = ZoneInfo("Asia/Shanghai")
+MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
 
 
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
@@ -109,6 +112,18 @@ def _run_with_timeout(sym: str, window, timeout_s: int) -> pd.DataFrame:
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old)
+
+
+def _job_end_calendar_day() -> date:
+    """
+    定时任务统一口径：
+    - 北京时间收盘后（默认 >=15:00）走 T+0（当天）
+    - 收盘前走 T-1（上一自然日）
+    """
+    now = datetime.now(CN_TZ)
+    if now.hour >= MARKET_CLOSE_HOUR:
+        return now.date()
+    return (now - timedelta(days=1)).date()
 
 
 def _terminate_executor_processes(ex: ProcessPoolExecutor, batch_no: int) -> None:
@@ -224,7 +239,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     """执行 Wyckoff Funnel，返回 (triggers, metrics)。"""
     cfg = FunnelConfig(trading_days=TRADING_DAYS)
     window = _resolve_trading_window(
-        end_calendar_day=date.today() - timedelta(days=1),
+        end_calendar_day=_job_end_calendar_day(),
         trading_days=TRADING_DAYS,
     )
     start_s = window.start_trade_date.strftime("%Y%m%d")
