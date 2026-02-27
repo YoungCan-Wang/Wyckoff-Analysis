@@ -13,11 +13,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 
-from ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
-from fetch_a_share_csv import _resolve_trading_window, _fetch_hist
-from llm_client import call_llm
+from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
+from integrations.fetch_a_share_csv import _resolve_trading_window, _fetch_hist
+from integrations.llm_client import call_llm
 from utils.feishu import send_feishu_notification
-from wyckoff_engine import normalize_hist_from_fetch
+from core.wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
 FEISHU_MAX_LEN = 12000
@@ -28,6 +28,8 @@ RECENT_DAYS = 15
 HIGHLIGHT_DAYS = 60
 HIGHLIGHT_PCT_THRESHOLD = 5.0
 HIGHLIGHT_VOL_RATIO = 2.0
+DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
+DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _dump_model_input(
@@ -36,30 +38,30 @@ def _dump_model_input(
     system_prompt: str,
     user_message: str,
 ) -> str:
+    if not DEBUG_MODEL_IO:
+        return ""
+
     logs_dir = os.getenv("LOGS_DIR", "logs")
     os.makedirs(logs_dir, exist_ok=True)
     path = os.path.join(logs_dir, f"step3_model_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-    symbols_line = ", ".join(f"{x.get('code', '')}:{x.get('name', '')}" for x in items)
+    symbols_line = ", ".join(f"{x.get('code', '')}" for x in items)
     body = (
         f"[step3] model={model}\n"
+        f"[step3] symbol_count={len(items)}\n"
         f"[step3] symbols={symbols_line}\n"
         f"[step3] system_prompt_len={len(system_prompt)}\n"
         f"[step3] user_message_len={len(user_message)}\n"
-        "\n===== SYSTEM PROMPT =====\n"
-        f"{system_prompt}\n"
-        "\n===== USER MESSAGE =====\n"
-        f"{user_message}\n"
     )
+    if DEBUG_MODEL_IO_FULL:
+        body += (
+            "\n===== SYSTEM PROMPT =====\n"
+            f"{system_prompt}\n"
+            "\n===== USER MESSAGE =====\n"
+            f"{user_message}\n"
+        )
     with open(path, "w", encoding="utf-8") as f:
         f.write(body)
     print(f"[step3] 模型输入已落盘: {path}")
-    print(
-        f"[step3] 模型输入摘要: model={model}, symbols={len(items)}, "
-        f"system_prompt_len={len(system_prompt)}, user_message_len={len(user_message)}"
-    )
-    print("[step3] USER_MESSAGE_BEGIN")
-    print(user_message)
-    print("[step3] USER_MESSAGE_END")
     return path
 
 

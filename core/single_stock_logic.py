@@ -9,11 +9,12 @@ import matplotlib.font_manager as fm
 import platform
 import os
 
-from fetch_a_share_csv import _fetch_hist, _resolve_trading_window, _stock_name_from_code
+from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window, _stock_name_from_code
 from utils import extract_symbols_from_text, stock_sector_em
-from llm_client import call_llm
-from wyckoff_single_prompt import WYCKOFF_SINGLE_SYSTEM_PROMPT
-from ui_helpers import show_page_loading
+from integrations.llm_client import call_llm
+from core.wyckoff_single_prompt import WYCKOFF_SINGLE_SYSTEM_PROMPT
+from app.layout import is_data_source_failure_message
+from app.ui_helpers import show_page_loading
 
 TRADING_DAYS_OHLCV = 500  # 威科夫分析需要较长周期
 ADJUST = "qfq"
@@ -195,5 +196,9 @@ def _run_analysis(symbol, image_file, provider, model, api_key):
 
     except Exception as e:
         loading.empty()
-        st.error(f"分析过程中发生错误：{e}")
+        msg = str(e)
+        if is_data_source_failure_message(msg):
+            st.error(msg)
+        else:
+            st.error(f"分析过程中发生错误：{e}")
         st.expander("错误详情").text(traceback.format_exc())

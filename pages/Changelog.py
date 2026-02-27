@@ -5,8 +5,8 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
-from layout import setup_page, show_user_error
-from navigation import show_right_nav
+from app.layout import setup_page, show_user_error
+from app.navigation import show_right_nav
 
 
 setup_page(page_title="版本更新日志", page_icon="📢", require_login=False)

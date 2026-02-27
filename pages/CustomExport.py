@@ -7,11 +7,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import streamlit as st
 from datetime import date, timedelta
 import akshare as ak
-from download_history import add_download_history
-from fetch_a_share_csv import get_all_stocks
-from layout import setup_page, show_user_error
-from ui_helpers import show_page_loading
-from navigation import show_right_nav
+from core.download_history import add_download_history
+from integrations.fetch_a_share_csv import get_all_stocks
+from app.layout import is_data_source_failure_message, setup_page, show_user_error
+from app.ui_helpers import show_page_loading
+from app.navigation import show_right_nav
 
 
 setup_page(page_title="自定义导出", page_icon="🧰")
@@ -202,7 +202,11 @@ with content_col:
                 st.session_state["last_custom_export_query"] = current_query_key
 
         except Exception as e:
-            show_user_error("获取失败，请稍后重试。", e)
+            msg = str(e)
+            if is_data_source_failure_message(msg):
+                show_user_error(msg, None)
+            else:
+                show_user_error("获取失败，请稍后重试。", e)
             st.stop()
 
 

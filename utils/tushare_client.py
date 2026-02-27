@@ -22,6 +22,12 @@ def get_pro():
     """返回 Tushare Pro API 实例；若未配置 token 则返回 None。"""
     token = os.getenv("TUSHARE_TOKEN", "").strip()
     if not token:
+        try:
+            import streamlit as st
+            token = (st.session_state.get("tushare_token") or "").strip()
+        except Exception:
+            pass
+    if not token:
         return None
     try:
         warnings.filterwarnings(

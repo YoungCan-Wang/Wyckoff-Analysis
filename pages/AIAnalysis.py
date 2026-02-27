@@ -11,12 +11,12 @@ import pandas as pd
 import streamlit as st
 import akshare as ak
 
-from layout import setup_page
-from navigation import show_right_nav
-from ui_helpers import show_page_loading
-from ai_prompts import ALPHA_CIO_SYSTEM_PROMPT
-from llm_client import call_llm, SUPPORTED_PROVIDERS, GEMINI_MODELS
-from fetch_a_share_csv import (
+from app.layout import setup_page
+from app.navigation import show_right_nav
+from app.ui_helpers import show_page_loading
+from integrations.ai_prompts import ALPHA_CIO_SYSTEM_PROMPT
+from integrations.llm_client import call_llm, SUPPORTED_PROVIDERS, GEMINI_MODELS
+from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
     _fetch_hist,
     _build_export,
@@ -26,13 +26,13 @@ from fetch_a_share_csv import (
     _stock_name_from_code,
 )
 from utils import extract_symbols_from_text, stock_sector_em
-from wyckoff_engine import (
+from core.wyckoff_engine import (
     FunnelConfig,
     normalize_hist_from_fetch,
     run_funnel,
 )
-from data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
-from single_stock_logic import render_single_stock_page
+from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
+from core.single_stock_logic import render_single_stock_page
 
 # 等待时随机展示的股市名人名言（本地列表）
 STOCK_QUOTES = [
