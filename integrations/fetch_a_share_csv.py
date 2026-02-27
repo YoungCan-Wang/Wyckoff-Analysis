@@ -160,6 +160,18 @@ def get_all_stocks() -> list[dict[str, str]]:
             return []
         return []
 
+    # 0. 若本地缓存存在且在 TTL 内，直接使用缓存（避免每次进入首页都打 akshare 接口）
+    try:
+        if cache_path.exists():
+            age = time.time() - cache_path.stat().st_mtime
+            if age <= cache_ttl_seconds:
+                cached = _read_cache()
+                if cached:
+                    return cached
+    except Exception:
+        # 缓存读取异常不应阻塞后续网络尝试
+        pass
+
     # 1. 尝试从网络获取最新数据
     try:
         info = ak.stock_info_a_code_name()
@@ -178,7 +190,7 @@ def get_all_stocks() -> list[dict[str, str]]:
         return records
     except Exception as e:
         print(f"Network error fetching stock list: {e}. Trying cache...")
-        # 2. 网络失败，尝试读取缓存
+        # 2. 网络失败，尝试读取缓存（即使已过期也比空好）
         cached = _read_cache()
         if cached:
             return cached

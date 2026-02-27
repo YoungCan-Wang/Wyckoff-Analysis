@@ -10,6 +10,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from integrations.ai_prompts import PRIVATE_PM_SYSTEM_PROMPT
 from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
@@ -21,6 +22,8 @@ TRADING_DAYS = 500
 TELEGRAM_MAX_LEN = 3900
 DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+CN_TZ = ZoneInfo("Asia/Shanghai")
+MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
 
 
 @dataclass
@@ -156,6 +159,44 @@ def _split_telegram_message(content: str, max_len: int = TELEGRAM_MAX_LEN) -> li
     return chunks
 
 
+def _normalize_for_telegram_text(content: str) -> str:
+    """
+    Telegram Markdown 容易因特殊字符导致整段降级失败；
+    这里转为稳定纯文本样式，保证可读性。
+    """
+    lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    out: list[str] = []
+    for raw in lines:
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            out.append("")
+            continue
+        if stripped.startswith("#"):
+            title = stripped.lstrip("#").strip()
+            out.append(title)
+            continue
+        if stripped.startswith(("- ", "* ")):
+            out.append("• " + stripped[2:].strip())
+            continue
+        out.append(line)
+    text = "\n".join(out)
+    text = text.replace("**", "").replace("`", "")
+    return text.strip()
+
+
+def _job_end_calendar_day() -> date:
+    """
+    定时任务统一口径：
+    - 北京时间收盘后（默认 >=15:00）走 T+0（当天）
+    - 收盘前走 T-1（上一自然日）
+    """
+    now = datetime.now(CN_TZ)
+    if now.hour >= MARKET_CLOSE_HOUR:
+        return now.date()
+    return (now - timedelta(days=1)).date()
+
+
 def send_to_telegram(message_text: str) -> bool:
     import requests
 
@@ -166,30 +207,22 @@ def send_to_telegram(message_text: str) -> bool:
         return False
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    chunks = _split_telegram_message(message_text)
+    normalized = _normalize_for_telegram_text(message_text)
+    chunks = _split_telegram_message(normalized)
     total = len(chunks)
     for idx, chunk in enumerate(chunks, start=1):
         text = chunk if total == 1 else f"[{idx}/{total}]\n{chunk}"
         payload = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         }
         try:
             resp = requests.post(url, json=payload, timeout=15)
             if resp.status_code == 200:
                 continue
-            # Markdown 格式被 Telegram 拒绝时，自动降级为纯文本重试一次
-            fallback_payload = {
-                "chat_id": chat_id,
-                "text": text,
-                "disable_web_page_preview": True,
-            }
-            resp2 = requests.post(url, json=fallback_payload, timeout=15)
-            if resp2.status_code != 200:
-                print(f"[step4] Telegram 推送失败 part={idx}/{total}, status={resp2.status_code}, body={resp2.text[:300]}")
-                return False
+            print(f"[step4] Telegram 推送失败 part={idx}/{total}, status={resp.status_code}, body={resp.text[:300]}")
+            return False
         except Exception as e:
             print(f"[step4] Telegram 推送异常 part={idx}/{total}: {e}")
             return False
@@ -202,9 +235,18 @@ def _format_position_payload(positions: list[PositionItem], window) -> tuple[str
     live_value_sum = 0.0
     for pos in positions:
         try:
-            raw = _fetch_hist(pos.code, window, "qfq")
-            df = normalize_hist_from_fetch(raw).sort_values("date").reset_index(drop=True)
-            latest_close = float(df.iloc[-1]["close"])
+            raw_qfq = _fetch_hist(pos.code, window, "qfq")
+            df_qfq = normalize_hist_from_fetch(raw_qfq).sort_values("date").reset_index(drop=True)
+            latest_close = float(df_qfq.iloc[-1]["close"])
+
+            # 浮盈亏/市值统一使用真实价格（不复权）优先，qfq 仅用于结构分析
+            try:
+                raw_real = _fetch_hist(pos.code, window, "")
+                df_real = normalize_hist_from_fetch(raw_real).sort_values("date").reset_index(drop=True)
+                latest_close = float(df_real.iloc[-1]["close"])
+            except Exception as e:
+                failures.append(f"{pos.code}:real_close_fallback_to_qfq({e})")
+
             live_value_sum += latest_close * max(pos.shares, 0)
             profit_pct = 0.0
             if pos.cost > 0:
@@ -223,7 +265,7 @@ def _format_position_payload(positions: list[PositionItem], window) -> tuple[str
                 stock_code=pos.code,
                 stock_name=pos.name,
                 wyckoff_tag=pos.strategy or "持仓",
-                df=df,
+                df=df_qfq,
             )
             blocks.append(meta + "\n" + payload)
         except Exception as e:
@@ -257,7 +299,7 @@ def run(
         print("[step4] TG_BOT_TOKEN/TG_CHAT_ID 未配置，跳过 Step4 推送")
         return (True, "skipped_telegram_unconfigured")
 
-    end_day = date.today() - timedelta(days=1)
+    end_day = _job_end_calendar_day()
     window = _resolve_trading_window(end_calendar_day=end_day, trading_days=TRADING_DAYS)
     positions_payload, position_failures, live_positions_value = _format_position_payload(portfolio.positions, window)
     # total_equity 允许不传：默认按"现金 + 当前持仓市值"推导

@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,13 +17,16 @@ import pandas as pd
 from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
 from integrations.fetch_a_share_csv import _resolve_trading_window, _fetch_hist
 from integrations.llm_client import call_llm
+from integrations.data_source import fetch_index_hist, fetch_sector_map
 from utils.feishu import send_feishu_notification
 from core.wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
-FEISHU_MAX_LEN = 12000
+FEISHU_MAX_LEN = 50000
 GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
 OPERATION_TARGET = 6
+STEP3_MAX_AI_INPUT = int(os.getenv("STEP3_MAX_AI_INPUT", "25"))
+STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
 
 RECENT_DAYS = 15
 HIGHLIGHT_DAYS = 60
@@ -30,6 +34,8 @@ HIGHLIGHT_PCT_THRESHOLD = 5.0
 HIGHLIGHT_VOL_RATIO = 2.0
 DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+CN_TZ = ZoneInfo("Asia/Shanghai")
+MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
 
 
 def _dump_model_input(
@@ -68,11 +74,181 @@ def _dump_model_input(
 def _compress_report(report: str, max_len: int = FEISHU_MAX_LEN) -> str:
     if len(report) <= max_len:
         return report
-    truncated = report[:max_len]
-    last_period = truncated.rfind("。")
-    if last_period > max_len // 2:
-        return truncated[: last_period + 1]
-    return truncated + "…"
+    print(f"[step3] 报告过长({len(report)})，按 {max_len} 截断")
+    return report[:max_len] + "\n\n[系统提示] 报告过长，已截断。"
+
+
+def _has_required_sections(report: str) -> bool:
+    text = (report or "").replace(" ", "")
+    has_watch = ("观察池" in text) or ("自选观察池" in text)
+    has_trade = ("可操作池" in text) or ("操作池" in text)
+    return has_watch and has_trade
+
+
+def _repair_report_structure(
+    report: str,
+    model: str,
+    api_key: str,
+    selected_codes: list[str],
+) -> str:
+    """
+    当模型未给出“观察池/操作池”双层结构时，做一次结构修复重写。
+    """
+    if not report.strip():
+        return report
+
+    repair_system = (
+        "你是格式修复器。请将输入研报重排为标准 Markdown，"
+        "必须包含两个章节：1) 观察池（数量不限，含观察条件）"
+        f" 2) 可操作池（固定 {OPERATION_TARGET} 只，若不足需说明原因）。"
+        "不可新增未在输入中出现的股票代码。"
+    )
+    repair_user = (
+        "允许使用的股票代码："
+        + ", ".join(selected_codes)
+        + "\n\n以下是待修复文本：\n\n"
+        + report
+    )
+    try:
+        fixed = call_llm(
+            provider="gemini",
+            model=model,
+            api_key=api_key,
+            system_prompt=repair_system,
+            user_message=repair_user,
+            timeout=180,
+        )
+        return fixed or report
+    except Exception as e:
+        print(f"[step3] 结构修复失败: {e}")
+        return report
+
+
+def _build_fallback_sections(selected_df: pd.DataFrame) -> str:
+    """
+    最后兜底：确保飞书一定出现“观察池/可操作池”结果块。
+    """
+    if selected_df is None or selected_df.empty:
+        return (
+            "## 📚 观察池（系统兜底）\n"
+            "- 本轮无可用候选。\n\n"
+            f"## ⚔️ 可操作池（系统兜底，目标 {OPERATION_TARGET} 只）\n"
+            "- 本轮无可操作标的。"
+        )
+
+    lines = ["## 📚 观察池（系统兜底）"]
+    for _, row in selected_df.iterrows():
+        code = str(row.get("code", ""))
+        name = str(row.get("name", code))
+        tag = str(row.get("tag", ""))
+        score = row.get("wyckoff_score")
+        score_text = f"{float(score):.3f}" if pd.notna(score) else "-"
+        lines.append(
+            f"- `{code} {name}` | 标签: {tag or '-'} | 量化分: {score_text} | 观察条件: 回踩结构战区时需缩量确认。"
+        )
+
+    lines.append("")
+    lines.append(f"## ⚔️ 可操作池（系统兜底，目标 {OPERATION_TARGET} 只）")
+    top_ops = selected_df.head(OPERATION_TARGET)
+    if top_ops.empty:
+        lines.append("- 无")
+    else:
+        for _, row in top_ops.iterrows():
+            code = str(row.get("code", ""))
+            name = str(row.get("name", code))
+            lines.append(
+                f"- `{code} {name}` | 条件建仓: 仅在战区内缩量回踩或强势确认后 1/3 试单。"
+            )
+    return "\n".join(lines)
+
+
+def _job_end_calendar_day() -> date:
+    """
+    定时任务统一口径：
+    - 北京时间收盘后（默认 >=15:00）走 T+0（当天）
+    - 收盘前走 T-1（上一自然日）
+    """
+    now = datetime.now(CN_TZ)
+    if now.hour >= MARKET_CLOSE_HOUR:
+        return now.date()
+    return (now - timedelta(days=1)).date()
+
+
+def _safe_return(series: pd.Series, lookback: int = 10) -> float | None:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) <= lookback:
+        return None
+    start = float(s.iloc[-lookback - 1])
+    end = float(s.iloc[-1])
+    if start == 0:
+        return None
+    return (end - start) / start * 100.0
+
+
+def _resolve_bias_range(regime: str | None) -> tuple[float, float]:
+    r = str(regime or "").upper()
+    if r == "RISK_ON":
+        return (-5.0, 45.0)
+    if r == "RISK_OFF":
+        return (0.0, 25.0)
+    return (0.0, 35.0)
+
+
+def ultimate_compressor(
+    candidates_df: pd.DataFrame,
+    regime: str | None,
+    max_total: int = STEP3_MAX_AI_INPUT,
+    max_per_industry: int = STEP3_MAX_PER_INDUSTRY,
+) -> pd.DataFrame:
+    """
+    Step 4.5 终极压缩：动态乖离过滤 + 因子标准化 + 行业上限。
+    """
+    if candidates_df is None or candidates_df.empty:
+        return pd.DataFrame()
+    if len(candidates_df) <= max_total:
+        out = candidates_df.copy()
+        out["rs_score"] = 1.0
+        out["dry_score"] = 1.0
+        out["wyckoff_score"] = 1.0
+        out["industry_rank"] = 1
+        return out
+
+    df = candidates_df.copy()
+    df["bias_200"] = pd.to_numeric(df.get("bias_200"), errors="coerce")
+    df["rs_10"] = pd.to_numeric(df.get("rs_10"), errors="coerce")
+    df["min_vol_ratio_5d"] = pd.to_numeric(df.get("min_vol_ratio_5d"), errors="coerce")
+    df["industry"] = df.get("industry", "").astype(str).str.strip()
+    df.loc[df["industry"] == "", "industry"] = pd.NA
+
+    # 先删脏数据：核心字段缺失直接淘汰
+    df = df.dropna(subset=["bias_200", "rs_10", "min_vol_ratio_5d", "industry"])
+    if df.empty:
+        return pd.DataFrame()
+
+    # 动态水温阈值
+    bias_min, bias_max = _resolve_bias_range(regime)
+    df = df[(df["bias_200"] >= bias_min) & (df["bias_200"] <= bias_max)]
+    if df.empty:
+        return pd.DataFrame()
+
+    # 百分位因子分数
+    df["rs_score"] = df["rs_10"].rank(pct=True, ascending=True, method="average")
+    # 量比越小越好：ascending=False 使小值获得更高分位
+    df["dry_score"] = df["min_vol_ratio_5d"].rank(
+        pct=True, ascending=False, method="average"
+    )
+    df["wyckoff_score"] = 0.6 * df["rs_score"] + 0.4 * df["dry_score"]
+
+    # 先全局排序，再做行业拥挤度限制
+    df = df.sort_values("wyckoff_score", ascending=False).copy()
+    df["industry_rank"] = (
+        df.groupby("industry")["wyckoff_score"]
+        .rank(ascending=False, method="first")
+        .astype(int)
+    )
+    df = df.groupby("industry", group_keys=False).head(max_per_industry)
+    df = df.head(max_total).reset_index(drop=True)
+    return df
 
 
 def generate_stock_payload(
@@ -80,6 +256,10 @@ def generate_stock_payload(
     stock_name: str,
     wyckoff_tag: str,
     df: pd.DataFrame,
+    *,
+    industry: str | None = None,
+    quant_score: float | None = None,
+    industry_rank: int | None = None,
 ) -> str:
     """
     第五步：将 500 天 OHLCV 浓缩为发给 AI 的高密度文本。
@@ -118,6 +298,11 @@ def generate_stock_payload(
         f"  [价格锚点] 最新实际收盘价={close_val:.2f}（执行建议需围绕该锚点给出结构战区，不得给单点预测价）。\n"
         f"{background}\n"
     )
+    if industry:
+        header += f"  [行业] {industry}\n"
+    if quant_score is not None:
+        rank_text = f"，行业内排名 Top {industry_rank}" if industry_rank is not None else ""
+        header += f"  [量化评分] 综合人因子得分: {quant_score:.3f}{rank_text}\n"
 
     # 近 15 日量价切片
     recent = df.tail(RECENT_DAYS)
@@ -175,11 +360,22 @@ def run(
 
     print(f"[step3] AI 输入股票数={len(items)}（全量命中输入）")
 
-    end_day = date.today() - timedelta(days=1)
+    end_day = _job_end_calendar_day()
     window = _resolve_trading_window(end_calendar_day=end_day, trading_days=TRADING_DAYS)
+
+    regime = (benchmark_context or {}).get("regime", "NEUTRAL")
+    sector_map = fetch_sector_map()
+    benchmark_ret_10: float | None = None
+    try:
+        bench_df = fetch_index_hist("000001", window.start_trade_date, window.end_trade_date)
+        benchmark_ret_10 = _safe_return(bench_df["close"], lookback=10)
+    except Exception:
+        benchmark_ret_10 = None
 
     parts: list[str] = []
     failed: list[tuple[str, str]] = []
+    candidate_rows: list[dict] = []
+    code_to_df: dict[str, pd.DataFrame] = {}
     for item in items:
         code = item["code"]
         name = item.get("name", code)
@@ -187,17 +383,83 @@ def run(
         try:
             df_raw = _fetch_hist(code, window, "qfq")
             df = normalize_hist_from_fetch(df_raw)
-            payload = generate_stock_payload(code, name, tag, df)
-            parts.append(payload)
+            code_to_df[code] = df
+
+            close = pd.to_numeric(df["close"], errors="coerce")
+            volume = pd.to_numeric(df["volume"], errors="coerce")
+            ma200 = close.rolling(200).mean()
+            latest_close = close.iloc[-1] if len(close) else pd.NA
+            latest_ma200 = ma200.iloc[-1] if len(ma200) else pd.NA
+            bias_200 = pd.NA
+            if pd.notna(latest_close) and pd.notna(latest_ma200) and float(latest_ma200) != 0:
+                bias_200 = (float(latest_close) - float(latest_ma200)) / float(latest_ma200) * 100.0
+
+            stock_ret_10 = _safe_return(close, lookback=10)
+            rs_10 = stock_ret_10
+            if stock_ret_10 is not None and benchmark_ret_10 is not None:
+                rs_10 = stock_ret_10 - benchmark_ret_10
+
+            vol_ma20 = volume.rolling(20).mean()
+            vol_ratio = volume / vol_ma20.replace(0, pd.NA)
+            min_vol_ratio_5d = pd.to_numeric(vol_ratio.tail(5), errors="coerce").min()
+
+            candidate_rows.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "tag": tag,
+                    "industry": sector_map.get(code, "未知行业"),
+                    "bias_200": bias_200,
+                    "rs_10": rs_10,
+                    "min_vol_ratio_5d": min_vol_ratio_5d,
+                }
+            )
         except Exception as e:
             failed.append((code, str(e)))
 
-    if not parts:
+    if not candidate_rows:
         if failed:
             detail = ", ".join(f"{s}({e})" for s, e in failed)
             print(f"[step3] OHLCV 全部拉取失败: {detail}")
             return (False, "data_all_failed", "")
         return (True, "no_data_but_no_error", "")
+
+    candidates_df = pd.DataFrame(candidate_rows)
+    compressed_df = ultimate_compressor(
+        candidates_df,
+        regime=regime,
+        max_total=STEP3_MAX_AI_INPUT,
+        max_per_industry=STEP3_MAX_PER_INDUSTRY,
+    )
+    if compressed_df.empty:
+        # 压缩过严时回退原始候选，避免全量被误杀
+        selected_df = candidates_df.copy()
+        selected_df["wyckoff_score"] = pd.NA
+        selected_df["industry_rank"] = pd.NA
+        print("[step3] 压缩器结果为空，回退为未压缩候选列表")
+    else:
+        selected_df = compressed_df
+
+    selected_codes = [str(x) for x in selected_df["code"].tolist()]
+    print(
+        f"[step3] 候选压缩: raw={len(candidates_df)} -> selected={len(selected_codes)} "
+        f"(regime={regime}, max_total={STEP3_MAX_AI_INPUT}, max_per_industry={STEP3_MAX_PER_INDUSTRY})"
+    )
+    for _, row in selected_df.iterrows():
+        code = str(row["code"])
+        df = code_to_df.get(code)
+        if df is None:
+            continue
+        payload = generate_stock_payload(
+            stock_code=code,
+            stock_name=str(row.get("name", code)),
+            wyckoff_tag=str(row.get("tag", "")),
+            df=df,
+            industry=str(row.get("industry", "")),
+            quant_score=float(row["wyckoff_score"]) if pd.notna(row.get("wyckoff_score")) else None,
+            industry_rank=int(row["industry_rank"]) if pd.notna(row.get("industry_rank")) else None,
+        )
+        parts.append(payload)
 
     benchmark_lines = []
     if benchmark_context:
@@ -217,7 +479,14 @@ def run(
 
     user_message = (
         ("{}\n\n".format("\n".join(benchmark_lines)) if benchmark_lines else "")
-        + "以下是通过 Wyckoff Funnel 命中的全量候选名单。\n"
+        + (
+            f"[量化压缩] 候选已从 {len(candidates_df)} 只压缩到 {len(parts)} 只，"
+            f"regime={regime}, max_total={STEP3_MAX_AI_INPUT}, "
+            f"max_per_industry={STEP3_MAX_PER_INDUSTRY}。\n\n"
+            if len(candidates_df) > len(parts)
+            else ""
+        )
+        + "以下是通过 Wyckoff Funnel 命中并经量化压缩后的候选名单。\n"
         + "请先从全部输入中筛出“值得加入自选观察池”的标的（数量不限），并明确每只的观察条件；"
         + f"再从观察池中严格挑选“次日可买入的操作池”{OPERATION_TARGET}只。\n"
         + f"输出必须包含两个部分：1) 观察池（不限，含观察条件） 2) 操作池（固定{OPERATION_TARGET}只）。\n"
@@ -229,7 +498,9 @@ def run(
         + "4) 强势突破标的必须给“防踏空策略”：开盘强势确认后可先用计划仓位1/3试单，其余等待二次确认。\n\n"
         + "\n".join(parts)
     )
-    _dump_model_input(items=items, model=model, system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT, user_message=user_message)
+    selected_set = set(selected_codes)
+    selected_items = [x for x in items if str(x.get("code")) in selected_set]
+    _dump_model_input(items=selected_items, model=model, system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT, user_message=user_message)
 
     report = ""
     models_to_try = [model]
@@ -252,6 +523,18 @@ def run(
             if m == models_to_try[-1]:
                 return (False, "llm_failed", "")
 
+    if not _has_required_sections(report):
+        print("[step3] 首版研报缺少观察池/可操作池，执行一次结构修复")
+        report = _repair_report_structure(
+            report=report,
+            model=model,
+            api_key=api_key,
+            selected_codes=selected_codes,
+        )
+    if not _has_required_sections(report):
+        print("[step3] 结构修复后仍缺少关键章节，追加系统兜底分层")
+        report = report.rstrip() + "\n\n" + _build_fallback_sections(selected_df)
+
     content = _compress_report(report)
     if failed:
         content += f"\n\n**获取失败**: {', '.join(f'{s}({e})' for s, e in failed)}"
@@ -261,5 +544,5 @@ def run(
     if not sent:
         print("[step3] 飞书推送失败")
         return (False, "feishu_failed", report)
-    print(f"[step3] 研报发送成功，股票数={len(items)}，拉取失败数={len(failed)}")
+    print(f"[step3] 研报发送成功，股票数={len(parts)}，拉取失败数={len(failed)}")
     return (True, "ok", report)
