@@ -9,6 +9,7 @@ from datetime import date, timedelta
 import akshare as ak
 from core.download_history import add_download_history
 from integrations.fetch_a_share_csv import get_all_stocks
+from integrations.data_source import fetch_stock_hist
 from app.layout import is_data_source_failure_message, setup_page, show_user_error
 from app.ui_helpers import show_page_loading
 from app.navigation import show_right_nav
@@ -26,9 +27,9 @@ with content_col:
         {
             "id": "stock_zh_a_hist",
             "label": "A股个股历史（日线）",
-            "fn": ak.stock_zh_a_hist,
+            "fn": fetch_stock_hist,
             "has_adjust": True,
-            "help": "返回日频 K 线数据；symbol 为 6 位股票代码。",
+            "help": "返回日频 K 线数据；symbol 为 6 位股票代码（支持 akshare/baostock/efinance 自动降级）。",
             "default_symbol": "300364",
         },
         {
@@ -168,7 +169,14 @@ with content_col:
                         st.stop()
                     sd = start_date.strftime("%Y%m%d")
                     ed = end_date.strftime("%Y%m%d")
-                    if source["id"] == "index_zh_a_hist":
+                    if source["id"] == "stock_zh_a_hist":
+                        df = source["fn"](
+                            symbol=symbol,
+                            start=start_date,
+                            end=end_date,
+                            adjust=adjust,
+                        )
+                    elif source["id"] == "index_zh_a_hist":
                         df = source["fn"](
                             symbol=symbol, period="daily", start_date=sd, end_date=ed
                         )
