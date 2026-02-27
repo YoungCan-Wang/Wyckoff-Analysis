@@ -9,7 +9,7 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
+    retry_if_exception,
 )
 from dotenv import load_dotenv
 import pandas as pd
@@ -74,10 +74,17 @@ def _maybe_cleanup_cache() -> None:
 
 
 # 增加网络请求重试机制，应对 RemoteDisconnected 等反爬限制
+def _should_retry_fetch(e: Exception) -> bool:
+    # 明确的“数据源全失败”不应重试，否则页面会长时间卡在加载中
+    if is_data_source_failure_message(str(e)):
+        return False
+    return True
+
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=3, max=30),
-    retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试，确保稳健
+    retry=retry_if_exception(_should_retry_fetch),
     reraise=True,
 )
 def _fetch_hist_with_retry(symbol, window, adjust):

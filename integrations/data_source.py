@@ -45,6 +45,9 @@ def _fetch_stock_akshare(symbol: str, start: str, end: str, adjust: str) -> pd.D
     )
     if df is None or df.empty:
         raise RuntimeError("akshare empty")
+    if "日期" in df.columns:
+        df = df.copy()
+        df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.strftime("%Y-%m-%d")
     return df
 
 
@@ -70,7 +73,9 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
         )
         if rs.error_code != "0":
             raise RuntimeError(f"baostock: {rs.error_msg}")
-        rows = [rs.get_row_data() for _ in range(rs.get_row_count())]
+        rows: list[list[str]] = []
+        while rs.next():
+            rows.append(rs.get_row_data())
         if not rows:
             raise RuntimeError("baostock empty")
         df = pd.DataFrame(rows, columns=rs.fields)
@@ -78,6 +83,10 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
             "date": "日期", "open": "开盘", "high": "最高", "low": "最低",
             "close": "收盘", "volume": "成交量", "amount": "成交额", "pctChg": "涨跌幅",
         })
+        df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.strftime("%Y-%m-%d")
+        for c in ["开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
         df["换手率"] = pd.NA
         df["振幅"] = pd.NA
         return df
@@ -96,6 +105,26 @@ def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
         df = result
     if df is None or (hasattr(df, "empty") and df.empty):
         raise RuntimeError("efinance empty")
+
+    # efinance 不同版本列名可能带单位后缀，如：涨跌幅(%)、成交额(元)
+    df = df.copy()
+    def _rename_prefix(std: str) -> None:
+        if std in df.columns:
+            return
+        for c in df.columns:
+            if str(c).startswith(std):
+                df.rename(columns={c: std}, inplace=True)
+                return
+
+    # 日期列兼容
+    if "日期" not in df.columns:
+        for c in df.columns:
+            if str(c).endswith("日期") or "日期" in str(c):
+                df.rename(columns={c: "日期"}, inplace=True)
+                break
+
+    for std in ["开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅", "换手率", "振幅"]:
+        _rename_prefix(std)
     # efinance: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 换手率
     out_cols = ["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅", "换手率", "振幅"]
     for c in ["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额", "涨跌幅"]:
@@ -151,6 +180,8 @@ def fetch_stock_hist(
     # 1. akshare
     try:
         return _fetch_stock_akshare(symbol, start_s, end_s, adjust)
+    except ModuleNotFoundError as e:
+        failed_sources.append(f"akshare(缺少依赖 {e.name})")
     except Exception:
         failed_sources.append("akshare")
 
@@ -163,6 +194,8 @@ def fetch_stock_hist(
     # 3. efinance (仅前复权)
     try:
         return _fetch_stock_efinance(symbol, start_s, end_s)
+    except ModuleNotFoundError as e:
+        failed_sources.append(f"efinance(未安装: {e.name})")
     except Exception:
         failed_sources.append("efinance")
 
