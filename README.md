@@ -113,9 +113,15 @@ python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 账户格式见 `.env.example`。其中 `total_equity` 是可选字段，不填会自动按“`free_cash + 持仓最新市值`”推导。TG_CHAT_ID 需先给 bot 发 `/start`，再从 getUpdates 返回里取 chat.id。
 ---
 
-## 交流请加飞书群
+## 交流
 
-![飞书群二维码](attach/飞书20260202-185128.png)
+### 飞书群二维码
+
+![飞书群二维码](attach/飞书群二维码.png)
+
+### 飞书个人二维码
+
+![飞书个人二维码](attach/飞书个人二维码.png)
 
 ---
 
