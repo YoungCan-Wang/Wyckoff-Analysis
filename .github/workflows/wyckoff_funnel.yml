@@ -18,6 +18,9 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      MY_PORTFOLIO_STATE: ${{ secrets.MY_PORTFOLIO_STATE }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       TZ: Asia/Shanghai
 
     steps:

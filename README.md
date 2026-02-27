@@ -14,6 +14,7 @@
 |------|------|
 | 📊 **每日选股** | 配置 GitHub Actions 后，工作日 16:30 自动跑 Wyckoff Funnel，从主板+创业板筛出 6 只，推送到飞书 |
 | 🤖 **AI 研报** | 对筛选结果生成观察池 + 操作池，含技术结构、阻力位、交易计划等 |
+| 🕶️ **私人决断（Step4）** | 结合个人持仓与外部候选，生成 Buy/Hold/Sell 私密指令，并通过 Telegram 单独发送 |
 | 📁 **行情导出** | Web 或命令行拉取指定股票日线，导出原始/增强两份 CSV（OHLCV 开高低收量等） |
 | 🔐 **登录与配置** | 支持登录、飞书 Webhook、API Key 云端同步 |
 
@@ -78,6 +79,9 @@ python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 | `GEMINI_API_KEY` | 是 | AI 研报 |
 | `TUSHARE_TOKEN` | 是 | 行情与市值数据 |
 | `GEMINI_MODEL` | 否 | 未配则用默认模型 |
+| `MY_PORTFOLIO_STATE` | Step4 用 | 可选，格式见 `.env.example` |
+| `TG_BOT_TOKEN` | Step4 用 | 可选 |
+| `TG_CHAT_ID` | Step4 用 | 可选 |
 
 ### 验证
 
@@ -87,36 +91,26 @@ python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 - Artifacts 中有 `daily-job-logs-*`
 - 飞书收到漏斗结果 + 研报
 
-### 默认行为契约（当前版本）
+常规跑完约 90～130 分钟。报错时看日志里缺哪个配置。
 
-- 股票池范围：主板 + 创业板，自动剔除 ST。
-- 漏斗流程：`Layer1 -> Layer2 -> Layer3 -> Layer4`，其中日线按批次拉取并在批次内先做 L1/L2。
-- 宏观总闸：会注入大盘水温（RISK_ON / NEUTRAL / RISK_OFF）并动态调参。
-- AI 输入：向模型传入“漏斗命中的全量候选”，不是只传 6 只。
-- AI 输出目标：先产出观察池（数量不限，含观察条件），再产出操作池（固定 6 只）。
-- 飞书推送：长内容会自动分片发送，避免超长截断。
+### 常见报错
 
-### 执行时长与进度判断（SLA）
-
-- 常规耗时：约 `90~130` 分钟（受网络、数据源、候选规模影响）。
-- 关键进度日志：
-  - `[funnel] 批次#x/y 启动`：开始处理某一批股票。
-  - `[funnel] 批次#x 完成`：该批拉取与 L1/L2 已结束。
-  - `[funnel] L1=... L2=... L3=... 命中=...`：漏斗汇总完成。
-  - `[step3] AI 输入股票数=...`：已进入大模型研报阶段。
-  - `=== 阶段汇总 ===`：全流程结束（以该段为准）。
-
-### 故障排查矩阵（先看这个）
-
-| 症状（日志） | 常见原因 | 处理建议 |
 |------|------|------|
 | `配置缺失: FEISHU_WEBHOOK_URL` | 未配置飞书 Secret | 在仓库 Secrets 添加 `FEISHU_WEBHOOK_URL` |
 | `配置缺失: GEMINI_API_KEY` | 未配置模型 Key 或已失效 | 更新 `GEMINI_API_KEY` 后重跑 |
 | `市值数据为空（TUSHARE_TOKEN 可能缺失/失效）` | `TUSHARE_TOKEN` 缺失/失效/额度问题 | 检查并更新 `TUSHARE_TOKEN`，确认账号权限 |
 | `[step3] 模型 ... 失败` / `llm_failed` | 模型不可用、限流、网络抖动 | 更换 `GEMINI_MODEL` 或稍后重试 |
 | `[step3] 飞书推送失败` / `feishu_failed` | Webhook 无效、限流、网络问题 | 重新生成飞书机器人 Webhook 并替换 Secret |
+| `阶段 3 私人再平衡: 跳过（MY_PORTFOLIO_STATE 未配置）` | 未配置账户状态 | 配置 `MY_PORTFOLIO_STATE` 后重跑 |
+| `阶段 3 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）` | 未配置 Telegram | 配置 Telegram Secrets 后重跑 |
+| `User location is not supported for the API use` | 模型地域限制 | 更换可用网络出口或供应商 |
 | Action 超时或明显慢于 2 小时 | 数据源抖动、重试变多 | 查看批次日志定位卡点，必要时手动重跑 |
 
+### 私人决断（可选）
+
+若配置了持仓和 Telegram，选股和研报跑完后会单独发一份「针对你账户的买卖建议」到你的 Telegram，只有你能看到。不配则跳过，不影响选股和研报。
+
+账户格式见 `.env.example`。其中 `total_equity` 是可选字段，不填会自动按“`free_cash + 持仓最新市值`”推导。TG_CHAT_ID 需先给 bot 发 `/start`，再从 getUpdates 返回里取 chat.id。
 ---
 
 ## 交流请加飞书群
@@ -137,6 +131,7 @@ python -u fetch_a_share_csv.py --symbols 000973 600798 601390
 ├── scripts/
 │   ├── wyckoff_funnel.py   # 定时选股任务
 │   ├── step3_batch_report.py  # AI 研报
+│   ├── step4_rebalancer.py   # 私人决断
 │   └── daily_job.py        # 日终流水线
 ├── requirements.txt
 └── .env.example

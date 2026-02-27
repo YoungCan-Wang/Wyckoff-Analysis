@@ -3,11 +3,12 @@
 定时任务主入口：Wyckoff Funnel → 批量研报
 
 配置来源：仅读取环境变量（GitHub Secrets），与 Streamlit 用户配置（Supabase）完全独立。
-环境变量：FEISHU_WEBHOOK_URL, GEMINI_API_KEY, GEMINI_MODEL
+环境变量：FEISHU_WEBHOOK_URL, GEMINI_API_KEY, GEMINI_MODEL, MY_PORTFOLIO_STATE, TG_BOT_TOKEN, TG_CHAT_ID
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -23,6 +24,14 @@ STEP3_REASON_MAP = {
     "skipped_no_symbols": "无输入股票，已跳过",
     "no_data_but_no_error": "无可用数据",
 }
+STEP4_REASON_MAP = {
+    "missing_api_key": "GEMINI_API_KEY 缺失",
+    "skipped_invalid_portfolio": "持仓配置缺失或格式错误，已跳过",
+    "skipped_telegram_unconfigured": "Telegram 未配置，已跳过",
+    "llm_failed": "Step4 模型调用失败",
+    "telegram_failed": "Telegram 推送失败",
+    "ok": "ok",
+}
 
 
 def _now() -> str:
@@ -36,6 +45,36 @@ def _log(msg: str, logs_path: str | None = None) -> None:
         os.makedirs(os.path.dirname(logs_path) or ".", exist_ok=True)
         with open(logs_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+
+
+def _detect_step4_readiness() -> tuple[bool, str]:
+    """
+    检测 Step4 所需配置是否齐全：
+    1) 账户信息 MY_PORTFOLIO_STATE
+    2) Telegram 推送配置 TG_BOT_TOKEN / TG_CHAT_ID
+    """
+    raw = os.getenv("MY_PORTFOLIO_STATE", "").strip()
+    if not raw:
+        return (False, "MY_PORTFOLIO_STATE 未配置")
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        return (False, f"MY_PORTFOLIO_STATE 非法 JSON: {e}")
+    if not isinstance(data, dict):
+        return (False, "MY_PORTFOLIO_STATE 必须是 JSON 对象")
+
+    if not isinstance(data.get("positions"), list):
+        return (False, "MY_PORTFOLIO_STATE 缺少/非法 positions（必须是数组）")
+    if data.get("free_cash") is None:
+        return (False, "MY_PORTFOLIO_STATE 缺少 free_cash")
+
+    tg_bot_token = os.getenv("TG_BOT_TOKEN", "").strip()
+    tg_chat_id = os.getenv("TG_CHAT_ID", "").strip()
+    if not tg_bot_token:
+        return (False, "TG_BOT_TOKEN 未配置")
+    if not tg_chat_id:
+        return (False, "TG_CHAT_ID 未配置")
+    return (True, "ok")
 
 
 def main() -> int:
@@ -69,11 +108,13 @@ def main() -> int:
 
     from scripts.wyckoff_funnel import run as run_step2
     from scripts.step3_batch_report import run as run_step3
+    from scripts.step4_rebalancer import run as run_step4
 
     summary: list[dict] = []
     has_blocking_failure = False
     symbols_info: list[dict] = []
     benchmark_context: dict = {}
+    step3_report_text = ""
 
     _log("开始定时任务", logs_path)
 
@@ -104,7 +145,7 @@ def main() -> int:
     if symbols_info:
         t0 = datetime.now(TZ)
         try:
-            step3_ok, step3_reason = run_step3(
+            step3_ok, step3_reason, step3_report_text = run_step3(
                 symbols_info, webhook, api_key, model, benchmark_context=benchmark_context
             )
             step3_err = None if step3_ok else STEP3_REASON_MAP.get(step3_reason, step3_reason)
@@ -123,6 +164,42 @@ def main() -> int:
     else:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
         _log("阶段 2 批量研报: 跳过（无筛选结果）", logs_path)
+
+    # 阶段 3：私人账户再平衡（未检测到 Step4 所需配置时直接跳过）
+    step4_ready, step4_reason = _detect_step4_readiness()
+    if not step4_ready:
+        summary.append({
+            "step": "私人再平衡",
+            "ok": True,
+            "err": None,
+            "elapsed_s": 0,
+            "output": f"skipped ({step4_reason})",
+        })
+        _log(f"阶段 3 私人再平衡: 跳过（{step4_reason}）", logs_path)
+    else:
+        t0 = datetime.now(TZ)
+        step4_ok = True
+        step4_err = None
+        try:
+            step4_ok, step4_reason = run_step4(
+                external_report=step3_report_text,
+                benchmark_context=benchmark_context,
+                api_key=api_key,
+                model=model,
+            )
+            step4_err = None if step4_ok else STEP4_REASON_MAP.get(step4_reason, step4_reason)
+        except Exception as e:
+            step4_ok = False
+            step4_err = str(e)
+        elapsed4 = (datetime.now(TZ) - t0).total_seconds()
+        summary.append({
+            "step": "私人再平衡",
+            "ok": step4_ok and step4_err is None,
+            "err": step4_err,
+            "elapsed_s": round(elapsed4, 1),
+            "output": "telegram",
+        })
+        _log(f"阶段 3 私人再平衡: ok={step4_ok}, elapsed={elapsed4:.1f}s, err={step4_err}", logs_path)
 
     # 汇总
     total_elapsed = sum(s.get("elapsed_s", 0) for s in summary)

@@ -150,14 +150,14 @@ def run(
     api_key: str,
     model: str,
     benchmark_context: dict | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str]:
     """
     拉取 OHLCV → 第五步特征工程 → AI 研报 → 飞书发送。
     symbols_info: list[{"code", "name", "tag"}] 或 list[str]（向后兼容）。
     """
     if not symbols_info:
         print("[step3] 无输入股票，跳过")
-        return (True, "skipped_no_symbols")
+        return (True, "skipped_no_symbols", "")
 
     # 兼容旧调用（纯 str 列表）
     items: list[dict] = []
@@ -190,8 +190,8 @@ def run(
         if failed:
             detail = ", ".join(f"{s}({e})" for s, e in failed)
             print(f"[step3] OHLCV 全部拉取失败: {detail}")
-            return (False, "data_all_failed")
-        return (True, "no_data_but_no_error")
+            return (False, "data_all_failed", "")
+        return (True, "no_data_but_no_error", "")
 
     benchmark_lines = []
     if benchmark_context:
@@ -239,7 +239,7 @@ def run(
         except Exception as e:
             print(f"[step3] 模型 {m} 失败: {e}")
             if m == models_to_try[-1]:
-                return (False, "llm_failed")
+                return (False, "llm_failed", "")
 
     content = _compress_report(report)
     if failed:
@@ -249,6 +249,6 @@ def run(
     sent = send_feishu_notification(webhook_url, title, content)
     if not sent:
         print("[step3] 飞书推送失败")
-        return (False, "feishu_failed")
+        return (False, "feishu_failed", report)
     print(f"[step3] 研报发送成功，股票数={len(items)}，拉取失败数={len(failed)}")
-    return (True, "ok")
+    return (True, "ok", report)
