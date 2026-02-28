@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -155,6 +156,41 @@ def _build_fallback_sections(selected_df: pd.DataFrame) -> str:
                 f"- `{code} {name}` | 条件建仓: 仅在战区内缩量回踩或强势确认后 1/3 试单。"
             )
     return "\n".join(lines)
+
+
+def _extract_operation_pool_codes(report: str) -> list[str]:
+    """
+    从模型报告中提取“可操作池/操作池”章节内出现的股票代码（6位）。
+    用于发送前置速览，避免长文第一片只显示1只导致阅读不完整。
+    """
+    if not report:
+        return []
+    lines = report.splitlines()
+    in_ops = False
+    codes: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if ("可操作池" in line) or ("操作池" in line):
+            in_ops = True
+            continue
+        if (
+            in_ops
+            and line.startswith("## ")
+            and ("可操作池" not in line and "操作池" not in line)
+            and ("🎯" not in line)
+        ):
+            break
+        if not in_ops:
+            continue
+        for c in re.findall(r"\b\d{6}\b", line):
+            if c in seen:
+                continue
+            seen.add(c)
+            codes.append(c)
+    return codes
 
 
 def _job_end_calendar_day() -> date:
@@ -542,7 +578,24 @@ def run(
         report = report.rstrip() + "\n\n" + _build_fallback_sections(selected_df)
 
     model_banner = f"🤖 模型: {used_model or model}"
-    content = f"{model_banner}\n\n{report}"
+    code_name = {str(row.get("code")): str(row.get("name", row.get("code"))) for _, row in selected_df.iterrows()}
+    ops_codes = _extract_operation_pool_codes(report)
+    if len(ops_codes) < OPERATION_TARGET:
+        # 若模型文本过长或结构异常导致提取不足，补齐到 6 只，保证第一屏可读
+        for c in selected_codes:
+            if c in ops_codes:
+                continue
+            ops_codes.append(c)
+            if len(ops_codes) >= OPERATION_TARGET:
+                break
+    ops_lines = [f"- {c} {code_name.get(c, c)}" for c in ops_codes[:OPERATION_TARGET]]
+    ops_preview = (
+        "## ⚔️ 可操作池速览（前置）\n"
+        + ("\n".join(ops_lines) if ops_lines else "- 无")
+        + "\n\n---\n"
+    )
+
+    content = f"{model_banner}\n\n{ops_preview}\n{report}"
     print(f"[step3] 飞书发送原文长度={len(content)}（不压缩，交由飞书分片）")
     print(f"[step3] 研报实际使用模型={used_model or model}")
     if failed:

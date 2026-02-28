@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 import requests
 import time
 
@@ -68,7 +69,7 @@ def _split_lark_md(content: str, max_len: int = 2800) -> list[str]:
     return chunks
 
 
-def _post_card(webhook_url: str, title: str, chunk: str) -> bool:
+def _post_card(webhook_url: str, title: str, chunk: str) -> tuple[bool, str]:
     headers = {"Content-Type": "application/json"}
     payload = {
         "msg_type": "interactive",
@@ -81,12 +82,15 @@ def _post_card(webhook_url: str, title: str, chunk: str) -> bool:
     }
     resp = requests.post(webhook_url.strip(), headers=headers, json=payload, timeout=10)
     if resp.status_code != 200:
-        return False
+        return (False, f"http_{resp.status_code}")
     try:
         data = resp.json()
-        return int(data.get("code", -1)) == 0
+        code = int(data.get("code", -1))
+        if code == 0:
+            return (True, "ok")
+        return (False, f"feishu_code_{code}: {data.get('msg', '')}")
     except Exception:
-        return True
+        return (True, "ok_non_json")
 
 
 def send_feishu_notification(webhook_url: str, title: str, content: str) -> bool:
@@ -95,15 +99,29 @@ def send_feishu_notification(webhook_url: str, title: str, content: str) -> bool
         return False
 
     normalized = _normalize_for_lark_md(content)
-    chunks = _split_lark_md(normalized)
+    max_len = int(os.getenv("FEISHU_LARK_MAX_LEN", "2800"))
+    chunks = _split_lark_md(normalized, max_len=max_len)
 
     try:
         total = len(chunks)
         for idx, chunk in enumerate(chunks, start=1):
             part_title = title if total == 1 else f"{title} ({idx}/{total})"
-            ok = _post_card(webhook_url, part_title, chunk)
+            ok = False
+            last_err = "unknown"
+            for attempt in range(1, 4):
+                ok, err = _post_card(webhook_url, part_title, chunk)
+                if ok:
+                    print(f"[feishu] sent part {idx}/{total}, len={len(chunk)}, attempt={attempt}")
+                    break
+                last_err = err
+                sleep_s = 0.6 * attempt
+                print(
+                    f"[feishu] failed part {idx}/{total}, len={len(chunk)}, "
+                    f"attempt={attempt}, err={err}, retry_in={sleep_s:.1f}s"
+                )
+                time.sleep(sleep_s)
             if not ok:
-                print(f"Feishu notification failed on part {idx}/{total}")
+                print(f"Feishu notification failed on part {idx}/{total}: {last_err}")
                 return False
             if idx < total:
                 time.sleep(0.15)
