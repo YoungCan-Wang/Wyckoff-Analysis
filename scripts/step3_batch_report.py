@@ -22,11 +22,13 @@ from utils.feishu import send_feishu_notification
 from core.wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
-FEISHU_MAX_LEN = 50000
 GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
 OPERATION_TARGET = 6
 STEP3_MAX_AI_INPUT = int(os.getenv("STEP3_MAX_AI_INPUT", "25"))
 STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
+STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 
 RECENT_DAYS = 15
 HIGHLIGHT_DAYS = 60
@@ -69,13 +71,6 @@ def _dump_model_input(
         f.write(body)
     print(f"[step3] 模型输入已落盘: {path}")
     return path
-
-
-def _compress_report(report: str, max_len: int = FEISHU_MAX_LEN) -> str:
-    if len(report) <= max_len:
-        return report
-    print(f"[step3] 报告过长({len(report)})，按 {max_len} 截断")
-    return report[:max_len] + "\n\n[系统提示] 报告过长，已截断。"
 
 
 def _has_required_sections(report: str) -> bool:
@@ -425,26 +420,29 @@ def run(
         return (True, "no_data_but_no_error", "")
 
     candidates_df = pd.DataFrame(candidate_rows)
-    compressed_df = ultimate_compressor(
-        candidates_df,
-        regime=regime,
-        max_total=STEP3_MAX_AI_INPUT,
-        max_per_industry=STEP3_MAX_PER_INDUSTRY,
-    )
-    if compressed_df.empty:
-        # 压缩过严时回退原始候选，避免全量被误杀
-        selected_df = candidates_df.copy()
-        selected_df["wyckoff_score"] = pd.NA
-        selected_df["industry_rank"] = pd.NA
-        print("[step3] 压缩器结果为空，回退为未压缩候选列表")
+    selected_df = candidates_df.copy()
+    selected_df["wyckoff_score"] = pd.NA
+    selected_df["industry_rank"] = pd.NA
+
+    if STEP3_ENABLE_COMPRESSION:
+        compressed_df = ultimate_compressor(
+            candidates_df,
+            regime=regime,
+            max_total=STEP3_MAX_AI_INPUT,
+            max_per_industry=STEP3_MAX_PER_INDUSTRY,
+        )
+        if compressed_df.empty:
+            print("[step3] 压缩器结果为空，回退为全量候选列表")
+        else:
+            selected_df = compressed_df
+        print(
+            f"[step3] 候选压缩已启用: raw={len(candidates_df)} -> selected={len(selected_df)} "
+            f"(regime={regime}, max_total={STEP3_MAX_AI_INPUT}, max_per_industry={STEP3_MAX_PER_INDUSTRY})"
+        )
     else:
-        selected_df = compressed_df
+        print(f"[step3] 候选压缩未启用: selected=全量{len(selected_df)}")
 
     selected_codes = [str(x) for x in selected_df["code"].tolist()]
-    print(
-        f"[step3] 候选压缩: raw={len(candidates_df)} -> selected={len(selected_codes)} "
-        f"(regime={regime}, max_total={STEP3_MAX_AI_INPUT}, max_per_industry={STEP3_MAX_PER_INDUSTRY})"
-    )
     for _, row in selected_df.iterrows():
         code = str(row["code"])
         df = code_to_df.get(code)
@@ -480,13 +478,19 @@ def run(
     user_message = (
         ("{}\n\n".format("\n".join(benchmark_lines)) if benchmark_lines else "")
         + (
-            f"[量化压缩] 候选已从 {len(candidates_df)} 只压缩到 {len(parts)} 只，"
-            f"regime={regime}, max_total={STEP3_MAX_AI_INPUT}, "
-            f"max_per_industry={STEP3_MAX_PER_INDUSTRY}。\n\n"
-            if len(candidates_df) > len(parts)
+            (
+                f"[量化压缩] 候选已从 {len(candidates_df)} 只压缩到 {len(parts)} 只，"
+                f"regime={regime}, max_total={STEP3_MAX_AI_INPUT}, "
+                f"max_per_industry={STEP3_MAX_PER_INDUSTRY}。\n\n"
+            )
+            if STEP3_ENABLE_COMPRESSION and len(candidates_df) > len(parts)
             else ""
         )
-        + "以下是通过 Wyckoff Funnel 命中并经量化压缩后的候选名单。\n"
+        + (
+            "以下是通过 Wyckoff Funnel 命中并经量化压缩后的候选名单。\n"
+            if STEP3_ENABLE_COMPRESSION
+            else "以下是通过 Wyckoff Funnel 命中的全量候选名单（未压缩）。\n"
+        )
         + "请先从全部输入中筛出“值得加入自选观察池”的标的（数量不限），并明确每只的观察条件；"
         + f"再从观察池中严格挑选“次日可买入的操作池”{OPERATION_TARGET}只。\n"
         + f"输出必须包含两个部分：1) 观察池（不限，含观察条件） 2) 操作池（固定{OPERATION_TARGET}只）。\n"
@@ -503,6 +507,7 @@ def run(
     _dump_model_input(items=selected_items, model=model, system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT, user_message=user_message)
 
     report = ""
+    used_model = ""
     models_to_try = [model]
     if GEMINI_MODEL_FALLBACK and GEMINI_MODEL_FALLBACK != model:
         models_to_try.append(GEMINI_MODEL_FALLBACK)
@@ -517,6 +522,7 @@ def run(
                 user_message=user_message,
                 timeout=300,
             )
+            used_model = m
             break
         except Exception as e:
             print(f"[step3] 模型 {m} 失败: {e}")
@@ -527,7 +533,7 @@ def run(
         print("[step3] 首版研报缺少观察池/可操作池，执行一次结构修复")
         report = _repair_report_structure(
             report=report,
-            model=model,
+            model=used_model or model,
             api_key=api_key,
             selected_codes=selected_codes,
         )
@@ -535,7 +541,10 @@ def run(
         print("[step3] 结构修复后仍缺少关键章节，追加系统兜底分层")
         report = report.rstrip() + "\n\n" + _build_fallback_sections(selected_df)
 
-    content = _compress_report(report)
+    model_banner = f"🤖 模型: {used_model or model}"
+    content = f"{model_banner}\n\n{report}"
+    print(f"[step3] 飞书发送原文长度={len(content)}（不压缩，交由飞书分片）")
+    print(f"[step3] 研报实际使用模型={used_model or model}")
     if failed:
         content += f"\n\n**获取失败**: {', '.join(f'{s}({e})' for s, e in failed)}"
 

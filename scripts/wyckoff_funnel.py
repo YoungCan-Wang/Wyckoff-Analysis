@@ -299,10 +299,8 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         f"tuned={benchmark_context['tuned']}"
     )
 
-    # 并发拉取日线 + 分批漏斗（每批先做 L1/L2，最后统一做 L3/L4）
-    l1_passed_set: set[str] = set()
-    l2_passed_set: set[str] = set()
-    l2_df_map: dict[str, pd.DataFrame] = {}
+    # 并发拉取日线（只负责取数，不负责计算）
+    all_df_map: dict[str, pd.DataFrame] = {}
     fetch_ok = 0
     fetch_fail = 0
 
@@ -316,7 +314,6 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         batch = all_symbols[i: i + BATCH_SIZE]
         batch_ok = 0
         batch_fail = 0
-        batch_df_map: dict[str, pd.DataFrame] = {}
         batch_started = time.monotonic()
         print(f"[funnel] 批次#{batch_no}/{total_batches} 启动，股票数={len(batch)}")
 
@@ -335,7 +332,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
                 if df is not None:
                     batch_ok += 1
                     fetch_ok += 1
-                    batch_df_map[sym] = df
+                    all_df_map[sym] = df
                 else:
                     batch_fail += 1
                     fetch_fail += 1
@@ -359,31 +356,33 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
                 ft.cancel()
             ex.shutdown(wait=False, cancel_futures=True)
 
-        batch_l1 = layer1_filter(batch, name_map, market_cap_map, batch_df_map, cfg)
-        batch_l2 = layer2_strength(batch_l1, batch_df_map, bench_df, cfg)
-        l1_passed_set.update(batch_l1)
-        l2_passed_set.update(batch_l2)
-        for sym in batch_l2:
-            df = batch_df_map.get(sym)
-            if df is not None:
-                l2_df_map[sym] = df
-
         batch_elapsed = time.monotonic() - batch_started
         print(
             f"[funnel] 批次#{batch_no} 完成: 成功={batch_ok}, 失败={batch_fail}, "
-            f"L1={len(batch_l1)}, L2={len(batch_l2)}, "
-            f"耗时={batch_elapsed:.1f}s, 累计成功={fetch_ok}, 累计失败={fetch_fail}, "
-            f"累计L1={len(l1_passed_set)}, 累计L2={len(l2_passed_set)}"
+            f"耗时={batch_elapsed:.1f}s, 累计成功={fetch_ok}, 累计失败={fetch_fail}"
         )
         if i + BATCH_SIZE < len(all_symbols) and BATCH_SLEEP > 0:
             time.sleep(BATCH_SLEEP)
 
     print(f"[funnel] 日线拉取完成: 成功={fetch_ok}, 失败={fetch_fail}")
 
-    # 汇总阶段：全局做 L3/L4（L3 依赖全局行业分布）
-    l2_symbols = sorted(l2_passed_set)
-    l3_symbols, top_sectors = layer3_sector_resonance(l2_symbols, sector_map, cfg)
-    triggers = layer4_triggers(l3_symbols, l2_df_map, cfg)
+    # 统一漏斗计算：L1 -> L2 -> L3 -> L4
+    print(f"[funnel] 开始执行全量漏斗筛选...")
+    
+    # Layer 1
+    l1_input = list(all_df_map.keys())
+    l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg)
+    
+    # Layer 2
+    l2_passed = layer2_strength(l1_passed, all_df_map, bench_df, cfg)
+    
+    # Layer 3 (Sector Resonance)
+    l3_passed, top_sectors = layer3_sector_resonance(l2_passed, sector_map, cfg)
+    
+    # Layer 4 (Wyckoff Triggers)
+    # L4 需要 l2_df_map，这里直接用 all_df_map 即可，因为 key 都在里面
+    triggers = layer4_triggers(l3_passed, all_df_map, cfg)
+    
     total_hits = sum(len(v) for v in triggers.values())
     metrics = {
         "total_symbols": len(all_symbols),
@@ -394,9 +393,9 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         "pool_batches": total_batches,
         "fetch_ok": fetch_ok,
         "fetch_fail": fetch_fail,
-        "layer1": len(l1_passed_set),
-        "layer2": len(l2_symbols),
-        "layer3": len(l3_symbols),
+        "layer1": len(l1_passed),
+        "layer2": len(l2_passed),
+        "layer3": len(l3_passed),
         "top_sectors": top_sectors,
         "total_hits": total_hits,
         "by_trigger": {k: len(v) for k, v in triggers.items()},
@@ -437,7 +436,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
 
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
-        f"AI输入=全量命中股票{len(selected_for_ai)}, "
+        f"AI输入=全量{len(selected_for_ai)}, "
         f"AI分析={len(selected_for_ai)}"
     )
 
@@ -457,7 +456,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
         f"**大盘水温**: {bench_line}",
-        f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)} -> AI操作池6只",
+        f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)}",
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
         "**命中列表（按优先级）代码 名称 | 筛选理由 | 分值**",
