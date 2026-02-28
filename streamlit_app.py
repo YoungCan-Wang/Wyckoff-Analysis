@@ -347,7 +347,7 @@ with content_col:
             format_func=lambda x: "不复权"
             if x == ""
             else ("前复权" if x == "qfq" else "后复权"),
-            index=0,
+            index=1,
             help=(
                 "不复权：原始行情；\n"
                 "前复权(qfq)：把历史价格按当前口径调整，除权后走势连续，适合看长期趋势；\n"
