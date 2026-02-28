@@ -77,6 +77,7 @@ class ExecutionTicket:
     reason: str
     tape_condition: str
     invalidate_condition: str
+    is_holding: bool
 
 
 class WyckoffOrderEngine:
@@ -153,6 +154,7 @@ class WyckoffOrderEngine:
                 reason=dec.reason,
                 tape_condition=dec.tape_condition,
                 invalidate_condition=dec.invalidate_condition,
+                is_holding=held_shares >= 100,
             )
 
         if action == "TRIM":
@@ -177,6 +179,7 @@ class WyckoffOrderEngine:
                 reason=dec.reason,
                 tape_condition=dec.tape_condition,
                 invalidate_condition=dec.invalidate_condition,
+                is_holding=held_shares >= 100,
             )
 
         if action == "HOLD":
@@ -194,6 +197,7 @@ class WyckoffOrderEngine:
                 reason=dec.reason,
                 tape_condition=dec.tape_condition,
                 invalidate_condition=dec.invalidate_condition,
+                is_holding=held_shares >= 100,
             )
 
         # BUY: PROBE / ATTACK
@@ -207,7 +211,23 @@ class WyckoffOrderEngine:
             if not pos or held_shares < 100:
                 return self._no_trade(dec, name, "is_add_on=true 但无可加仓持仓")
             if pos.cost > 0 and current_price <= pos.cost:
-                return self._no_trade(dec, name, "is_add_on=true 但当前未浮盈")
+                # 对已有持仓若不满足“浮盈加仓”，降级为防守持有，避免给出自相矛盾的加仓指令
+                return ExecutionTicket(
+                    code=code,
+                    name=name,
+                    action="HOLD",
+                    status="APPROVED",
+                    shares=0,
+                    price_hint=current_price,
+                    amount=0.0,
+                    stop_loss=dec.stop_loss,
+                    max_loss=0.0,
+                    drawdown_ratio=0.0,
+                    reason=f"加仓条件不满足（当前未浮盈），降级为 HOLD；原建议: {dec.reason}",
+                    tape_condition=dec.tape_condition,
+                    invalidate_condition=dec.invalidate_condition,
+                    is_holding=True,
+                )
 
         price_for_calc = current_price
         if dec.entry_zone_min is not None and dec.entry_zone_max is not None:
@@ -255,6 +275,7 @@ class WyckoffOrderEngine:
             reason=dec.reason,
             tape_condition=dec.tape_condition,
             invalidate_condition=dec.invalidate_condition,
+            is_holding=held_shares >= 100,
         )
 
     def _no_trade(self, dec: DecisionItem, name: str, reason: str) -> ExecutionTicket:
@@ -272,6 +293,7 @@ class WyckoffOrderEngine:
             reason=f"{reason} | {dec.reason}".strip(" |"),
             tape_condition=dec.tape_condition,
             invalidate_condition=dec.invalidate_condition,
+            is_holding=(dec.code in self.position_map and self.position_map[dec.code].shares >= 100),
         )
 
 
@@ -556,12 +578,12 @@ def _markdown_to_telegram_html(text: str) -> str:
         if s.startswith("#"):
             out.append(f"<b>{s.lstrip('#').strip()}</b>")
             continue
+        line2 = line
         if s.startswith("* "):
-            out.append("• " + s[2:])
-            continue
-        line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
-        line = re.sub(r"`([^`]+)`", r"<code>\1</code>", line)
-        out.append(line)
+            line2 = "• " + s[2:]
+        line2 = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line2)
+        line2 = re.sub(r"`([^`]+)`", r"<code>\1</code>", line2)
+        out.append(line2)
     return "\n".join(out)
 
 
@@ -606,7 +628,11 @@ def _render_trade_ticket(
     tickets: list[ExecutionTicket],
 ) -> str:
     now_str = datetime.now(CN_TZ).strftime("%Y-%m-%d")
-    defense = [t for t in tickets if t.status == "APPROVED" and t.action in {"EXIT", "TRIM", "HOLD"}]
+    # 防守区只展示真实持仓标的，避免把外部候选的 HOLD 混入
+    defense = [
+        t for t in tickets
+        if t.status == "APPROVED" and t.action in {"EXIT", "TRIM", "HOLD"} and t.is_holding
+    ]
     approved_buy = [t for t in tickets if t.status == "APPROVED" and t.action in {"PROBE", "ATTACK"}]
     blocked = [t for t in tickets if t.status != "APPROVED"]
 
