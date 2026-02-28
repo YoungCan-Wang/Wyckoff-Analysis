@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 # 首期仅实现 Gemini；后续可增加 openai
@@ -15,6 +16,9 @@ GEMINI_MODELS = (
     "gemini-3-pro-preview",
     "gemini-3-flash-preview"
 )
+GEMINI_MAX_OUTPUT_TOKENS_DEFAULT = 16384
+GEMINI_MAX_RETRIES = 3
+GEMINI_RETRY_DELAY = 2.0
 
 
 def call_llm(
@@ -27,6 +31,7 @@ def call_llm(
     images: Optional[list] = None,
     base_url: Optional[str] = None,
     timeout: int = 120,
+    max_output_tokens: Optional[int] = None,
 ) -> str:
     """
     调用大模型，返回回复文本。
@@ -61,6 +66,7 @@ def call_llm(
             user_message=user_message,
             images=images,
             timeout=timeout,
+            max_output_tokens=max_output_tokens,
         )
     # 后续可加: elif provider == "openai": return _call_openai(...)
     raise ValueError(f"未实现的供应商: {provider}")
@@ -73,6 +79,7 @@ def _call_gemini(
     user_message: str,
     images: Optional[list],
     timeout: int,
+    max_output_tokens: Optional[int],
 ) -> str:
     import google.generativeai as genai
 
@@ -81,25 +88,74 @@ def _call_gemini(
         model_name=model,
         system_instruction=system_prompt,
     )
+    resolved_max_tokens = (
+        int(max_output_tokens)
+        if max_output_tokens is not None
+        else GEMINI_MAX_OUTPUT_TOKENS_DEFAULT
+    )
     generation_config = {
         "temperature": 0.4,
         "top_p": 0.95,
         "top_k": 40,
-        "max_output_tokens": 8192,
+        "max_output_tokens": max(1024, resolved_max_tokens),
     }
 
     contents = [user_message]
     if images:
         contents.extend(images)
 
-    response = generative_model.generate_content(
-        contents,
-        generation_config=generation_config,
-        request_options={"timeout": timeout},
-    )
-    if response is None:
-        raise RuntimeError("Gemini 返回空响应")
-    text = getattr(response, "text", None)
-    if not text:
-        raise RuntimeError("Gemini 返回内容为空")
-    return text
+    last_err: Exception | None = None
+    for attempt in range(1, GEMINI_MAX_RETRIES + 1):
+        try:
+            response = generative_model.generate_content(
+                contents,
+                generation_config=generation_config,
+                request_options={"timeout": timeout},
+            )
+            if response is None:
+                raise RuntimeError("Gemini 返回空响应")
+
+            text = getattr(response, "text", None) or ""
+            if not text and getattr(response, "candidates", None):
+                parts = []
+                for c in response.candidates:
+                    content = getattr(c, "content", None)
+                    if not content:
+                        continue
+                    for p in getattr(content, "parts", []) or []:
+                        t = getattr(p, "text", None)
+                        if t:
+                            parts.append(t)
+                text = "".join(parts).strip()
+
+            if not text:
+                raise RuntimeError("Gemini 返回内容为空")
+
+            finish_reason = ""
+            if getattr(response, "candidates", None):
+                finish_reason = str(getattr(response.candidates[0], "finish_reason", "") or "")
+            usage = getattr(response, "usage_metadata", None)
+            prompt_tokens = getattr(usage, "prompt_token_count", None) if usage else None
+            completion_tokens = getattr(usage, "candidates_token_count", None) if usage else None
+            total_tokens = getattr(usage, "total_token_count", None) if usage else None
+            print(
+                "[llm] gemini model={} finish_reason={} prompt_tokens={} completion_tokens={} total_tokens={} max_output_tokens={}".format(
+                    model,
+                    finish_reason or "unknown",
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    generation_config["max_output_tokens"],
+                )
+            )
+            return text
+        except Exception as e:
+            last_err = e
+            if attempt >= GEMINI_MAX_RETRIES:
+                break
+            sleep_s = GEMINI_RETRY_DELAY * (2 ** (attempt - 1))
+            sleep_s = min(sleep_s, 30.0)
+            print(f"[llm] gemini attempt {attempt}/{GEMINI_MAX_RETRIES} failed: {e}; retry in {sleep_s:.1f}s")
+            time.sleep(sleep_s)
+
+    raise RuntimeError(f"Gemini 调用失败: {last_err}")

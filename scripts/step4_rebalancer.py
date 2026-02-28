@@ -27,6 +27,7 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
 DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+STEP4_MAX_OUTPUT_TOKENS = 8192
 
 
 @dataclass
@@ -628,13 +629,20 @@ def _render_trade_ticket(
     tickets: list[ExecutionTicket],
 ) -> str:
     now_str = datetime.now(CN_TZ).strftime("%Y-%m-%d")
-    # 防守区只展示真实持仓标的，避免把外部候选的 HOLD 混入
-    defense = [
-        t for t in tickets
-        if t.status == "APPROVED" and t.action in {"EXIT", "TRIM", "HOLD"} and t.is_holding
-    ]
+    sells = [t for t in tickets if t.status == "APPROVED" and t.action in {"EXIT", "TRIM"}]
+    holds = [t for t in tickets if t.status == "APPROVED" and t.action == "HOLD" and t.is_holding]
     approved_buy = [t for t in tickets if t.status == "APPROVED" and t.action in {"PROBE", "ATTACK"}]
     blocked = [t for t in tickets if t.status != "APPROVED"]
+
+    def _first_sentence(s: str) -> str:
+        s = (s or "").strip()
+        if not s:
+            return "-"
+        parts = re.split(r"[。；;\n]+", s, maxsplit=1)
+        return parts[0].strip() if parts and parts[0].strip() else s
+
+    def _fmt_stop(v: float | None) -> str:
+        return "-" if v is None else f"{v:.2f}"
 
     lines = [
         "🚨 **Alpha-OMS 交易执行工单**",
@@ -645,53 +653,58 @@ def _render_trade_ticket(
         lines.append(f"📌 市场视图：{market_view}")
     lines.append("")
 
-    lines.append("🟥 **[清仓与防守 - EXIT/TRIM/HOLD]**")
-    if not defense:
+    lines.append(f"🟥 **[卖出动作 SELL]** ({len(sells)})")
+    if not sells:
         lines.append("* 无")
     else:
-        for t in defense:
-            lines.append(
-                f"* `{t.code} {t.name}` | **{t.action}** | 止损: "
-                f"{('-' if t.stop_loss is None else f'{t.stop_loss:.2f}')}"
-            )
-            detail = t.reason
-            if t.invalidate_condition:
-                detail = f"{detail}；失效: {t.invalidate_condition}" if detail else f"失效: {t.invalidate_condition}"
-            if t.tape_condition:
-                detail = f"{detail}；触发: {t.tape_condition}" if detail else f"触发: {t.tape_condition}"
-            if detail:
-                lines.append(f"  * 盘面条件：{detail}")
-            if t.action in {"EXIT", "TRIM"}:
-                lines.append(f"  * 执行股数：{t.shares} 股 | 预计回笼：{t.amount:.2f} 元")
+        for t in sells:
+            lines.append(f"* **🟥 {t.action}** | `{t.code} {t.name}`")
+            lines.append(f"* 执行：{t.shares} 股 | 回笼：{t.amount:.2f} 元 | 止损：{_fmt_stop(t.stop_loss)}")
+            lines.append(f"* 触发：{_first_sentence(t.tape_condition)}")
+            lines.append(f"* 失效：{_first_sentence(t.invalidate_condition)}")
+            lines.append(f"* 理由：{_first_sentence(t.reason)}")
+            lines.append("")
+
+    lines.append(f"🟨 **[持有动作 HOLD]** ({len(holds)})")
+    if not holds:
+        lines.append("* 无")
+    else:
+        for t in holds:
+            lines.append(f"* **🟨 HOLD** | `{t.code} {t.name}` | 止损：{_fmt_stop(t.stop_loss)}")
+            lines.append(f"* 观察：{_first_sentence(t.reason)}")
+            lines.append(f"* 触发：{_first_sentence(t.tape_condition)}")
+            lines.append(f"* 失效：{_first_sentence(t.invalidate_condition)}")
+            lines.append("")
     lines.append("")
 
-    lines.append("🟩 **[核准买入 - APPROVED]**")
+    lines.append(f"🟩 **[买入动作 BUY - APPROVED]** ({len(approved_buy)})")
     if not approved_buy:
         lines.append("* 无")
     else:
         for t in approved_buy:
-            lines.append(f"* `{t.code} {t.name}` | **{t.action}** | 状态: **APPROVED**")
-            lines.append(f"  * 挂单区间：参考 {t.price_hint:.2f} 附近（以盘中战区为准）")
-            lines.append(f"  * **执行股数：{t.shares} 股** | 预计占用：{t.amount:.2f} 元")
+            lines.append(f"* **🟩 {t.action}** | `{t.code} {t.name}`")
             lines.append(
-                f"  * 防守线：{('-' if t.stop_loss is None else f'{t.stop_loss:.2f}')} | "
-                f"预估最大回撤：{t.max_loss:.2f} 元 (占组合 {t.drawdown_ratio * 100:.2f}% ✔️)"
+                f"* 下单：{t.shares} 股 | 占用：{t.amount:.2f} 元 | 参考价："
+                f"{('-' if t.price_hint is None else f'{t.price_hint:.2f}')}"
             )
+            lines.append(f"* 风险：止损 {_fmt_stop(t.stop_loss)} | 最大回撤 {t.max_loss:.2f} 元 ({t.drawdown_ratio * 100:.2f}%)")
             if t.tape_condition:
-                lines.append(f"  * 确认条件：{t.tape_condition}")
+                lines.append(f"* 确认：{_first_sentence(t.tape_condition)}")
             if t.invalidate_condition:
-                lines.append(f"  * 熔断条件：{t.invalidate_condition}")
+                lines.append(f"* 熔断：{_first_sentence(t.invalidate_condition)}")
             if t.reason:
-                lines.append(f"  * 逻辑：{t.reason}")
+                lines.append(f"* 理由：{_first_sentence(t.reason)}")
+            lines.append("")
     lines.append("")
 
-    lines.append("⬛ **[风控拒单 - NO_TRADE]**")
+    lines.append(f"⬛ **[风控拒单 NO_TRADE]** ({len(blocked)})")
     if not blocked:
         lines.append("* 无")
     else:
         for t in blocked:
-            lines.append(f"* `{t.code} {t.name}` | **{t.action}** | 状态: **NO_TRADE**")
-            lines.append(f"  * 拦截原因：{t.reason}")
+            lines.append(f"* **⬛ NO_TRADE** | `{t.code} {t.name}` | 原动作：{t.action}")
+            lines.append(f"* 原因：{_first_sentence(t.reason)}")
+            lines.append("")
     lines.append("")
     lines.append(f"💰 执行后可用现金：{free_cash_after:.2f}")
     return "\n".join(lines)
@@ -769,6 +782,7 @@ def run(
             system_prompt=PRIVATE_PM_DECISION_JSON_PROMPT,
             user_message=user_message,
             timeout=300,
+            max_output_tokens=STEP4_MAX_OUTPUT_TOKENS,
         )
     except Exception as e:
         print(f"[step4] 模型调用失败: {e}")

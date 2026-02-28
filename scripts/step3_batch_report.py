@@ -27,6 +27,10 @@ GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
 OPERATION_TARGET = 6
 STEP3_MAX_AI_INPUT = int(os.getenv("STEP3_MAX_AI_INPUT", "25"))
 STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
+STEP3_MAX_OUTPUT_TOKENS = 16384
+DYNAMIC_MAINLINE_BONUS_RATE = 0.15
+DYNAMIC_MAINLINE_TOP_N = 3
+DYNAMIC_MAINLINE_MIN_CLUSTER = 2
 STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -113,6 +117,7 @@ def _repair_report_structure(
             system_prompt=repair_system,
             user_message=repair_user,
             timeout=180,
+            max_output_tokens=STEP3_MAX_OUTPUT_TOKENS,
         )
         return fixed or report
     except Exception as e:
@@ -225,26 +230,27 @@ def _resolve_bias_range(regime: str | None) -> tuple[float, float]:
     return (0.0, 35.0)
 
 
+def _format_mainline_tag(industry: str | None, is_hot: bool) -> str:
+    if not is_hot or not industry:
+        return ""
+    return f"🔥 [当前资金最强主线: {industry}]"
+
+
 def ultimate_compressor(
     candidates_df: pd.DataFrame,
     regime: str | None,
+    bonus_rate: float = DYNAMIC_MAINLINE_BONUS_RATE,
     max_total: int = STEP3_MAX_AI_INPUT,
     max_per_industry: int = STEP3_MAX_PER_INDUSTRY,
 ) -> pd.DataFrame:
     """
-    Step 4.5 终极压缩：动态乖离过滤 + 因子标准化 + 行业上限。
+    Step 4.5 终极压缩：动态乖离过滤 + 因子标准化 + 动态主线识别 + 行业上限。
     """
     if candidates_df is None or candidates_df.empty:
         return pd.DataFrame()
-    if len(candidates_df) <= max_total:
-        out = candidates_df.copy()
-        out["rs_score"] = 1.0
-        out["dry_score"] = 1.0
-        out["wyckoff_score"] = 1.0
-        out["industry_rank"] = 1
-        return out
 
     df = candidates_df.copy()
+    df["code"] = df.get("code", "").astype(str).str.strip()
     df["bias_200"] = pd.to_numeric(df.get("bias_200"), errors="coerce")
     df["rs_10"] = pd.to_numeric(df.get("rs_10"), errors="coerce")
     df["min_vol_ratio_5d"] = pd.to_numeric(df.get("min_vol_ratio_5d"), errors="coerce")
@@ -268,7 +274,32 @@ def ultimate_compressor(
     df["dry_score"] = df["min_vol_ratio_5d"].rank(
         pct=True, ascending=False, method="average"
     )
-    df["wyckoff_score"] = 0.6 * df["rs_score"] + 0.4 * df["dry_score"]
+    df["base_wyckoff_score"] = 0.6 * df["rs_score"] + 0.4 * df["dry_score"]
+
+    # 动态主线识别：候选池内“有集群且相对强度高”的行业
+    industry_stats = (
+        df.groupby("industry", as_index=False)
+        .agg(stock_count=("code", "count"), avg_rs=("rs_score", "mean"))
+    )
+    valid_industry_stats = industry_stats[
+        industry_stats["stock_count"] >= DYNAMIC_MAINLINE_MIN_CLUSTER
+    ]
+    hot_industries: set[str] = set()
+    if not valid_industry_stats.empty:
+        hot_industries = set(
+            valid_industry_stats.nlargest(DYNAMIC_MAINLINE_TOP_N, "avg_rs")["industry"]
+            .astype(str)
+            .tolist()
+        )
+    df["is_hot_mainline"] = df["industry"].astype(str).isin(hot_industries)
+    df["policy_tag"] = df.apply(
+        lambda r: _format_mainline_tag(str(r.get("industry", "")), bool(r.get("is_hot_mainline"))),
+        axis=1,
+    )
+    df["dynamic_bonus"] = df["is_hot_mainline"].map(
+        lambda v: float(bonus_rate) if bool(v) else 0.0
+    )
+    df["wyckoff_score"] = df["base_wyckoff_score"] * (1.0 + df["dynamic_bonus"])
 
     # 先全局排序，再做行业拥挤度限制
     df = df.sort_values("wyckoff_score", ascending=False).copy()
@@ -279,6 +310,10 @@ def ultimate_compressor(
     )
     df = df.groupby("industry", group_keys=False).head(max_per_industry)
     df = df.head(max_total).reset_index(drop=True)
+    if hot_industries:
+        print(f"[step3] 动态主线行业: {', '.join(sorted(hot_industries))}")
+    else:
+        print("[step3] 动态主线行业: 无（未形成有效行业集群）")
     return df
 
 
@@ -291,6 +326,7 @@ def generate_stock_payload(
     industry: str | None = None,
     quant_score: float | None = None,
     industry_rank: int | None = None,
+    policy_tag: str | None = None,
 ) -> str:
     """
     第五步：将 500 天 OHLCV 浓缩为发给 AI 的高密度文本。
@@ -324,8 +360,9 @@ def generate_stock_payload(
     else:
         background = f"  [结构背景] 现价:{close_val:.2f}（数据不足以计算 MA200）"
 
+    policy_prefix = f" {policy_tag}" if policy_tag else ""
     header = (
-        f"• {stock_code} {stock_name} | 机器标签：{wyckoff_tag}\n"
+        f"• {stock_code} {stock_name}{policy_prefix} | 机器标签：{wyckoff_tag}\n"
         f"  [价格锚点] 最新实际收盘价={close_val:.2f}（执行建议需围绕该锚点给出结构战区，不得给单点预测价）。\n"
         f"{background}\n"
     )
@@ -456,6 +493,8 @@ def run(
         return (True, "no_data_but_no_error", "")
 
     candidates_df = pd.DataFrame(candidate_rows)
+    candidates_df["code"] = candidates_df["code"].astype(str).str.strip()
+    candidates_df["policy_tag"] = ""
     selected_df = candidates_df.copy()
     selected_df["wyckoff_score"] = pd.NA
     selected_df["industry_rank"] = pd.NA
@@ -464,6 +503,7 @@ def run(
         compressed_df = ultimate_compressor(
             candidates_df,
             regime=regime,
+            bonus_rate=DYNAMIC_MAINLINE_BONUS_RATE,
             max_total=STEP3_MAX_AI_INPUT,
             max_per_industry=STEP3_MAX_PER_INDUSTRY,
         )
@@ -484,6 +524,12 @@ def run(
         df = code_to_df.get(code)
         if df is None:
             continue
+        policy_val = row.get("policy_tag")
+        policy_text = (
+            str(policy_val).strip()
+            if isinstance(policy_val, str) and str(policy_val).strip()
+            else None
+        )
         payload = generate_stock_payload(
             stock_code=code,
             stock_name=str(row.get("name", code)),
@@ -492,6 +538,7 @@ def run(
             industry=str(row.get("industry", "")),
             quant_score=float(row["wyckoff_score"]) if pd.notna(row.get("wyckoff_score")) else None,
             industry_rank=int(row["industry_rank"]) if pd.notna(row.get("industry_rank")) else None,
+            policy_tag=policy_text,
         )
         parts.append(payload)
 
@@ -557,6 +604,7 @@ def run(
                 system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT,
                 user_message=user_message,
                 timeout=300,
+                max_output_tokens=STEP3_MAX_OUTPUT_TOKENS,
             )
             used_model = m
             break
