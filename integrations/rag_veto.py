@@ -123,18 +123,23 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
     query = f"{code} {name} A股 公告 风险"
     results = []
     error_msg = None
-    
-    # 1. Try Tavily
+
+    # 1) 优先 Tavily；失败或空结果时，再尝试 SerpApi
     try:
         results = _tavily_search(query, max_results=RAG_MAX_RESULTS)
     except Exception as e:
         error_msg = f"tavily_err:{e}"
-        # 2. Fallback to SerpApi
+
+    if not results:
         try:
             results = _serpapi_search(query, max_results=RAG_MAX_RESULTS)
-            error_msg = None  # Clear error if fallback succeeds
+            if results:
+                error_msg = None
         except Exception as e2:
-            error_msg = f"{error_msg}; serpapi_err:{e2}"
+            if error_msg:
+                error_msg = f"{error_msg}; serpapi_err:{e2}"
+            else:
+                error_msg = f"serpapi_err:{e2}"
 
     if not results and error_msg:
         return VetoResult(code=code, name=name, veto=False, hits=[], evidence=[], error=error_msg)
@@ -165,8 +170,9 @@ def run_negative_news_veto(candidates: list[dict[str, str]]) -> dict[str, VetoRe
     if not is_rag_veto_enabled():
         return out
 
-    api_key = (os.getenv("TAVILY_API_KEY") or "").strip()
-    if not api_key:
+    tavily_key = (os.getenv("TAVILY_API_KEY") or "").strip()
+    serpapi_key = (os.getenv("SERPAPI_API_KEY") or "").strip()
+    if not tavily_key and not serpapi_key:
         return out
 
     keywords = _normalize_keywords()

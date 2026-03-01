@@ -68,6 +68,56 @@ def init_session_state() -> None:
             pass
 
 
+def _inject_base_ui_css() -> None:
+    """注入全局基础样式，统一中文字体与控件排版。"""
+    st.markdown(
+        """
+<style>
+:root {
+  --app-font-stack: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Source Han Sans SC", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+[data-testid="stAppViewContainer"],
+[data-testid="stSidebar"],
+[data-testid="stHeader"] {
+  font-family: var(--app-font-stack);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3 {
+  letter-spacing: 0;
+}
+
+[data-testid="stNumberInput"] input {
+  font-family: var(--app-font-stack);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  line-height: 1.35;
+}
+
+[data-testid="stNumberInput"] button {
+  line-height: 1;
+  font-weight: 600;
+}
+
+[data-testid="stDataEditor"] * {
+  font-family: var(--app-font-stack) !important;
+}
+
+[data-testid="stDataEditor"] [role="columnheader"],
+[data-testid="stDataEditor"] [role="gridcell"] {
+  line-height: 1.35;
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def require_auth() -> None:
     if check_auth():
         return
@@ -86,6 +136,7 @@ def setup_page(
 ) -> None:
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
     init_session_state()
+    _inject_base_ui_css()
     if require_login:
         require_auth()
 

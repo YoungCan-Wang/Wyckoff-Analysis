@@ -62,6 +62,33 @@ def _format_buy_dt(v: Any) -> str:
     return d.strftime("%Y%m%d")
 
 
+def _format_money(v: float) -> str:
+    return f"{float(v):,.2f}"
+
+
+def _parse_money_input(raw: Any, field_name: str) -> float:
+    s = str(raw or "").strip().replace(",", "")
+    if not s:
+        raise ValueError(f"{field_name} 不能为空")
+    try:
+        val = float(s)
+    except Exception as e:
+        raise ValueError(f"{field_name} 必须是数字") from e
+    if val < 0:
+        raise ValueError(f"{field_name} 不能为负数")
+    return val
+
+
+def _estimate_positions_value(rows: list[dict[str, Any]]) -> float:
+    total = 0.0
+    for r in rows:
+        shares = int(_to_float(r.get("shares", 0), 0))
+        cost = _to_float(r.get("cost_price", 0.0), 0.0)
+        if shares > 0 and cost >= 0:
+            total += shares * cost
+    return float(total)
+
+
 def _load_user_live() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     supabase = get_supabase_client()
 
@@ -226,6 +253,44 @@ setup_page(page_title="持仓管理", page_icon="💼")
 content_col = show_right_nav()
 
 with content_col:
+    st.markdown(
+        """
+<style>
+.portfolio-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.portfolio-card {
+  border: 1px solid #e9ebef;
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #ffffff;
+}
+.portfolio-card .label {
+  color: #7a808c;
+  font-size: 14px;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+.portfolio-card .value {
+  color: #1f2430;
+  font-size: 40px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  line-height: 1.1;
+}
+@media (max-width: 960px) {
+  .portfolio-summary {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.title("💼 持仓管理")
     st.caption("管理 Step4 的 USER_LIVE 账本。删除行即清仓；Step4 将优先读取这里。")
 
@@ -236,31 +301,65 @@ with content_col:
         loading.empty()
 
     existing_codes = {str(x.get("code", "")).strip() for x in positions}
-    auto_equity = portfolio.get("total_equity") is None
+    free_cash_initial = _to_float(portfolio.get("free_cash", 0.0), 0.0)
+    total_equity_raw = portfolio.get("total_equity")
+    manual_total_equity = (
+        _to_float(total_equity_raw, 0.0) if total_equity_raw is not None else None
+    )
+    positions_value_est = _estimate_positions_value(positions)
+    display_total_equity = (
+        manual_total_equity
+        if manual_total_equity is not None
+        else (free_cash_initial + positions_value_est)
+    )
+    holding_count = len([p for p in positions if int(_to_float(p.get("shares", 0), 0)) > 0])
 
-    c1, c2 = st.columns(2)
+    st.markdown(
+        f"""
+<div class="portfolio-summary">
+  <div class="portfolio-card">
+    <div class="label">总市值</div>
+    <div class="value">{_format_money(display_total_equity)}</div>
+  </div>
+  <div class="portfolio-card">
+    <div class="label">现金</div>
+    <div class="value">{_format_money(free_cash_initial)}</div>
+  </div>
+  <div class="portfolio-card">
+    <div class="label">持仓股数</div>
+    <div class="value">{holding_count}</div>
+  </div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    auto_equity = total_equity_raw is None
+    input_default_equity = (
+        manual_total_equity if manual_total_equity is not None else display_total_equity
+    )
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
-        free_cash = st.number_input(
-            "可用现金 (free_cash)",
-            min_value=0.0,
-            step=1000.0,
-            value=_to_float(portfolio.get("free_cash", 0.0), 0.0),
+        free_cash_input = st.text_input(
+            "现金",
+            value=f"{free_cash_initial:.2f}",
+            help="用于 Step4 的可用现金",
         )
     with c2:
+        total_equity_input = st.text_input(
+            "总市值",
+            value=f"{input_default_equity:.2f}",
+            disabled=auto_equity,
+            help="关闭自动推导后可手动指定",
+        )
+    with c3:
         auto_equity = st.toggle(
             "总资产自动推导（推荐）",
             value=auto_equity,
             help="开启后 total_equity 保存为 NULL，Step4 自动按 现金+最新持仓市值推导。",
         )
-        total_equity_value = st.number_input(
-            "总资产 (total_equity)",
-            min_value=0.0,
-            step=1000.0,
-            disabled=auto_equity,
-            value=_to_float(portfolio.get("total_equity", 0.0), 0.0),
-        )
 
-    st.markdown("### 持仓明细")
+    st.markdown("### 持仓股")
     st.caption("每行一只股票。勾选“删除”或把数量改为 0，保存后会清仓。可直接新增行。")
 
     editor_df = st.data_editor(
@@ -303,11 +402,22 @@ with content_col:
     col_save, col_reload = st.columns([1, 1])
     with col_save:
         if st.button("💾 保存 USER_LIVE", use_container_width=True):
+            try:
+                free_cash_value = _parse_money_input(free_cash_input, "现金")
+                total_equity_value = (
+                    None
+                    if auto_equity
+                    else _parse_money_input(total_equity_input, "总市值")
+                )
+            except ValueError as e:
+                st.error(str(e))
+                st.stop()
+
             loader = show_page_loading(title="保存中...", subtitle="正在写入 Supabase")
             try:
                 ok, msg = _save_user_live(
-                    free_cash=free_cash,
-                    total_equity=(None if auto_equity else total_equity_value),
+                    free_cash=free_cash_value,
+                    total_equity=total_equity_value,
                     editor_df=editor_df,
                     existing_codes=existing_codes,
                 )

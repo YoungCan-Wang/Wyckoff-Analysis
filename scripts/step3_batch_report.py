@@ -5,9 +5,11 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -19,7 +21,7 @@ from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
 from integrations.fetch_a_share_csv import _resolve_trading_window, _fetch_hist
 from integrations.llm_client import call_llm
 from integrations.rag_veto import is_rag_veto_enabled, run_negative_news_veto
-from integrations.data_source import fetch_index_hist, fetch_sector_map
+from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_stock_spot_snapshot
 from utils.feishu import send_feishu_notification
 from core.wyckoff_engine import normalize_hist_from_fetch
 
@@ -32,12 +34,13 @@ STEP3_MAX_OUTPUT_TOKENS = 16384
 DYNAMIC_MAINLINE_BONUS_RATE = 0.15
 DYNAMIC_MAINLINE_TOP_N = 3
 DYNAMIC_MAINLINE_MIN_CLUSTER = 2
-STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "").strip().lower() in {
+STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "1").strip().lower() in {
     "1", "true", "yes", "on"
 }
 STEP3_ENABLE_RAG_VETO = os.getenv("STEP3_ENABLE_RAG_VETO", "1").strip().lower() in {
     "1", "true", "yes", "on"
 }
+
 
 RECENT_DAYS = 15
 HIGHLIGHT_DAYS = 60
@@ -47,6 +50,23 @@ DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true"
 DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
 CN_TZ = ZoneInfo("Asia/Shanghai")
 MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
+MARKET_DATA_READY_HOUR = int(
+    os.getenv(
+        "MARKET_DATA_READY_HOUR",
+        str(max(MARKET_CLOSE_HOUR, 20)),
+    )
+)
+ENFORCE_TARGET_TRADE_DATE = os.getenv(
+    "ENFORCE_TARGET_TRADE_DATE", "1"
+).strip().lower() in {"1", "true", "yes", "on"}
+STEP3_ENABLE_SPOT_PATCH = os.getenv("STEP3_ENABLE_SPOT_PATCH", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+STEP3_SPOT_PATCH_RETRIES = int(os.getenv("STEP3_SPOT_PATCH_RETRIES", "2"))
+STEP3_SPOT_PATCH_SLEEP = float(os.getenv("STEP3_SPOT_PATCH_SLEEP", "0.2"))
 
 
 def _dump_model_input(
@@ -167,51 +187,200 @@ def _build_fallback_sections(selected_df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def _extract_operation_pool_codes(report: str) -> list[str]:
-    """
-    从模型报告中提取“可操作池/操作池”章节内出现的股票代码（6位）。
-    用于发送前置速览，避免长文第一片只显示1只导致阅读不完整。
-    """
-    if not report:
-        return []
-    lines = report.splitlines()
-    in_ops = False
+def _extract_json_block(text: str) -> str:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        return raw[start : end + 1]
+    return raw
+
+
+def _normalize_structured_pool(
+    payload: dict,
+    allowed_codes: set[str],
+    code_name: dict[str, str],
+) -> dict[str, list[dict[str, str]]]:
+    watch_raw = (
+        payload.get("watch_pool")
+        or payload.get("observation_pool")
+        or payload.get("watchlist")
+        or payload.get("观察池")
+        or []
+    )
+    ops_raw = (
+        payload.get("operation_pool")
+        or payload.get("tradable_pool")
+        or payload.get("操作池")
+        or payload.get("可操作池")
+        or []
+    )
+
+    watch_items: list[dict[str, str]] = []
+    op_items: list[dict[str, str]] = []
+    seen_watch: set[str] = set()
+    seen_ops: set[str] = set()
+
+    if isinstance(watch_raw, list):
+        for item in watch_raw:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code", "")).strip()
+            if not re.fullmatch(r"\d{6}", code) or code not in allowed_codes:
+                continue
+            if code in seen_watch:
+                continue
+            seen_watch.add(code)
+            watch_items.append(
+                {
+                    "code": code,
+                    "name": str(item.get("name", "")).strip() or code_name.get(code, code),
+                    "reason": str(item.get("reason", "")).strip(),
+                    "condition": str(item.get("condition", "")).strip(),
+                }
+            )
+
+    if isinstance(ops_raw, list):
+        for item in ops_raw:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code", "")).strip()
+            if not re.fullmatch(r"\d{6}", code) or code not in allowed_codes:
+                continue
+            if code in seen_ops:
+                continue
+            seen_ops.add(code)
+            op_items.append(
+                {
+                    "code": code,
+                    "name": str(item.get("name", "")).strip() or code_name.get(code, code),
+                    "action": str(item.get("action", "")).strip(),
+                    "reason": str(item.get("reason", "")).strip(),
+                    "entry_condition": str(item.get("entry_condition", "")).strip(),
+                }
+            )
+
+    return {
+        "watch_pool": watch_items,
+        "operation_pool": op_items,
+    }
+
+
+def _try_parse_structured_report(
+    report: str,
+    allowed_codes: set[str],
+    code_name: dict[str, str],
+) -> dict[str, list[dict[str, str]]] | None:
+    raw = (report or "").strip()
+    if not raw:
+        return None
+    for candidate in [raw, _extract_json_block(raw)]:
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        normalized = _normalize_structured_pool(payload, allowed_codes, code_name)
+        if normalized["watch_pool"] or normalized["operation_pool"]:
+            return normalized
+    return None
+
+
+
+
+
+def _extract_codes_from_text(
+    text: str,
+    allowed_codes: set[str],
+) -> list[str]:
     codes: list[str] = []
     seen: set[str] = set()
-    for raw in lines:
-        line = raw.strip()
-        if not line:
+    for code in re.findall(r"\b\d{6}\b", text or ""):
+        if code not in allowed_codes or code in seen:
             continue
-        if ("可操作池" in line) or ("操作池" in line):
-            in_ops = True
-            continue
-        if (
-            in_ops
-            and line.startswith("## ")
-            and ("可操作池" not in line and "操作池" not in line)
-            and ("🎯" not in line)
-        ):
-            break
-        if not in_ops:
-            continue
-        for c in re.findall(r"\b\d{6}\b", line):
-            if c in seen:
-                continue
-            seen.add(c)
-            codes.append(c)
+        seen.add(code)
+        codes.append(code)
     return codes
 
 
 def _job_end_calendar_day() -> date:
     """
     定时任务统一口径：
-    - 北京时间收盘后（默认 >=15:00）走 T+0（当天）
-    - 收盘前走 T-1（上一自然日）
+    - 北京时间达到 MARKET_DATA_READY_HOUR（默认 >=20:00）走 T+0（当天）
+    - 否则走 T-1（上一自然日），避免 15:00~18:00 数据源时差导致截面错位
     """
     now = datetime.now(CN_TZ)
-    if now.hour >= MARKET_CLOSE_HOUR:
+    if now.hour >= MARKET_DATA_READY_HOUR:
         return now.date()
     return (now - timedelta(days=1)).date()
+
+
+def _latest_trade_date_from_hist(df: pd.DataFrame) -> date | None:
+    if df is None or df.empty or "date" not in df.columns:
+        return None
+    s = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if s.empty:
+        return None
+    return s.iloc[-1].date()
+
+
+def _append_spot_bar_if_needed(
+    code: str,
+    df: pd.DataFrame,
+    target_trade_date: date,
+) -> tuple[pd.DataFrame, bool]:
+    if not STEP3_ENABLE_SPOT_PATCH or df is None or df.empty:
+        return (df, False)
+    latest_trade_date = _latest_trade_date_from_hist(df)
+    if latest_trade_date is None or latest_trade_date >= target_trade_date:
+        return (df, False)
+    if target_trade_date != datetime.now(CN_TZ).date():
+        return (df, False)
+
+    df_s = df.sort_values("date").reset_index(drop=True)
+    last_close_series = pd.to_numeric(df_s.get("close"), errors="coerce").dropna()
+    prev_close = float(last_close_series.iloc[-1]) if not last_close_series.empty else None
+
+    for attempt in range(max(STEP3_SPOT_PATCH_RETRIES, 1)):
+        snap = fetch_stock_spot_snapshot(code, force_refresh=attempt > 0)
+        close_v = None if not snap else snap.get("close")
+        if close_v is None or float(close_v) <= 0:
+            if attempt < max(STEP3_SPOT_PATCH_RETRIES, 1) - 1:
+                time.sleep(max(STEP3_SPOT_PATCH_SLEEP, 0.0))
+            continue
+
+        close_f = float(close_v)
+        open_f = float(snap.get("open")) if snap and snap.get("open") is not None else close_f
+        high_raw = float(snap.get("high")) if snap and snap.get("high") is not None else close_f
+        low_raw = float(snap.get("low")) if snap and snap.get("low") is not None else close_f
+        high_f = max(high_raw, open_f, close_f)
+        low_f = min(low_raw, open_f, close_f)
+        volume_f = float(snap.get("volume")) if snap and snap.get("volume") is not None else 0.0
+        amount_f = float(snap.get("amount")) if snap and snap.get("amount") is not None else 0.0
+        pct_f = float(snap.get("pct_chg")) if snap and snap.get("pct_chg") is not None else None
+        if pct_f is None and prev_close and prev_close > 0:
+            pct_f = (close_f - prev_close) / prev_close * 100.0
+
+        new_row = {
+            "date": target_trade_date.isoformat(),
+            "open": open_f,
+            "high": high_f,
+            "low": low_f,
+            "close": close_f,
+            "volume": volume_f,
+            "amount": amount_f,
+            "pct_chg": pct_f if pct_f is not None else 0.0,
+        }
+        patched = pd.concat([df_s, pd.DataFrame([new_row])], ignore_index=True)
+        patched = patched.sort_values("date").reset_index(drop=True)
+        return (patched, True)
+    return (df, False)
 
 
 def _safe_return(series: pd.Series, lookback: int = 10) -> float | None:
@@ -455,6 +624,25 @@ def run(
         try:
             df_raw = _fetch_hist(code, window, "qfq")
             df = normalize_hist_from_fetch(df_raw)
+            if ENFORCE_TARGET_TRADE_DATE:
+                latest_trade_date = _latest_trade_date_from_hist(df)
+                if latest_trade_date != window.end_trade_date:
+                    df, patched = _append_spot_bar_if_needed(
+                        code,
+                        df,
+                        window.end_trade_date,
+                    )
+                    if patched:
+                        latest_trade_date = _latest_trade_date_from_hist(df)
+                        print(f"[step3] {code} 实时快照补偿成功")
+                if latest_trade_date != window.end_trade_date:
+                    failed.append(
+                        (
+                            code,
+                            f"latest_trade_date={latest_trade_date}, target_trade_date={window.end_trade_date}",
+                        )
+                    )
+                    continue
             code_to_df[code] = df
 
             close = pd.to_numeric(df["close"], errors="coerce")
@@ -522,6 +710,14 @@ def run(
     else:
         print(f"[step3] 候选压缩未启用: selected=全量{len(selected_df)}")
 
+    if len(selected_df) > STEP3_MAX_AI_INPUT:
+        before_n = len(selected_df)
+        selected_df = selected_df.head(STEP3_MAX_AI_INPUT).reset_index(drop=True)
+        print(
+            f"[step3] 上下文硬上限生效: selected {before_n} -> {len(selected_df)} "
+            f"(STEP3_MAX_AI_INPUT={STEP3_MAX_AI_INPUT})"
+        )
+
     # P2: RAG 防雷（负面新闻关键词 veto）
     rag_veto_lines: list[str] = []
     if STEP3_ENABLE_RAG_VETO and is_rag_veto_enabled() and not selected_df.empty:
@@ -547,7 +743,7 @@ def run(
             print("[step3][rag] 未命中负面关键词，保持候选不变")
     else:
         if STEP3_ENABLE_RAG_VETO:
-            print("[step3][rag] 未启用（缺少 TAVILY_API_KEY 或候选为空）")
+            print("[step3][rag] 未启用（缺少 TAVILY_API_KEY/SERPAPI_API_KEY 或候选为空）")
 
     selected_codes = [str(x) for x in selected_df["code"].tolist()]
     if not selected_codes:
@@ -682,14 +878,30 @@ def run(
         report = report.rstrip() + "\n\n" + _build_fallback_sections(selected_df)
 
     model_banner = f"🤖 模型: {used_model or model}"
-    code_name = {str(row.get("code")): str(row.get("name", row.get("code"))) for _, row in selected_df.iterrows()}
-    ops_codes = _extract_operation_pool_codes(report)
+    code_name = {
+        str(row.get("code")): str(row.get("name", row.get("code")))
+        for _, row in selected_df.iterrows()
+    }
+    selected_set = set(selected_codes)
+    # 优先直接 JSON 解析；不足时正则扫文本；最后从候选列表补齐。
+    # 不再发起第二次 LLM 调用，避免延迟翻倍和 token 浪费。
+    structured = _try_parse_structured_report(
+        report=report,
+        allowed_codes=selected_set,
+        code_name=code_name,
+    )
+    ops_codes: list[str] = []
+    if structured and structured.get("operation_pool"):
+        for item in structured["operation_pool"]:
+            code = str(item.get("code", "")).strip()
+            if code and code not in ops_codes:
+                ops_codes.append(code)
+    if not ops_codes:
+        ops_codes = _extract_codes_from_text(report, selected_set)
     if len(ops_codes) < OPERATION_TARGET:
-        # 若模型文本过长或结构异常导致提取不足，补齐到 6 只，保证第一屏可读
         for c in selected_codes:
-            if c in ops_codes:
-                continue
-            ops_codes.append(c)
+            if c not in ops_codes:
+                ops_codes.append(c)
             if len(ops_codes) >= OPERATION_TARGET:
                 break
     ops_lines = [f"- {c} {code_name.get(c, c)}" for c in ops_codes[:OPERATION_TARGET]]

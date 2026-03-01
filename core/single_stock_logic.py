@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import ast
 import re
 import traceback
 from datetime import date, datetime, timedelta
@@ -18,6 +19,92 @@ from app.ui_helpers import show_page_loading
 
 TRADING_DAYS_OHLCV = 500  # 威科夫分析需要较长周期
 ADJUST = "qfq"
+ALLOW_LLM_PLOT_EXEC = os.getenv("ALLOW_LLM_PLOT_EXEC", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+SAFE_EXEC_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "float": float,
+    "int": int,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "range": range,
+    "reversed": reversed,
+    "round": round,
+    "set": set,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip,
+}
+
+DISALLOWED_NAMES = {
+    "__import__",
+    "compile",
+    "delattr",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "help",
+    "input",
+    "locals",
+    "open",
+    "setattr",
+    "vars",
+    "breakpoint",
+    "os",
+    "sys",
+    "subprocess",
+    "shutil",
+    "pathlib",
+    "socket",
+    "requests",
+    "http",
+    "urllib",
+    "importlib",
+    "builtins",
+}
+
+DISALLOWED_ATTRS = {
+    "__bases__",
+    "__class__",
+    "__closure__",
+    "__code__",
+    "__dict__",
+    "__delattr__",
+    "__getattribute__",
+    "__getattr__",
+    "__globals__",
+    "__mro__",
+    "__setattr__",
+    "__subclasses__",
+}
+
+DISALLOWED_AST_NODES = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Try,
+    ast.With,
+    ast.AsyncWith,
+    ast.Raise,
+    ast.ClassDef,
+    ast.AsyncFunctionDef,
+)
 
 def get_chinese_font_path():
     """获取系统中文字体路径"""
@@ -53,6 +140,77 @@ def extract_python_code(text: str) -> str | None:
         # 返回最长的一段，通常是完整代码
         return max(matches, key=len)
     return None
+
+
+def _validate_plot_code(code_block: str) -> tuple[bool, str]:
+    try:
+        tree = ast.parse(code_block)
+    except Exception as e:
+        return (False, f"代码语法错误: {e}")
+
+    if not any(
+        isinstance(node, ast.FunctionDef) and node.name == "create_plot"
+        for node in tree.body
+    ):
+        return (False, "缺少 create_plot(df) 函数")
+
+    allowed_top_level = (ast.FunctionDef, ast.Assign, ast.AnnAssign, ast.Expr)
+    for node in tree.body:
+        if not isinstance(node, allowed_top_level):
+            return (False, f"不允许的顶层语句: {type(node).__name__}")
+        if isinstance(node, ast.Expr) and not isinstance(node.value, ast.Constant):
+            return (False, "仅允许文档字符串作为顶层表达式")
+
+    for node in ast.walk(tree):
+        if isinstance(node, DISALLOWED_AST_NODES):
+            return (False, f"不允许的语句: {type(node).__name__}")
+        if isinstance(node, ast.Name) and node.id in DISALLOWED_NAMES:
+            return (False, f"不允许的标识符: {node.id}")
+        if isinstance(node, ast.Attribute):
+            if node.attr in DISALLOWED_ATTRS or node.attr.startswith("__"):
+                return (False, f"不允许的属性访问: {node.attr}")
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name) and fn.id in DISALLOWED_NAMES:
+                return (False, f"不允许的函数调用: {fn.id}")
+            if isinstance(fn, ast.Attribute) and (
+                fn.attr in DISALLOWED_NAMES or fn.attr in DISALLOWED_ATTRS
+            ):
+                return (False, f"不允许的方法调用: {fn.attr}")
+    return (True, "")
+
+
+def _run_plot_code_safely(code_block: str, df_hist: pd.DataFrame):
+    ok, reason = _validate_plot_code(code_block)
+    if not ok:
+        raise ValueError(f"安全策略已拦截生成代码: {reason}")
+
+    exec_globals = {
+        "__builtins__": SAFE_EXEC_BUILTINS,
+        "pd": pd,
+        "plt": plt,
+        "fm": fm,
+        "datetime": datetime,
+        "date": date,
+    }
+    # ⚠️  SECURITY WARNING
+    # exec() 无法提供强隔离，AST 黑名单可被绕过（通过异常链、字符串拼接等）。
+    # 仅限私人单用户本地部署使用；公网/多人可触发场景必须保持 ALLOW_LLM_PLOT_EXEC=0。
+    exec(code_block, exec_globals)
+    create_plot = exec_globals.get("create_plot")
+    if not callable(create_plot):
+        raise ValueError("未找到可调用的 create_plot(df) 函数")
+
+    df_plot = df_hist.copy()
+    if "date" in df_plot.columns:
+        df_plot["date"] = pd.to_datetime(df_plot["date"], errors="coerce")
+
+    fig = create_plot(df_plot)
+    if fig is None:
+        fig = plt.gcf()
+    if fig is None or not hasattr(fig, "savefig"):
+        raise ValueError("create_plot(df) 未返回有效图表对象")
+    return fig
 
 def render_single_stock_page(provider, model, api_key):
     """渲染单股分析页面"""
@@ -164,31 +322,17 @@ def _run_analysis(symbol, image_file, provider, model, api_key):
         # 4. 执行绘图代码
         if code_block:
             st.markdown("### 📊 结构标注图")
+            if not ALLOW_LLM_PLOT_EXEC:
+                st.warning(
+                    "已禁用自动执行模型生成代码。"
+                    "如需启用，请设置环境变量 ALLOW_LLM_PLOT_EXEC=1。"
+                )
+                st.expander("查看生成代码").code(code_block, language="python")
+                return
             with st.spinner("正在绘制图表..."):
                 try:
-                    # 准备执行环境
-                    exec_globals = {
-                        "pd": pd,
-                        "plt": plt,
-                        "fm": fm,
-                        "datetime": datetime,
-                        "date": date
-                    }
-                    # 执行代码定义
-                    exec(code_block, exec_globals)
-                    
-                    # 调用 create_plot
-                    if "create_plot" in exec_globals:
-                        # 传入 df，注意 df 已经在 _fetch_hist 中处理过，但需要确保日期格式
-                        df_plot = df_hist.copy()
-                        # _fetch_hist 返回的 df 列名通常是 date, open, close... 且 date 可能是 string
-                        if 'date' in df_plot.columns:
-                            df_plot['date'] = pd.to_datetime(df_plot['date'])
-                        
-                        fig = exec_globals["create_plot"](df_plot)
-                        st.pyplot(fig)
-                    else:
-                        st.warning("未找到 create_plot 函数，无法绘图。")
+                    fig = _run_plot_code_safely(code_block, df_hist)
+                    st.pyplot(fig)
                 except Exception as e:
                     st.error(f"绘图代码执行失败：{e}")
                     st.expander("查看生成代码").code(code_block, language="python")

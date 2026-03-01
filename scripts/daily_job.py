@@ -29,6 +29,8 @@ STEP4_REASON_MAP = {
     "missing_api_key": "GEMINI_API_KEY 缺失",
     "skipped_invalid_portfolio": "持仓配置缺失或格式错误，已跳过",
     "skipped_telegram_unconfigured": "Telegram 未配置，已跳过",
+    "skipped_idempotency": "今日已运行，已跳过",
+    "skipped_no_decisions": "模型未给出有效决策，已跳过",
     "llm_failed": "Step4 模型调用失败",
     "telegram_failed": "Telegram 推送失败",
     "ok": "ok",
@@ -193,6 +195,7 @@ def main() -> int:
         t0 = datetime.now(TZ)
         step4_ok = True
         step4_err = None
+        step4_reason = "ok"
         try:
             step4_ok, step4_reason = run_step4(
                 external_report=step3_report_text,
@@ -203,6 +206,7 @@ def main() -> int:
             step4_err = None if step4_ok else STEP4_REASON_MAP.get(step4_reason, step4_reason)
         except Exception as e:
             step4_ok = False
+            step4_reason = "unexpected_exception"
             step4_err = str(e)
         elapsed4 = (datetime.now(TZ) - t0).total_seconds()
         summary.append({
@@ -210,7 +214,11 @@ def main() -> int:
             "ok": step4_ok and step4_err is None,
             "err": step4_err,
             "elapsed_s": round(elapsed4, 1),
-            "output": "telegram",
+            "output": (
+                "telegram"
+                if (step4_ok and step4_reason == "ok")
+                else (f"skipped ({step4_reason})" if step4_ok else "failed")
+            ),
         })
         _log(f"阶段 3 私人再平衡: ok={step4_ok}, elapsed={elapsed4:.1f}s, err={step4_err}", logs_path)
 

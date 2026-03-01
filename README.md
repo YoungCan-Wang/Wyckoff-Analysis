@@ -16,7 +16,7 @@
 | 🔬 **Wyckoff Funnel** | 4 层漏斗筛选：剥离垃圾 → 强弱甄别 → 板块共振 → 威科夫狙击 |
 | 🤖 **AI 研报** | 对筛选结果生成观察池 + 操作池，含技术结构、阻力位、交易计划等 |
 | 🎓 **AI 分析（大师模式）** | "Alpha"虚拟投委会，七位历史级交易大师人格（利弗莫尔/威科夫/缠论/彼得林奇等）多维分析 |
-| 🕶️ **私人决断** | 结合个人持仓与外部候选，生成 Buy/Hold/Sell 私密指令，并通过 Telegram 单独发送 |
+| 🕶️ **私人决断** | 结合个人持仓与外部候选，生成 Buy/Hold/Sell 私密指令，并通过 Telegram 单独发送；自动跳过停牌股、验证数据日期对齐，AI 乱出止损价时自动降级为持有 |
 | 🛡️ **RAG 防雷** | 基于新闻检索自动过滤有负面舆情的股票（立案/调查/减持/业绩预亏等） |
 | 📁 **行情导出** | Web 或命令行拉取指定股票日线，导出原始/增强两份 CSV（OHLCV 开高低收量等） |
 | 🧰 **自定义导出** | 支持 A股/指数/ETF/宏观 CPI 等多数据源，灵活配置参数 |
@@ -97,6 +97,10 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 | `MY_PORTFOLIO_STATE` | Step4 用 | 可选，格式见 `.env.example` |
 | `TG_BOT_TOKEN` | Step4 用 | 可选 |
 | `TG_CHAT_ID` | Step4 用 | 可选 |
+| `SUPABASE_URL` | Step4 用 | 可选，云端持仓同步 |
+| `SUPABASE_KEY` | Step4 用 | 可选，云端持仓同步 |
+| `TAVILY_API_KEY` | 否 | RAG 防雷，未配则跳过 |
+| `SERPAPI_API_KEY` | 否 | RAG 防雷备用搜索源，未配则跳过 |
 
 ### 验证
 

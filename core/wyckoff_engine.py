@@ -48,9 +48,29 @@ def normalize_hist_from_fetch(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ---------------------------------------------------------------------------
+def _sorted_if_needed(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "date" not in df.columns:
+        return df
+    try:
+        if df["date"].is_monotonic_increasing:
+            return df
+    except Exception:
+        pass
+    return df.sort_values("date")
+
+
+def _latest_trade_date(df: pd.DataFrame) -> object | None:
+    if df is None or df.empty or "date" not in df.columns:
+        return None
+    s = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if s.empty:
+        return None
+    return s.iloc[-1].date()
+
+
+
+
 # Config
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -73,6 +93,7 @@ class FunnelConfig:
     rs_min_long: float = 0.0
     rs_min_short: float = 0.0
     enable_rs_filter: bool = True
+    require_bench_latest_alignment: bool = True
 
     # Layer 3
     top_n_sectors: int = 3
@@ -80,6 +101,8 @@ class FunnelConfig:
     # Layer 4 - Spring
     spring_support_window: int = 60
     spring_vol_ratio: float = 1.0
+    spring_tr_max_range_pct: float = 30.0
+    spring_tr_max_drift_pct: float = 12.0
 
     # Layer 4 - LPS
     lps_lookback: int = 3
@@ -93,6 +116,8 @@ class FunnelConfig:
     evr_vol_ratio: float = 2.0
     evr_vol_window: int = 20
     evr_max_drop: float = 2.0
+    evr_confirm_days: int = 1
+    evr_confirm_allow_break_pct: float = 0.0
 
 
 class FunnelResult(NamedTuple):
@@ -103,9 +128,9 @@ class FunnelResult(NamedTuple):
     triggers: dict[str, list[tuple[str, float]]]
 
 
-# ---------------------------------------------------------------------------
+
+
 # Layer 1: 剥离垃圾
-# ---------------------------------------------------------------------------
 
 
 def _is_main_or_chinext(code: str) -> bool:
@@ -140,7 +165,7 @@ def layer1_filter(
         df = df_map.get(sym)
         if df is None or df.empty:
             continue
-        df_sorted = df.sort_values("date")
+        df_sorted = _sorted_if_needed(df)
         if "amount" in df_sorted.columns:
             avg_amt = df_sorted["amount"].tail(cfg.amount_avg_window).mean()
             if pd.notna(avg_amt) and avg_amt < cfg.min_avg_amount_wan * 10000:
@@ -149,9 +174,9 @@ def layer1_filter(
     return passed
 
 
-# ---------------------------------------------------------------------------
+
+
 # Layer 2: 强弱甄别
-# ---------------------------------------------------------------------------
 
 
 def layer2_strength(
@@ -194,8 +219,10 @@ def layer2_strength(
 
     bench_dropping = False
     bench_sorted: pd.DataFrame | None = None
+    bench_latest_date = None
     if bench_df is not None and not bench_df.empty:
-        bench_sorted = bench_df.sort_values("date")
+        bench_sorted = _sorted_if_needed(bench_df)
+        bench_latest_date = _latest_trade_date(bench_sorted)
         if len(bench_sorted) >= cfg.bench_drop_days:
             recent_bench = bench_sorted.tail(cfg.bench_drop_days)
             bench_cum = (recent_bench["pct_chg"].dropna() / 100.0 + 1).prod() - 1
@@ -206,7 +233,13 @@ def layer2_strength(
         df = df_map.get(sym)
         if df is None or len(df) < cfg.ma_long:
             continue
-        df_sorted = df.sort_values("date").copy()
+        df_sorted = _sorted_if_needed(df)
+        if (
+            cfg.require_bench_latest_alignment
+            and bench_latest_date is not None
+            and _latest_trade_date(df_sorted) != bench_latest_date
+        ):
+            continue
         close = df_sorted["close"].astype(float)
         ma_short = close.rolling(cfg.ma_short).mean()
         ma_long = close.rolling(cfg.ma_long).mean()
@@ -240,9 +273,9 @@ def layer2_strength(
     return passed
 
 
-# ---------------------------------------------------------------------------
+
+
 # Layer 3: 板块共振
-# ---------------------------------------------------------------------------
 
 
 def layer3_sector_resonance(
@@ -271,9 +304,39 @@ def layer3_sector_resonance(
     return filtered, top_sectors
 
 
-# ---------------------------------------------------------------------------
+
+
 # Layer 4: 威科夫狙击
-# ---------------------------------------------------------------------------
+
+
+def _is_trading_range_context(zone: pd.DataFrame, cfg: FunnelConfig) -> bool:
+    """
+    Spring 必须先发生在可接受的交易区间（TR）内，避免单边下跌中的假 Spring。
+    """
+    if zone is None or zone.empty:
+        return False
+    high = pd.to_numeric(zone.get("high"), errors="coerce")
+    low = pd.to_numeric(zone.get("low"), errors="coerce")
+    close = pd.to_numeric(zone.get("close"), errors="coerce")
+    if high.isna().all() or low.isna().all() or close.isna().all():
+        return False
+
+    high_max = float(high.max())
+    low_min = float(low.min())
+    if low_min <= 0:
+        return False
+    range_pct = (high_max - low_min) / low_min * 100.0
+    if range_pct > cfg.spring_tr_max_range_pct:
+        return False
+
+    c_start = float(close.iloc[0])
+    c_end = float(close.iloc[-1])
+    if c_start <= 0:
+        return False
+    drift_pct = abs((c_end - c_start) / c_start * 100.0)
+    if drift_pct > cfg.spring_tr_max_drift_pct:
+        return False
+    return True
 
 
 def _detect_spring(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
@@ -283,8 +346,10 @@ def _detect_spring(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     """
     if len(df) < cfg.spring_support_window + 2:
         return None
-    df_s = df.sort_values("date")
+    df_s = _sorted_if_needed(df)
     support_zone = df_s.iloc[-(cfg.spring_support_window + 1) : -1]
+    if not _is_trading_range_context(support_zone, cfg):
+        return None
     support_level = support_zone["close"].min()
     prev = df_s.iloc[-2]
     last = df_s.iloc[-1]
@@ -307,7 +372,7 @@ def _detect_lps(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     """
     if len(df) < max(cfg.lps_vol_ref_window, cfg.lps_ma) + cfg.lps_lookback:
         return None
-    df_s = df.sort_values("date").copy()
+    df_s = _sorted_if_needed(df)
     close = df_s["close"].astype(float)
     ma = close.rolling(cfg.lps_ma).mean()
     last_ma = ma.iloc[-1]
@@ -339,14 +404,16 @@ def _detect_evr(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     仅识别“相对低位的巨量滞涨/抗跌”，排除高位派发。
     返回 score（量比）或 None。
     """
-    if len(df) < cfg.evr_vol_window + 2:
+    min_required = cfg.evr_vol_window + 2 + max(int(cfg.evr_confirm_days), 0)
+    if len(df) < min_required:
         return None
-    df_s = df.sort_values("date").copy()
+    df_s = _sorted_if_needed(df)
 
     close = pd.to_numeric(df_s["close"], errors="coerce")
+    low = pd.to_numeric(df_s["low"], errors="coerce")
     volume = pd.to_numeric(df_s["volume"], errors="coerce")
     pct_chg = pd.to_numeric(df_s["pct_chg"], errors="coerce")
-    if close.isna().all() or volume.isna().all() or pct_chg.isna().all():
+    if close.isna().all() or low.isna().all() or volume.isna().all() or pct_chg.isna().all():
         return None
 
     # 位阶保护：高位放量优先按派发处理，避免 EVR 误判
@@ -364,8 +431,11 @@ def _detect_evr(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     if vol_ref_avg <= 0:
         return None
 
-    # 仅检查最近两天是否出现“巨量 + 小实体（不大涨不大跌）”
-    for idx in (-1, -2):
+    confirm_days = max(int(cfg.evr_confirm_days), 0)
+    candidate_idx = (-2,) if confirm_days > 0 else (-1, -2)
+
+    # 默认要求“放量滞涨”后至少 1 天确认，不再当日立即上报。
+    for idx in candidate_idx:
         vol_ratio = float(volume.iloc[idx] / vol_ref_avg) if vol_ref_avg > 0 else 0.0
         if vol_ratio < cfg.evr_vol_ratio:
             continue
@@ -385,6 +455,21 @@ def _detect_evr(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
                 pd.notna(close_3d_ago)
                 and float(close_last) < float(close_3d_ago) * 0.98
             ):
+                continue
+
+        if confirm_days > 0:
+            event_pos = len(df_s) + idx
+            confirm_start = event_pos + 1
+            confirm_end = confirm_start + confirm_days
+            if confirm_end > len(df_s):
+                continue
+            event_low = low.iloc[idx]
+            confirm_close = close.iloc[confirm_start:confirm_end]
+            if pd.isna(event_low) or confirm_close.empty or confirm_close.isna().all():
+                continue
+            min_confirm_close = float(confirm_close.min())
+            allow_break = max(float(cfg.evr_confirm_allow_break_pct), 0.0) / 100.0
+            if min_confirm_close < float(event_low) * (1.0 - allow_break):
                 continue
         return vol_ratio
 
@@ -420,9 +505,9 @@ def layer4_triggers(
     return results
 
 
-# ---------------------------------------------------------------------------
+
+
 # run_funnel: 串联 4 层
-# ---------------------------------------------------------------------------
 
 
 def run_funnel(
@@ -437,10 +522,17 @@ def run_funnel(
     if cfg is None:
         cfg = FunnelConfig()
 
-    l1 = layer1_filter(all_symbols, name_map, market_cap_map, df_map, cfg)
-    l2 = layer2_strength(l1, df_map, bench_df, cfg)
+    # 预先整理时序，避免各层重复 sort/copy 产生大量临时对象。
+    prepared_df_map: dict[str, pd.DataFrame] = {
+        sym: _sorted_if_needed(df)
+        for sym, df in df_map.items()
+        if df is not None and not df.empty
+    }
+
+    l1 = layer1_filter(all_symbols, name_map, market_cap_map, prepared_df_map, cfg)
+    l2 = layer2_strength(l1, prepared_df_map, bench_df, cfg)
     l3, top_sectors = layer3_sector_resonance(l2, sector_map, cfg)
-    triggers = layer4_triggers(l3, df_map, cfg)
+    triggers = layer4_triggers(l3, prepared_df_map, cfg)
 
     return FunnelResult(
         layer1_symbols=l1,
