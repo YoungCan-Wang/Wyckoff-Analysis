@@ -13,6 +13,8 @@ import akshare as ak
 import pandas as pd
 import requests
 
+from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
+
 
 @dataclass(frozen=True)
 class TradingWindow:
@@ -20,22 +22,8 @@ class TradingWindow:
     end_trade_date: date
 
 
-def _safe_filename_part(value: str) -> str:
-    if value is None:
-        return ""
-    s = str(value).strip()
-    if not s:
-        return ""
-    for ch in ['<', '>', ':', '"', '/', '\\', '|', '?', '*']:
-        s = s.replace(ch, "_")
-    s = s.replace(os.sep, "_")
-    if os.altsep:
-        s = s.replace(os.altsep, "_")
-    return s
-
-
 def _trade_dates() -> list[date]:
-    cache_dir = Path(__file__).resolve().parent / "data"
+    cache_dir = Path(__file__).resolve().parent.parent / "data"
     cache_path = cache_dir / "trade_dates_cache.json"
     cache_ttl_seconds = 7 * 24 * 60 * 60
 
@@ -60,7 +48,9 @@ def _trade_dates() -> list[date]:
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump([d.strftime("%Y-%m-%d") for d in dates], f, ensure_ascii=False)
+                json.dump(
+                    [d.strftime("%Y-%m-%d") for d in dates], f, ensure_ascii=False
+                )
         except Exception:
             return
 
@@ -152,7 +142,7 @@ def get_all_stocks() -> list[dict[str, str]]:
     Returns:
         list of dict: [{"code": "000001", "name": "平安银行"}, ...]
     """
-    cache_dir = Path(__file__).resolve().parent / "data"
+    cache_dir = Path(__file__).resolve().parent.parent / "data"
     cache_path = cache_dir / "stock_list_cache.json"
     cache_ttl_seconds = 24 * 60 * 60
 
@@ -161,11 +151,16 @@ def get_all_stocks() -> list[dict[str, str]]:
             with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
-                return [{"code": str(x.get("code", "")), "name": str(x.get("name", ""))} for x in data if isinstance(x, dict)]
+                return [
+                    {"code": str(x.get("code", "")), "name": str(x.get("name", ""))}
+                    for x in data
+                    if isinstance(x, dict)
+                ]
         except Exception:
             return []
         return []
 
+    # 0. 若本地缓存存在且在 TTL 内，直接使用缓存（避免每次进入首页都打 akshare 接口）
     try:
         if cache_path.exists():
             age = time.time() - cache_path.stat().st_mtime
@@ -173,12 +168,18 @@ def get_all_stocks() -> list[dict[str, str]]:
                 cached = _read_cache()
                 if cached:
                     return cached
+    except Exception:
+        # 缓存读取异常不应阻塞后续网络尝试
+        pass
 
+    # 1. 尝试从网络获取最新数据
+    try:
         info = ak.stock_info_a_code_name()
         info["code"] = info["code"].astype(str)
         info["name"] = info["name"].astype(str)
         records = info.to_dict("records")
 
+        # 网络获取成功，更新本地缓存
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -188,48 +189,78 @@ def get_all_stocks() -> list[dict[str, str]]:
 
         return records
     except Exception as e:
+        print(f"Network error fetching stock list: {e}. Trying cache...")
+        # 2. 网络失败，尝试读取缓存（即使已过期也比空好）
         cached = _read_cache()
         if cached:
             return cached
-        print(f"Error fetching stock list: {e}")
+        # 3. 缓存也没数据，返回空
         return []
 
 
+def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
+    """
+    Filter stocks by board.
+    Args:
+        board_name: "all", "main" (主板), "chinext" (创业板), "star" (科创板), "bse" (北交所)
+    """
+    all_stocks = get_all_stocks()
+    if board_name == "all":
+        return all_stocks
+
+    out = []
+    for s in all_stocks:
+        code = s["code"]
+        if board_name == "star":  # 科创板
+            if code.startswith("688"):
+                out.append(s)
+        elif board_name == "chinext":  # 创业板
+            if code.startswith(("300", "301")):
+                out.append(s)
+        elif board_name == "bse":  # 北交所
+            if code.startswith(("43", "83", "87", "88", "92")):
+                out.append(s)
+        elif board_name == "main":  # 主板 (沪深)
+            # 沪市主板: 600, 601, 603, 605
+            # 深市主板: 000, 001, 002, 003
+            if code.startswith(
+                ("600", "601", "603", "605", "000", "001", "002", "003")
+            ):
+                out.append(s)
+    return out
+
+
 def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame:
-    start = window.start_trade_date.strftime("%Y%m%d")
-    end = window.end_trade_date.strftime("%Y%m%d")
-    df = ak.stock_zh_a_hist(
+    """个股日线：akshare→baostock→efinance→tushare fallback"""
+    from integrations.data_source import fetch_stock_hist
+    return fetch_stock_hist(
         symbol=symbol,
-        period="daily",
-        start_date=start,
-        end_date=end,
-        adjust=adjust,
+        start=window.start_trade_date,
+        end=window.end_trade_date,
+        adjust=adjust or "",
     )
-    if df is None or df.empty:
-        raise RuntimeError(f"empty data returned for symbol={symbol}, start={start}, end={end}, adjust={adjust!r}")
-    return df
-
-
-def _stock_sector_em(symbol: str) -> str:
-    try:
-        df = ak.stock_individual_info_em(symbol=symbol)
-        if df is None or df.empty:
-            return ""
-        row = df.loc[df["item"] == "行业", "value"]
-        if row.empty:
-            return ""
-        return str(row.iloc[0]).strip()
-    except Exception:
-        return ""
 
 
 def _build_export(df: pd.DataFrame, sector: str) -> pd.DataFrame:
-    required = ["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额", "换手率", "振幅"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise RuntimeError(f"unexpected columns, missing: {missing}; got: {df.columns.tolist()}")
-
-    out = df[required].copy()
+    required = [
+        "日期",
+        "开盘",
+        "最高",
+        "最低",
+        "收盘",
+        "成交量",
+        "成交额",
+        "换手率",
+        "振幅",
+    ]
+    out = df.copy()
+    for col in required:
+        if col not in out.columns:
+            out[col] = pd.NA
+    out = out[required].copy()
+    for col in ["成交量", "成交额"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
     out["AvgPrice"] = out["成交额"] / out["成交量"].replace(0, pd.NA)
     out["Sector"] = sector
 
@@ -264,61 +295,6 @@ def _build_export(df: pd.DataFrame, sector: str) -> pd.DataFrame:
     return out
 
 
-def _extract_symbols_from_text(text: str, valid_codes: set[str] | None) -> list[str]:
-    if not text:
-        return []
-    digit_runs = re.findall(r"\d{6,}", text)
-    if not digit_runs:
-        return []
-
-    out: list[str] = []
-
-    def accept(code: str) -> bool:
-        if not re.fullmatch(r"\d{6}", code):
-            return False
-        if valid_codes is None:
-            out.append(code)
-            return True
-        if code in valid_codes:
-            out.append(code)
-            return True
-        return False
-
-    for run in digit_runs:
-        if len(run) == 6:
-            accept(run)
-            continue
-
-        if valid_codes is not None and len(run) == 7:
-            fixed = False
-            for i in range(7):
-                cand = run[:i] + run[i + 1 :]
-                if accept(cand):
-                    fixed = True
-                    break
-            if fixed:
-                continue
-
-        if valid_codes is not None and len(run) % 6 == 0:
-            for i in range(0, len(run), 6):
-                accept(run[i : i + 6])
-            continue
-
-        if valid_codes is None:
-            accept(run[:6])
-            continue
-
-        i = 0
-        while i <= len(run) - 6:
-            cand = run[i : i + 6]
-            if accept(cand):
-                i += 6
-            else:
-                i += 1
-
-    return out
-
-
 def _normalize_symbols(symbols: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -335,12 +311,16 @@ def _normalize_symbols(symbols: list[str]) -> list[str]:
     return out
 
 
-def _write_two_csv(symbol: str, name: str, df_hist: pd.DataFrame, out_dir: str, sector: str) -> tuple[str, str]:
-    file_prefix = f"{_safe_filename_part(symbol)}_{_safe_filename_part(name)}"
+def _write_two_csv(
+    symbol: str, name: str, df_hist: pd.DataFrame, out_dir: str, sector: str
+) -> tuple[str, str]:
+    file_prefix = f"{safe_filename_part(symbol, fallback='')}_{safe_filename_part(name, fallback='')}"
     hist_path = os.path.join(out_dir, f"{file_prefix}_hist_data.csv")
     ohlcv_path = os.path.join(out_dir, f"{file_prefix}_ohlcv.csv")
     df_hist.to_csv(hist_path, index=False, encoding="utf-8-sig")
-    _build_export(df_hist, sector=sector).to_csv(ohlcv_path, index=False, encoding="utf-8-sig")
+    _build_export(df_hist, sector=sector).to_csv(
+        ohlcv_path, index=False, encoding="utf-8-sig"
+    )
     return hist_path, ohlcv_path
 
 
@@ -350,12 +330,16 @@ def main() -> int:
         description="使用 akshare 拉取 A 股指定股票近 N 个交易日数据，并输出 hist_data 与 ohlcv 两个 CSV 文件。",
     )
     parser.add_argument("--symbol", help="单个股票代码，如 300364")
-    parser.add_argument("--symbols", nargs="*", help="多个股票代码，如 000973 600798 300459")
+    parser.add_argument(
+        "--symbols", nargs="*", help="多个股票代码，如 000973 600798 300459"
+    )
     parser.add_argument(
         "--symbols-text",
-        help="从一段文本中提取股票代码（支持夹中文/无空格），如 \"000973 佛塑科技 600798鲁抗医药\"",
+        help='从一段文本中提取股票代码（支持夹中文/无空格），如 "000973 佛塑科技 600798鲁抗医药"',
     )
-    parser.add_argument("--trading-days", type=int, default=500, help="交易日数量，默认 500")
+    parser.add_argument(
+        "--trading-days", type=int, default=500, help="交易日数量，默认 500"
+    )
     parser.add_argument(
         "--end-offset-days",
         type=int,
@@ -372,7 +356,9 @@ def main() -> int:
     args = parser.parse_args()
 
     info = ak.stock_info_a_code_name()
-    code_to_name: dict[str, str] = dict(zip(info["code"].astype(str), info["name"].astype(str)))
+    code_to_name: dict[str, str] = dict(
+        zip(info["code"].astype(str), info["name"].astype(str))
+    )
     valid_codes = set(code_to_name.keys())
 
     candidates: list[str] = []
@@ -381,18 +367,24 @@ def main() -> int:
     if args.symbols:
         candidates.extend(args.symbols)
     if args.symbols_text:
-        candidates.extend(_extract_symbols_from_text(args.symbols_text, valid_codes=valid_codes))
+        candidates.extend(
+            extract_symbols_from_text(args.symbols_text, valid_codes=valid_codes)
+        )
     symbols = _normalize_symbols(candidates)
     if not symbols:
         raise SystemExit("请提供股票代码：--symbol 或 --symbols 或 --symbols-text")
 
     end_calendar = date.today() - timedelta(days=int(args.end_offset_days))
-    window = _resolve_trading_window(end_calendar_day=end_calendar, trading_days=int(args.trading_days))
+    window = _resolve_trading_window(
+        end_calendar_day=end_calendar, trading_days=int(args.trading_days)
+    )
 
     out_dir = os.path.abspath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    print(f"trade_window={window.start_trade_date}..{window.end_trade_date} (trading_days={args.trading_days})")
+    print(
+        f"trade_window={window.start_trade_date}..{window.end_trade_date} (trading_days={args.trading_days})"
+    )
     failures: list[tuple[str, str]] = []
     for symbol in symbols:
         try:
@@ -400,7 +392,7 @@ def main() -> int:
             if not name:
                 raise RuntimeError(f"symbol not found in stock list: {symbol}")
             df_hist = _fetch_hist(symbol=symbol, window=window, adjust=str(args.adjust))
-            sector = _stock_sector_em(symbol)
+            sector = stock_sector_em(symbol)
             hist_path, ohlcv_path = _write_two_csv(
                 symbol=symbol,
                 name=name,
@@ -408,7 +400,9 @@ def main() -> int:
                 out_dir=out_dir,
                 sector=sector,
             )
-            print(f"OK symbol={symbol} name={name} -> {os.path.basename(hist_path)}, {os.path.basename(ohlcv_path)}")
+            print(
+                f"OK symbol={symbol} name={name} -> {os.path.basename(hist_path)}, {os.path.basename(ohlcv_path)}"
+            )
         except Exception as e:
             failures.append((symbol, str(e)))
             print(f"FAIL symbol={symbol} err={e}")

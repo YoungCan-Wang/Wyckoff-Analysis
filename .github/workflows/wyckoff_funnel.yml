@@ -1,0 +1,87 @@
+name: Wyckoff Funnel
+
+on:
+  schedule:
+    # 北京 16:30 (UTC+8)，周一到周五
+    - cron: '30 8 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-job-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      MY_PORTFOLIO_STATE: ${{ secrets.MY_PORTFOLIO_STATE }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+      TZ: Asia/Shanghai
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare logs dir
+        run: mkdir -p logs
+
+      - name: Run daily job
+        run: python scripts/daily_job.py --logs ${{ github.workspace }}/logs/daily_job.log
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-job-logs-${{ github.run_number }}
+          path: logs/*.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW: ${{ github.workflow }}
+          REF: ${{ github.ref_name }}
+        run: |
+          python -c "
+          import os, urllib.request, json
+          url = os.environ.get('FEISHU_WEBHOOK_URL', '')
+          if not url:
+            print('FEISHU_WEBHOOK_URL 未配置，跳过失败通知')
+            exit(0)
+          content = '**Run**: ' + os.environ.get('RUN_URL', '') + '\n**Workflow**: ' + os.environ.get('WORKFLOW', '') + '\n**Branch**: ' + os.environ.get('REF', '')
+          payload = {
+            'msg_type': 'interactive',
+            'card': {
+              'header': {'title': {'tag': 'plain_text', 'content': '❌ 定时任务失败'}},
+              'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}}]
+            }
+          }
+          req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
+          try:
+            urllib.request.urlopen(req, timeout=10)
+          except Exception as e:
+            print('warning: 失败通知发送异常:', e)
+          "
