@@ -431,7 +431,3 @@ with content_col:
     with col_reload:
         if st.button("🔄 重新加载", use_container_width=True):
             st.rerun()
-
-    st.info(
-        "说明：这个页面管理 Supabase 的 USER_LIVE 主账本；GitHub Secret 里的 MY_PORTFOLIO_STATE 仅兜底使用。"
-    )
