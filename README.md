@@ -13,9 +13,15 @@
 | 功能 | 说明 |
 |------|------|
 | 📊 **每日选股** | 配置 GitHub Actions 后，工作日 16:30 自动跑 Wyckoff Funnel，从主板+创业板筛出 6 只，推送到飞书 |
+| 🔬 **Wyckoff Funnel** | 4 层漏斗筛选：剥离垃圾 → 强弱甄别 → 板块共振 → 威科夫狙击 |
 | 🤖 **AI 研报** | 对筛选结果生成观察池 + 操作池，含技术结构、阻力位、交易计划等 |
+| 🎓 **AI 分析（大师模式）** | "Alpha"虚拟投委会，七位历史级交易大师人格（利弗莫尔/威科夫/缠论/彼得林奇等）多维分析 |
 | 🕶️ **私人决断** | 结合个人持仓与外部候选，生成 Buy/Hold/Sell 私密指令，并通过 Telegram 单独发送 |
+| 🛡️ **RAG 防雷** | 基于新闻检索自动过滤有负面舆情的股票（立案/调查/减持/业绩预亏等） |
 | 📁 **行情导出** | Web 或命令行拉取指定股票日线，导出原始/增强两份 CSV（OHLCV 开高低收量等） |
+| 🧰 **自定义导出** | 支持 A股/指数/ETF/宏观 CPI 等多数据源，灵活配置参数 |
+| 📈 **持仓管理** | 实时同步持仓至云端，记录成本价、买入日期、策略标签 |
+| 🕘 **下载历史** | 查看历史下载记录（最近 20 条） |
 | 🔐 **登录与配置** | 支持登录、飞书 Webhook、API Key 云端同步 |
 
 ---
@@ -61,6 +67,15 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 ## 📅 每日选股（Wyckoff Funnel）
 
 从全市场（主板 + 创业板）多轮过滤，最终输出**最值得次日操作的 6 只股票**，并生成 AI 研报，推送到飞书。
+
+### 4 层漏斗筛选逻辑
+
+| 层级 | 名称 | 筛选逻辑 |
+|------|------|----------|
+| Layer 1 | **剥离垃圾** | 剔除 ST/北交所/科创板，保留市值 ≥ 20 亿、日均成交额 ≥ 5000 万的股票 |
+| Layer 2 | **强弱甄别** | MA50 > MA200（多头排列），或大盘连跌时守住 MA20；相对强度 RS 筛选 |
+| Layer 3 | **板块共振** | 行业分布 Top-N，筛选与热门板块共振的标的 |
+| Layer 4 | **威科夫狙击** | Spring（终极震仓）、LPS（缩量回踩）、Effort vs Result（放量不跌） |
 
 ### 启用方式
 
@@ -152,12 +167,34 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 ├── streamlit_app.py        # Web 入口
 ├── app/                    # UI 组件（layout/auth/navigation）
 ├── core/                   # 核心策略与领域逻辑
+│   ├── wyckoff_engine.py   # Wyckoff Funnel 4层漏斗引擎
+│   ├── wyckoff_single_prompt.py  # 单股分析 Prompt
+│   ├── single_stock_logic.py    # 单股分析页面逻辑
+│   ├── download_history.py      # 下载历史记录
+│   ├── stock_cache.py            # 股票数据缓存
+│   └── constants.py              # 常量定义
 ├── integrations/           # 数据源/LLM/Supabase 适配层
+│   ├── data_source.py      # 统一数据源（自动降级）
+│   ├── fetch_a_share_csv.py  # CSV 导出模块
+│   ├── llm_client.py      # LLM 客户端
+│   ├── ai_prompts.py      # AI 提示词（Alpha 投委会）
+│   ├── supabase_client.py # Supabase 云端同步
+│   ├── rag_veto.py        # RAG 防雷模块
+│   └── feishu.py          # 飞书推送
+├── pages/                  # Streamlit 页面
+│   ├── AIAnalysis.py      # AI 分析（大师模式）
+│   ├── WyckoffScreeners.py # Wyckoff Funnel 筛选页
+│   ├── Portfolio.py       # 持仓管理
+│   ├── CustomExport.py    # 自定义导出
+│   ├── DownloadHistory.py # 下载历史
+│   ├── Settings.py        # 设置
+│   └── Changelog.py       # 版本更新日志
 ├── scripts/
-│   ├── wyckoff_funnel.py   # 定时选股任务
+│   ├── wyckoff_funnel.py  # 定时选股任务
 │   ├── step3_batch_report.py  # AI 研报
-│   ├── step4_rebalancer.py   # 私人决断
-│   └── daily_job.py        # 日终流水线
+│   ├── step4_rebalancer.py    # 私人决断
+│   ├── daily_job.py      # 日终流水线
+│   └── benchmark_funnel_fetch.py  # 取数性能基准测试
 ├── requirements.txt
 └── .env.example
 ```
@@ -189,6 +226,47 @@ python -m integrations.fetch_a_share_csv --symbol 300364 --adjust qfq
 - **macOS pip externally-managed-environment** → 用虚拟环境安装依赖
 - **文件名有空格** → 股票名本身带空格，脚本会做安全替换
 
+### AI 分析：Alpha 虚拟投委会
+
+Web 端提供「AI 分析」页面，采用「Alpha」虚拟投委会模式，由七位历史级交易大师人格共同决策：
+
+| 大师 | 职责 |
+|------|------|
+| 🌊 **道氏与艾略特** | 宏观定势，判断牛市/熊市主趋势 |
+| 💰 **彼得·林奇** | 价值透视，PEG 估值，六大股票分类 |
+| 🕵️ **理查德·威科夫** | 主力侦察，吸筹/派发阶段判断，供需法则 |
+| 📐 **缠中说禅** | 结构精算，中枢、背驰、买卖点数学定位 |
+| 🔥 **情绪流龙头战法** | 情绪博弈，周期定位，龙头识别 |
+| 🐊 **杰西·利弗莫尔** | 关键时机，关键点突破确认 |
+| 🕯️ **史蒂夫·尼森** | 微观信号，蜡烛图反转形态 |
+
+### RAG 防雷（负面舆情过滤）
+
+每日选股流程中集成 RAG 防雷模块，自动过滤有负面舆情的股票：
+
+- **数据源**：Tavily 新闻搜索（如未配置则跳过）
+- **默认负面关键词**：立案、调查、证监会、处罚、违规、造假、退市、减持、质押爆仓、债务违约、业绩预亏、业绩下滑、商誉减值、诉讼、仲裁、冻结等
+- **配置**：`TAVILY_API_KEY` 环境变量
+
+### 数据源降级机制
+
+个股数据获取失败时自动降级：
+
+```
+akshare → baostock → efinance → tushare
+```
+
+指数数据优先使用 tushare 直连，确保稳定性。
+
+### 自定义导出支持的数据源
+
+| 数据源 | 说明 | 复权支持 |
+|--------|------|----------|
+| A股个股历史 | 日线 K 线，6 位代码 | ✅ |
+| 指数历史 | 上证/深证/创业板/北证 | ❌ |
+| ETF 历史 | 510300 / 159707 等 | ✅ |
+| 宏观 CPI | 月度 CPI 指标 | ❌ |
+
 ### Fork 与部署
 
 1. Fork 本仓库，克隆到本地
@@ -202,3 +280,16 @@ python -m integrations.fetch_a_share_csv --symbol 300364 --adjust qfq
 ## 版本更新
 
 详见 [`CHANGELOG.md`](CHANGELOG.md)。Web 端「版本更新日志」页面直接读取该文件。
+
+---
+
+**版权声明 | Copyright & License**
+
+- **版权所有** © 2024 youngcan. All Rights Reserved.
+- **开源用途**：个人学习研究免费使用，署名即可
+- **商业授权**：如需将本项目用于商业产品或服务（包括但不限于 SaaS、付费咨询、代客选股、量化基金、OEM/嵌入式等），**必须先联系作者获得授权并支付授权费用**
+- **联系方式**：可通过微信/飞书，或 GitHub Issue 联系
+
+---
+
+> ⚠️ 未经授权的商业使用将被视为侵权，作者保留追究法律责任的权利。

@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+# Copyright (c) 2024 youngcan. All Rights Reserved.
+# 本代码仅供个人学习研究使用，未经授权不得用于商业目的。
+# 商业授权请联系作者支付授权费用。
+
 """
 Wyckoff Funnel 4 层漏斗筛选引擎
 
@@ -7,6 +11,7 @@ Layer 2: 强弱甄别 (MA50>MA200 多头排列, 或大盘连跌时守住 MA20)
 Layer 3: 板块共振 (行业分布 Top-N)
 Layer 4: 威科夫狙击 (Spring / LPS / Effort vs Result)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,7 +34,11 @@ def normalize_hist_from_fetch(df: pd.DataFrame) -> pd.DataFrame:
         "涨跌幅": "pct_chg",
     }
     out = df.rename(columns=col_map)
-    keep = [c for c in ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"] if c in out.columns]
+    keep = [
+        c
+        for c in ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
+        if c in out.columns
+    ]
     out = out[keep].copy()
     if "pct_chg" not in out.columns and "close" in out.columns:
         out["pct_chg"] = out["close"].astype(float).pct_change() * 100
@@ -42,6 +51,7 @@ def normalize_hist_from_fetch(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class FunnelConfig:
@@ -97,8 +107,11 @@ class FunnelResult(NamedTuple):
 # Layer 1: 剥离垃圾
 # ---------------------------------------------------------------------------
 
+
 def _is_main_or_chinext(code: str) -> bool:
-    return code.startswith(("600", "601", "603", "605", "000", "001", "002", "003", "300", "301"))
+    return code.startswith(
+        ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")
+    )
 
 
 def layer1_filter(
@@ -140,6 +153,7 @@ def layer1_filter(
 # Layer 2: 强弱甄别
 # ---------------------------------------------------------------------------
 
+
 def layer2_strength(
     symbols: list[str],
     df_map: dict[str, pd.DataFrame],
@@ -158,7 +172,9 @@ def layer2_strength(
             return None
         return float(((s / 100.0 + 1.0).prod() - 1.0) * 100.0)
 
-    def _calc_rs(stock_df: pd.DataFrame, bench_sorted_df: pd.DataFrame) -> tuple[float | None, float | None]:
+    def _calc_rs(
+        stock_df: pd.DataFrame, bench_sorted_df: pd.DataFrame
+    ) -> tuple[float | None, float | None]:
         stock_p = stock_df[["date", "pct_chg"]].copy()
         bench_p = bench_sorted_df[["date", "pct_chg"]].copy()
         merged = stock_p.merge(bench_p, on="date", how="inner", suffixes=("_s", "_b"))
@@ -197,7 +213,11 @@ def layer2_strength(
         last_ma_short = ma_short.iloc[-1]
         last_ma_long = ma_long.iloc[-1]
 
-        bullish_alignment = pd.notna(last_ma_short) and pd.notna(last_ma_long) and last_ma_short > last_ma_long
+        bullish_alignment = (
+            pd.notna(last_ma_short)
+            and pd.notna(last_ma_long)
+            and last_ma_short > last_ma_long
+        )
 
         holding_ma20 = False
         if bench_dropping:
@@ -224,6 +244,7 @@ def layer2_strength(
 # Layer 3: 板块共振
 # ---------------------------------------------------------------------------
 
+
 def layer3_sector_resonance(
     symbols: list[str],
     sector_map: dict[str, str],
@@ -242,7 +263,9 @@ def layer3_sector_resonance(
     if not counts:
         return symbols, []
 
-    top_sectors = [s for s, _ in sorted(counts.items(), key=lambda x: -x[1])[:cfg.top_n_sectors]]
+    top_sectors = [
+        s for s, _ in sorted(counts.items(), key=lambda x: -x[1])[: cfg.top_n_sectors]
+    ]
     top_set = set(top_sectors)
     filtered = [sym for sym in symbols if sector_map.get(sym, "") in top_set]
     return filtered, top_sectors
@@ -252,6 +275,7 @@ def layer3_sector_resonance(
 # Layer 4: 威科夫狙击
 # ---------------------------------------------------------------------------
 
+
 def _detect_spring(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     """
     Spring（终极震仓）：前一日 low 跌破近 N 日支撑位，今日收盘收回，且放量。
@@ -260,7 +284,7 @@ def _detect_spring(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     if len(df) < cfg.spring_support_window + 2:
         return None
     df_s = df.sort_values("date")
-    support_zone = df_s.iloc[-(cfg.spring_support_window + 1):-1]
+    support_zone = df_s.iloc[-(cfg.spring_support_window + 1) : -1]
     support_level = support_zone["close"].min()
     prev = df_s.iloc[-2]
     last = df_s.iloc[-1]
@@ -357,7 +381,10 @@ def _detect_evr(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
         # 结构约束：最新收盘不能明显弱于三天前（防止下跌中继）
         if len(close) >= 4:
             close_3d_ago = close.iloc[-4]
-            if pd.notna(close_3d_ago) and float(close_last) < float(close_3d_ago) * 0.98:
+            if (
+                pd.notna(close_3d_ago)
+                and float(close_last) < float(close_3d_ago) * 0.98
+            ):
                 continue
         return vol_ratio
 
@@ -396,6 +423,7 @@ def layer4_triggers(
 # ---------------------------------------------------------------------------
 # run_funnel: 串联 4 层
 # ---------------------------------------------------------------------------
+
 
 def run_funnel(
     all_symbols: list[str],

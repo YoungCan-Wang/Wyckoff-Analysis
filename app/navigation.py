@@ -13,6 +13,7 @@ def show_right_nav():
         st.page_link("pages/DownloadHistory.py", label="下载历史", icon="🕘")
         st.page_link("pages/WyckoffScreeners.py", label="沙里淘金", icon="🧭")
         st.page_link("pages/AIAnalysis.py", label="AI 分析", icon="🤖")
+        st.page_link("pages/Portfolio.py", label="持仓管理", icon="💼")
         st.page_link("pages/Settings.py", label="设置", icon="⚙️")
         st.page_link("pages/Changelog.py", label="更新日志", icon="📢")
         st.link_button(

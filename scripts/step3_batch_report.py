@@ -18,6 +18,7 @@ import pandas as pd
 from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
 from integrations.fetch_a_share_csv import _resolve_trading_window, _fetch_hist
 from integrations.llm_client import call_llm
+from integrations.rag_veto import is_rag_veto_enabled, run_negative_news_veto
 from integrations.data_source import fetch_index_hist, fetch_sector_map
 from utils.feishu import send_feishu_notification
 from core.wyckoff_engine import normalize_hist_from_fetch
@@ -32,6 +33,9 @@ DYNAMIC_MAINLINE_BONUS_RATE = 0.15
 DYNAMIC_MAINLINE_TOP_N = 3
 DYNAMIC_MAINLINE_MIN_CLUSTER = 2
 STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+STEP3_ENABLE_RAG_VETO = os.getenv("STEP3_ENABLE_RAG_VETO", "1").strip().lower() in {
     "1", "true", "yes", "on"
 }
 
@@ -518,7 +522,52 @@ def run(
     else:
         print(f"[step3] 候选压缩未启用: selected=全量{len(selected_df)}")
 
+    # P2: RAG 防雷（负面新闻关键词 veto）
+    rag_veto_lines: list[str] = []
+    if STEP3_ENABLE_RAG_VETO and is_rag_veto_enabled() and not selected_df.empty:
+        rag_inputs = [
+            {"code": str(r.get("code", "")).strip(), "name": str(r.get("name", ""))}
+            for _, r in selected_df.iterrows()
+        ]
+        veto_map = run_negative_news_veto(rag_inputs)
+        vetoed_codes: list[str] = []
+        for code, result in veto_map.items():
+            if result.error:
+                print(f"[step3][rag] {code} 检索异常: {result.error}")
+            if result.veto:
+                vetoed_codes.append(code)
+                hit_text = "、".join(result.hits[:5]) if result.hits else "负面关键词"
+                ev_text = f" | 证据: {result.evidence[0]}" if result.evidence else ""
+                rag_veto_lines.append(f"- {code} {result.name}: 命中 {hit_text}{ev_text}")
+        if vetoed_codes:
+            before_n = len(selected_df)
+            selected_df = selected_df[~selected_df["code"].astype(str).isin(set(vetoed_codes))].reset_index(drop=True)
+            print(f"[step3][rag] 负面新闻 veto: {before_n} -> {len(selected_df)}（剔除{len(vetoed_codes)}）")
+        else:
+            print("[step3][rag] 未命中负面关键词，保持候选不变")
+    else:
+        if STEP3_ENABLE_RAG_VETO:
+            print("[step3][rag] 未启用（缺少 TAVILY_API_KEY 或候选为空）")
+
     selected_codes = [str(x) for x in selected_df["code"].tolist()]
+    if not selected_codes:
+        report = (
+            "# 🏛️ Alpha 投委会机密电报：今日最终决断\n\n"
+            "## 📚 观察池（数量不限）\n"
+            "- 无（候选均被 RAG 防雷 veto 或数据不足）\n\n"
+            f"## ⚔️ 可操作池（固定 {OPERATION_TARGET} 只）\n"
+            "- 无（风险过高，今日观望）"
+        )
+        if rag_veto_lines:
+            report += "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
+        model_banner = f"🤖 模型: {model}"
+        content = f"{model_banner}\n\n{report}"
+        title = f"📄 批量研报 {date.today().strftime('%Y-%m-%d')}"
+        sent = send_feishu_notification(webhook_url, title, content)
+        if not sent:
+            return (False, "feishu_failed", report)
+        return (True, "ok", report)
+
     for _, row in selected_df.iterrows():
         code = str(row["code"])
         df = code_to_df.get(code)
@@ -583,6 +632,13 @@ def run(
         + "2) 战区需围绕每只股票的“价格锚点（最新收盘价）”描述，但不得刻舟求剑。\n"
         + "3) 买入触发必须包含量价确认条件（如缩量回踩/拒绝下破）；若放量下破，必须取消买入。\n"
         + "4) 强势突破标的必须给“防踏空策略”：开盘强势确认后可先用计划仓位1/3试单，其余等待二次确认。\n\n"
+        + (
+            "[RAG防雷剔除清单]\n"
+            + "\n".join(rag_veto_lines)
+            + "\n\n"
+            if rag_veto_lines
+            else ""
+        )
         + "\n".join(parts)
     )
     selected_set = set(selected_codes)
@@ -644,6 +700,8 @@ def run(
     )
 
     content = f"{model_banner}\n\n{ops_preview}\n{report}"
+    if rag_veto_lines:
+        content += "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
     print(f"[step3] 飞书发送原文长度={len(content)}（不压缩，交由飞书分片）")
     print(f"[step3] 研报实际使用模型={used_model or model}")
     if failed:

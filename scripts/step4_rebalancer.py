@@ -11,14 +11,25 @@ import json
 import math
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 from core.wyckoff_engine import normalize_hist_from_fetch
 from integrations.ai_prompts import PRIVATE_PM_DECISION_JSON_PROMPT
 from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from integrations.llm_client import call_llm
+from integrations.supabase_portfolio import (
+    check_daily_run_exists,
+    load_portfolio_state as load_portfolio_state_from_supabase,
+    save_ai_trade_orders,
+    update_position_stops,
+    upsert_daily_nav,
+)
 from scripts.step3_batch_report import generate_stock_payload
 
 TRADING_DAYS = 500
@@ -28,6 +39,9 @@ MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
 DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
 STEP4_MAX_OUTPUT_TOKENS = 8192
+STEP4_ATR_PERIOD = int(os.getenv("STEP4_ATR_PERIOD", "14"))
+STEP4_ATR_MULTIPLIER = float(os.getenv("STEP4_ATR_MULTIPLIER", "2.0"))
+STEP4_MAX_WORKERS = int(os.getenv("STEP4_MAX_WORKERS", "8"))
 
 
 @dataclass
@@ -38,6 +52,7 @@ class PositionItem:
     buy_dt: str
     shares: int
     strategy: str
+    stop_loss: float | None = None
 
 
 @dataclass
@@ -79,6 +94,11 @@ class ExecutionTicket:
     tape_condition: str
     invalidate_condition: str
     is_holding: bool
+    atr14: float | None
+    original_stop_loss: float | None
+    effective_stop_loss: float | None
+    slippage_bps: float
+    audit: str
 
 
 class WyckoffOrderEngine:
@@ -109,11 +129,13 @@ class WyckoffOrderEngine:
         free_cash: float,
         position_map: dict[str, PositionItem],
         latest_price_map: dict[str, float],
+        atr_map: dict[str, float] | None = None,
     ) -> None:
         self.total_equity = float(max(total_equity, 0.0))
         self.free_cash = float(max(free_cash, 0.0))
         self.position_map = position_map
         self.latest_price_map = latest_price_map
+        self.atr_map = atr_map or {}
 
     def process(self, decisions: list[DecisionItem]) -> tuple[list[ExecutionTicket], float]:
         ordered = sorted(decisions, key=lambda d: self.PRIORITY_MAP.get(d.action, 99))
@@ -131,15 +153,40 @@ class WyckoffOrderEngine:
         current_price = self.latest_price_map.get(code)
         pos = self.position_map.get(code)
         held_shares = int(pos.shares) if pos else 0
+        atr14 = self.atr_map.get(code)
+        original_stop_loss = dec.stop_loss
+        effective_stop_loss = dec.stop_loss
+        audit_parts: list[str] = []
 
         if current_price is None or current_price <= 0:
             return self._no_trade(dec, name, "缺少最新价格")
+
+        if atr14 is not None and atr14 > 0:
+            trailing_stop = current_price - STEP4_ATR_MULTIPLIER * atr14
+            if dec.action in {"HOLD", "TRIM", "EXIT"}:
+                if effective_stop_loss is None or trailing_stop > effective_stop_loss:
+                    effective_stop_loss = trailing_stop
+                    audit_parts.append(
+                        f"atr_trailing_raise({(original_stop_loss if original_stop_loss is not None else float('nan')):.2f}->{effective_stop_loss:.2f})"
+                    )
+            elif dec.action in {"PROBE", "ATTACK"}:
+                if effective_stop_loss is None:
+                    effective_stop_loss = trailing_stop
+                    audit_parts.append(f"atr_entry_guard({effective_stop_loss:.2f})")
+                else:
+                    merged = max(effective_stop_loss, trailing_stop)
+                    if merged > effective_stop_loss:
+                        audit_parts.append(
+                            f"atr_entry_tighten({effective_stop_loss:.2f}->{merged:.2f})"
+                        )
+                    effective_stop_loss = merged
 
         if action == "EXIT":
             sell_shares = int(math.floor(max(held_shares, 0) / 100.0) * 100)
             if sell_shares < 100:
                 return self._no_trade(dec, name, "无可卖持仓")
-            proceeds = sell_shares * current_price
+            fill_price = current_price * (1.0 - self.SLIPPAGE_BPS)
+            proceeds = sell_shares * fill_price
             self.free_cash += proceeds
             return ExecutionTicket(
                 code=code,
@@ -147,15 +194,20 @@ class WyckoffOrderEngine:
                 action=action,
                 status="APPROVED",
                 shares=sell_shares,
-                price_hint=current_price,
+                price_hint=fill_price,
                 amount=proceeds,
-                stop_loss=dec.stop_loss,
+                stop_loss=effective_stop_loss,
                 max_loss=0.0,
                 drawdown_ratio=0.0,
                 reason=dec.reason,
                 tape_condition=dec.tape_condition,
                 invalidate_condition=dec.invalidate_condition,
                 is_holding=held_shares >= 100,
+                atr14=atr14,
+                original_stop_loss=original_stop_loss,
+                effective_stop_loss=effective_stop_loss,
+                slippage_bps=self.SLIPPAGE_BPS,
+                audit="; ".join(audit_parts + ["sell_with_slippage"]),
             )
 
         if action == "TRIM":
@@ -164,7 +216,8 @@ class WyckoffOrderEngine:
             sell_shares = int(math.floor(held_shares * ratio / 100.0) * 100)
             if sell_shares < 100:
                 return self._no_trade(dec, name, "减仓股数不足100股")
-            proceeds = sell_shares * current_price
+            fill_price = current_price * (1.0 - self.SLIPPAGE_BPS)
+            proceeds = sell_shares * fill_price
             self.free_cash += proceeds
             return ExecutionTicket(
                 code=code,
@@ -172,15 +225,20 @@ class WyckoffOrderEngine:
                 action=action,
                 status="APPROVED",
                 shares=sell_shares,
-                price_hint=current_price,
+                price_hint=fill_price,
                 amount=proceeds,
-                stop_loss=dec.stop_loss,
+                stop_loss=effective_stop_loss,
                 max_loss=0.0,
                 drawdown_ratio=0.0,
                 reason=dec.reason,
                 tape_condition=dec.tape_condition,
                 invalidate_condition=dec.invalidate_condition,
                 is_holding=held_shares >= 100,
+                atr14=atr14,
+                original_stop_loss=original_stop_loss,
+                effective_stop_loss=effective_stop_loss,
+                slippage_bps=self.SLIPPAGE_BPS,
+                audit="; ".join(audit_parts + [f"trim_ratio={ratio:.2f}", "sell_with_slippage"]),
             )
 
         if action == "HOLD":
@@ -192,19 +250,24 @@ class WyckoffOrderEngine:
                 shares=0,
                 price_hint=current_price,
                 amount=0.0,
-                stop_loss=dec.stop_loss,
+                stop_loss=effective_stop_loss,
                 max_loss=0.0,
                 drawdown_ratio=0.0,
                 reason=dec.reason,
                 tape_condition=dec.tape_condition,
                 invalidate_condition=dec.invalidate_condition,
                 is_holding=held_shares >= 100,
+                atr14=atr14,
+                original_stop_loss=original_stop_loss,
+                effective_stop_loss=effective_stop_loss,
+                slippage_bps=self.SLIPPAGE_BPS,
+                audit="; ".join(audit_parts + ["hold"]),
             )
 
         # BUY: PROBE / ATTACK
-        if dec.stop_loss is None:
+        if effective_stop_loss is None:
             return self._no_trade(dec, name, "缺少 stop_loss")
-        if dec.stop_loss >= current_price:
+        if effective_stop_loss >= current_price:
             return self._no_trade(dec, name, "止损倒挂(stop_loss >= current_price)")
 
         # 加仓开关约束：标记为加仓时，必须已有持仓且浮盈
@@ -221,13 +284,18 @@ class WyckoffOrderEngine:
                     shares=0,
                     price_hint=current_price,
                     amount=0.0,
-                    stop_loss=dec.stop_loss,
+                    stop_loss=effective_stop_loss,
                     max_loss=0.0,
                     drawdown_ratio=0.0,
                     reason=f"加仓条件不满足（当前未浮盈），降级为 HOLD；原建议: {dec.reason}",
                     tape_condition=dec.tape_condition,
                     invalidate_condition=dec.invalidate_condition,
                     is_holding=True,
+                    atr14=atr14,
+                    original_stop_loss=original_stop_loss,
+                    effective_stop_loss=effective_stop_loss,
+                    slippage_bps=self.SLIPPAGE_BPS,
+                    audit="; ".join(audit_parts + ["add_on_without_profit->hold"]),
                 )
 
         price_for_calc = current_price
@@ -237,8 +305,9 @@ class WyckoffOrderEngine:
                 price_for_calc = current_price
 
         # 计算每股真实风险（含滑点）
-        assumed_slippage = current_price * self.SLIPPAGE_BPS
-        risk_per_share = (current_price - dec.stop_loss) + assumed_slippage
+        fill_price = current_price * (1.0 + self.SLIPPAGE_BPS)
+        assumed_slippage = fill_price - current_price
+        risk_per_share = (fill_price - effective_stop_loss) + assumed_slippage
         if risk_per_share <= 0:
             return self._no_trade(dec, name, "风险参数异常(risk_per_share<=0)")
 
@@ -248,7 +317,7 @@ class WyckoffOrderEngine:
 
         # 2) 预算与现金允许的最大股数
         budget = min(self.total_equity * self.BUDGET_LIMITS[action], self.free_cash)
-        max_shares_by_cash = budget / current_price
+        max_shares_by_cash = budget / fill_price
 
         # 3) 取最小值并 A 股整手
         raw_shares = min(max_shares_by_risk, max_shares_by_cash)
@@ -257,7 +326,7 @@ class WyckoffOrderEngine:
             return self._no_trade(dec, name, "计算股数不足100股(触及风控或资金限制)")
 
         actual_shares = int(actual_shares)
-        amount = actual_shares * current_price
+        amount = actual_shares * fill_price
         max_loss = actual_shares * risk_per_share
         drawdown_ratio = (max_loss / self.total_equity) if self.total_equity > 0 else 0.0
 
@@ -268,15 +337,29 @@ class WyckoffOrderEngine:
             action=action,
             status="APPROVED",
             shares=actual_shares,
-            price_hint=price_for_calc,
+            price_hint=price_for_calc if price_for_calc > 0 else fill_price,
             amount=amount,
-            stop_loss=dec.stop_loss,
+            stop_loss=effective_stop_loss,
             max_loss=max_loss,
             drawdown_ratio=drawdown_ratio,
             reason=dec.reason,
             tape_condition=dec.tape_condition,
             invalidate_condition=dec.invalidate_condition,
             is_holding=held_shares >= 100,
+            atr14=atr14,
+            original_stop_loss=original_stop_loss,
+            effective_stop_loss=effective_stop_loss,
+            slippage_bps=self.SLIPPAGE_BPS,
+            audit="; ".join(
+                audit_parts
+                + [
+                    f"risk_per_share={risk_per_share:.4f}",
+                    f"budget={budget:.2f}",
+                    f"shares_by_risk={max_shares_by_risk:.2f}",
+                    f"shares_by_cash={max_shares_by_cash:.2f}",
+                    "buy_with_slippage",
+                ]
+            ),
         )
 
     def _no_trade(self, dec: DecisionItem, name: str, reason: str) -> ExecutionTicket:
@@ -295,6 +378,11 @@ class WyckoffOrderEngine:
             tape_condition=dec.tape_condition,
             invalidate_condition=dec.invalidate_condition,
             is_holding=(dec.code in self.position_map and self.position_map[dec.code].shares >= 100),
+            atr14=self.atr_map.get(dec.code),
+            original_stop_loss=dec.stop_loss,
+            effective_stop_loss=dec.stop_loss,
+            slippage_bps=self.SLIPPAGE_BPS,
+            audit=f"reject:{reason}",
         )
 
 
@@ -334,10 +422,59 @@ def load_portfolio_from_env(env_key: str = "MY_PORTFOLIO_STATE") -> PortfolioSta
                 buy_dt=str(item.get("buy_dt", "")).strip(),
                 shares=int(item.get("shares", 0) or 0),
                 strategy=str(item.get("strategy", "")).strip(),
+                stop_loss=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None,
             )
         )
 
     return PortfolioState(free_cash=free_cash, total_equity=total_equity, positions=positions)
+
+
+def _build_portfolio_from_dict(data: dict) -> PortfolioState:
+    if not isinstance(data, dict):
+        raise ValueError("portfolio data 必须是对象")
+    free_cash = float(data.get("free_cash", 0.0) or 0.0)
+    total_equity_raw = data.get("total_equity")
+    total_equity = float(total_equity_raw) if total_equity_raw is not None else None
+    positions_raw = data.get("positions", []) or []
+    if not isinstance(positions_raw, list):
+        raise ValueError("positions 必须是数组")
+
+    positions: list[PositionItem] = []
+    for idx, item in enumerate(positions_raw, start=1):
+        if not isinstance(item, dict):
+            print(f"[step4] 跳过非法持仓#{idx}: 非对象")
+            continue
+        code = str(item.get("code", "")).strip()
+        if not re.fullmatch(r"\d{6}", code):
+            print(f"[step4] 跳过非法持仓#{idx}: code 非6位")
+            continue
+        positions.append(
+            PositionItem(
+                code=code,
+                name=str(item.get("name", code)).strip() or code,
+                cost=float(item.get("cost", 0.0) or 0.0),
+                buy_dt=str(item.get("buy_dt", "")).strip(),
+                shares=int(item.get("shares", 0) or 0),
+                strategy=str(item.get("strategy", "")).strip(),
+                stop_loss=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None,
+            )
+        )
+    return PortfolioState(free_cash=free_cash, total_equity=total_equity, positions=positions)
+
+
+def load_portfolio_with_fallback() -> tuple[PortfolioState, str]:
+    """
+    优先读取 Supabase USER_LIVE；失败或未配置时回退 MY_PORTFOLIO_STATE。
+    返回：(PortfolioState, source)
+    """
+    sb_data = load_portfolio_state_from_supabase("USER_LIVE")
+    if sb_data:
+        try:
+            return (_build_portfolio_from_dict(sb_data), "supabase:user_live")
+        except Exception as e:
+            print(f"[step4] Supabase USER_LIVE 解析失败，回退 env: {e}")
+    p = load_portfolio_from_env()
+    return (p, "env:MY_PORTFOLIO_STATE")
 
 
 def _job_end_calendar_day() -> date:
@@ -361,6 +498,31 @@ def _fetch_latest_real_close(code: str, window) -> float | None:
             return None
 
 
+def _calc_atr(df: pd.DataFrame, period: int = STEP4_ATR_PERIOD) -> float | None:
+    if df is None or df.empty:
+        return None
+    need_cols = {"high", "low", "close"}
+    if not need_cols.issubset(set(df.columns)):
+        return None
+    d = df.copy().sort_values("date").reset_index(drop=True)
+    high = pd.to_numeric(d["high"], errors="coerce")
+    low = pd.to_numeric(d["low"], errors="coerce")
+    close = pd.to_numeric(d["close"], errors="coerce")
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(max(int(period), 2)).mean()
+    if atr.dropna().empty:
+        return None
+    return float(atr.iloc[-1])
+
+
 def _extract_stock_codes(text: str) -> list[str]:
     if not text:
         return []
@@ -374,52 +536,85 @@ def _extract_stock_codes(text: str) -> list[str]:
     return out
 
 
+def _process_one_position(
+    pos: PositionItem,
+    window,
+) -> tuple[str, str, float, float, float | None]:
+    """
+    处理单个持仓，返回：(meta_block, failure_msg, live_val, latest_close, atr14)
+    用于并行化。
+    """
+    try:
+        raw_qfq = _fetch_hist(pos.code, window, "qfq")
+        df_qfq = normalize_hist_from_fetch(raw_qfq).sort_values("date").reset_index(drop=True)
+        atr14 = _calc_atr(df_qfq, STEP4_ATR_PERIOD)
+
+        latest_close = _fetch_latest_real_close(pos.code, window)
+        failure_msg = ""
+        if latest_close is None:
+            latest_close = float(df_qfq.iloc[-1]["close"])
+            failure_msg = f"{pos.code}:real_close_fallback_to_qfq"
+
+        live_val = latest_close * max(pos.shares, 0)
+        pnl_pct = 0.0
+        if pos.cost > 0:
+            pnl_pct = (latest_close - pos.cost) / pos.cost * 100.0
+
+        stop_info = f"- 当前止损: {pos.stop_loss:.2f}\n" if pos.stop_loss is not None else "- 当前止损: 未设置\n"
+
+        meta = (
+            f"### 持仓 {pos.code} {pos.name}\n"
+            f"- 成本价: {pos.cost:.2f}\n"
+            f"- 最新收盘(不复权优先): {latest_close:.2f}\n"
+            f"- 浮盈亏: {pnl_pct:+.2f}%\n"
+            f"{stop_info}"
+            f"- ATR{STEP4_ATR_PERIOD}: {(f'{atr14:.3f}' if atr14 is not None else '-')}\n"
+            f"- 持仓股数: {pos.shares}\n"
+            f"- 买入日期: {pos.buy_dt or '-'}\n"
+            f"- 原始策略: {pos.strategy or '-'}\n"
+        )
+        payload = generate_stock_payload(
+            stock_code=pos.code,
+            stock_name=pos.name,
+            wyckoff_tag=pos.strategy or "持仓",
+            df=df_qfq,
+        )
+        return (meta + "\n" + payload, failure_msg, live_val, latest_close, atr14)
+    except Exception as e:
+        return ("", f"{pos.code}:{e}", 0.0, 0.0, None)
+
+
 def _format_position_payload(
     positions: list[PositionItem],
     window,
-) -> tuple[str, list[str], float, dict[str, float]]:
+) -> tuple[str, list[str], float, dict[str, float], dict[str, float]]:
     blocks: list[str] = []
     failures: list[str] = []
     live_value_sum = 0.0
     latest_close_map: dict[str, float] = {}
+    atr_map: dict[str, float] = {}
 
-    for pos in positions:
-        try:
-            raw_qfq = _fetch_hist(pos.code, window, "qfq")
-            df_qfq = normalize_hist_from_fetch(raw_qfq).sort_values("date").reset_index(drop=True)
+    if not positions:
+        return ("", [], 0.0, {}, {})
 
-            latest_close = _fetch_latest_real_close(pos.code, window)
-            if latest_close is None:
-                latest_close = float(df_qfq.iloc[-1]["close"])
-                failures.append(f"{pos.code}:real_close_fallback_to_qfq")
+    with ThreadPoolExecutor(max_workers=STEP4_MAX_WORKERS) as executor:
+        futures = {executor.submit(_process_one_position, pos, window): pos for pos in positions}
+        for future in as_completed(futures):
+            pos = futures[future]
+            meta_block, fail_msg, val, close, atr = future.result()
+            if fail_msg:
+                failures.append(fail_msg)
+            if meta_block:
+                blocks.append(meta_block)
+                live_value_sum += val
+                latest_close_map[pos.code] = close
+                if atr is not None:
+                    atr_map[pos.code] = atr
+            elif not fail_msg: # case where exception caught and returned empty string but valid error msg handled above
+                # Actually _process_one_position returns error in fail_msg if exception
+                pass
 
-            latest_close_map[pos.code] = latest_close
-            live_value_sum += latest_close * max(pos.shares, 0)
-
-            pnl_pct = 0.0
-            if pos.cost > 0:
-                pnl_pct = (latest_close - pos.cost) / pos.cost * 100.0
-
-            meta = (
-                f"### 持仓 {pos.code} {pos.name}\n"
-                f"- 成本价: {pos.cost:.2f}\n"
-                f"- 最新收盘(不复权优先): {latest_close:.2f}\n"
-                f"- 浮盈亏: {pnl_pct:+.2f}%\n"
-                f"- 持仓股数: {pos.shares}\n"
-                f"- 买入日期: {pos.buy_dt or '-'}\n"
-                f"- 原始策略: {pos.strategy or '-'}\n"
-            )
-            payload = generate_stock_payload(
-                stock_code=pos.code,
-                stock_name=pos.name,
-                wyckoff_tag=pos.strategy or "持仓",
-                df=df_qfq,
-            )
-            blocks.append(meta + "\n" + payload)
-        except Exception as e:
-            failures.append(f"{pos.code}:{e}")
-
-    return ("\n\n".join(blocks), failures, live_value_sum, latest_close_map)
+    return ("\n\n".join(blocks), failures, live_value_sum, latest_close_map, atr_map)
 
 
 def _extract_json_block(text: str) -> str:
@@ -660,6 +855,8 @@ def _render_trade_ticket(
         for t in sells:
             lines.append(f"* **🟥 {t.action}** | `{t.code} {t.name}`")
             lines.append(f"* 执行：{t.shares} 股 | 回笼：{t.amount:.2f} 元 | 止损：{_fmt_stop(t.stop_loss)}")
+            if t.atr14 is not None:
+                lines.append(f"* 风控：ATR{STEP4_ATR_PERIOD}={t.atr14:.3f} | 滑点={t.slippage_bps * 100:.2f}%")
             lines.append(f"* 触发：{_first_sentence(t.tape_condition)}")
             lines.append(f"* 失效：{_first_sentence(t.invalidate_condition)}")
             lines.append(f"* 理由：{_first_sentence(t.reason)}")
@@ -671,6 +868,8 @@ def _render_trade_ticket(
     else:
         for t in holds:
             lines.append(f"* **🟨 HOLD** | `{t.code} {t.name}` | 止损：{_fmt_stop(t.stop_loss)}")
+            if t.atr14 is not None:
+                lines.append(f"* 风控：ATR{STEP4_ATR_PERIOD}={t.atr14:.3f} | 动态止损={_fmt_stop(t.effective_stop_loss)}")
             lines.append(f"* 观察：{_first_sentence(t.reason)}")
             lines.append(f"* 触发：{_first_sentence(t.tape_condition)}")
             lines.append(f"* 失效：{_first_sentence(t.invalidate_condition)}")
@@ -687,7 +886,12 @@ def _render_trade_ticket(
                 f"* 下单：{t.shares} 股 | 占用：{t.amount:.2f} 元 | 参考价："
                 f"{('-' if t.price_hint is None else f'{t.price_hint:.2f}')}"
             )
-            lines.append(f"* 风险：止损 {_fmt_stop(t.stop_loss)} | 最大回撤 {t.max_loss:.2f} 元 ({t.drawdown_ratio * 100:.2f}%)")
+            lines.append(
+                f"* 风险：止损 {_fmt_stop(t.stop_loss)} | 最大回撤 {t.max_loss:.2f} 元 ({t.drawdown_ratio * 100:.2f}%)"
+                f" | 滑点={t.slippage_bps * 100:.2f}%"
+            )
+            if t.atr14 is not None:
+                lines.append(f"* ATR：ATR{STEP4_ATR_PERIOD}={t.atr14:.3f}")
             if t.tape_condition:
                 lines.append(f"* 确认：{_first_sentence(t.tape_condition)}")
             if t.invalidate_condition:
@@ -704,6 +908,8 @@ def _render_trade_ticket(
         for t in blocked:
             lines.append(f"* **⬛ NO_TRADE** | `{t.code} {t.name}` | 原动作：{t.action}")
             lines.append(f"* 原因：{_first_sentence(t.reason)}")
+            if t.audit:
+                lines.append(f"* 审计：{_first_sentence(t.audit)}")
             lines.append("")
     lines.append("")
     lines.append(f"💰 执行后可用现金：{free_cash_after:.2f}")
@@ -720,18 +926,23 @@ def run(
         return (False, "missing_api_key")
 
     try:
-        portfolio = load_portfolio_from_env()
+        portfolio, portfolio_source = load_portfolio_with_fallback()
     except Exception as e:
         print(f"[step4] 持仓读取失败: {e}")
         return (True, "skipped_invalid_portfolio")
+    print(f"[step4] 持仓来源: {portfolio_source}")
 
     if not os.getenv("TG_BOT_TOKEN", "").strip() or not os.getenv("TG_CHAT_ID", "").strip():
         print("[step4] TG_BOT_TOKEN/TG_CHAT_ID 未配置，跳过 Step4 推送")
         return (True, "skipped_telegram_unconfigured")
 
+    if check_daily_run_exists("USER_LIVE", datetime.now(CN_TZ).strftime("%Y-%m-%d")):
+        print(f"[step4] 幂等性检查: USER_LIVE 今日已运行过，跳过。")
+        return (True, "skipped_idempotency")
+
     end_day = _job_end_calendar_day()
     window = _resolve_trading_window(end_calendar_day=end_day, trading_days=TRADING_DAYS)
-    positions_payload, position_failures, live_value, latest_price_map = _format_position_payload(
+    positions_payload, position_failures, live_value, latest_price_map, atr_map = _format_position_payload(
         portfolio.positions,
         window,
     )
@@ -819,20 +1030,100 @@ def run(
         )
 
     # 补齐候选最新价
-    for d in decisions:
-        if d.code in latest_price_map:
-            continue
-        px = _fetch_latest_real_close(d.code, window)
-        if px is not None:
-            latest_price_map[d.code] = px
+    def _fetch_candidate_data(d_code):
+        atr_v = None
+        px = None
+        try:
+            raw_qfq = _fetch_hist(d_code, window, "qfq")
+            df_qfq = normalize_hist_from_fetch(raw_qfq).sort_values("date").reset_index(drop=True)
+            atr_v = _calc_atr(df_qfq, STEP4_ATR_PERIOD)
+        except Exception:
+            pass
+        px = _fetch_latest_real_close(d_code, window)
+        return (d_code, atr_v, px)
+
+    missing_codes = [d.code for d in decisions if d.code not in latest_price_map]
+    if missing_codes:
+        with ThreadPoolExecutor(max_workers=STEP4_MAX_WORKERS) as executor:
+            futures = {executor.submit(_fetch_candidate_data, c): c for c in missing_codes}
+            for future in as_completed(futures):
+                c, atr_v, px = future.result()
+                if atr_v is not None:
+                    atr_map[c] = atr_v
+                if px is not None:
+                    latest_price_map[c] = px
 
     engine = WyckoffOrderEngine(
         total_equity=float(total_equity),
         free_cash=portfolio.free_cash,
         position_map={p.code: p for p in portfolio.positions},
         latest_price_map=latest_price_map,
+        atr_map=atr_map,
     )
     tickets, free_cash_after = engine.process(decisions)
+
+    # 状态回写：更新持仓止损价到 Supabase
+    updates = []
+    for t in tickets:
+        # 只更新已有持仓且有效止损价有变化的
+        if t.is_holding and t.effective_stop_loss is not None:
+             updates.append({"code": t.code, "stop_loss": t.effective_stop_loss})
+    if updates:
+        if update_position_stops(portfolio.portfolio_id, updates):
+             print(f"[step4] 已更新 {len(updates)} 个持仓的止损价")
+        else:
+             print("[step4] 持仓止损价更新失败")
+
+    # 持久化：记录 AI 订单与 USER_LIVE 净值快照（失败不阻断）
+    run_id = datetime.now(CN_TZ).strftime("%Y%m%d_%H%M%S") + "_" + str(uuid4())[:8]
+    trade_date = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+    ticket_rows = [
+        {
+            "code": t.code,
+            "name": t.name,
+            "action": t.action,
+            "status": t.status,
+            "shares": t.shares,
+            "price_hint": t.price_hint,
+            "amount": t.amount,
+            "stop_loss": t.stop_loss,
+            "max_loss": t.max_loss,
+            "drawdown_ratio": t.drawdown_ratio,
+            "reason": (t.reason + (f" | audit={t.audit}" if t.audit else "")).strip(),
+            "tape_condition": t.tape_condition,
+            "invalidate_condition": t.invalidate_condition,
+        }
+        for t in tickets
+    ]
+    for t in tickets:
+        if t.status != "APPROVED":
+            print(f"[step4][reject_audit] code={t.code}, action={t.action}, reason={t.reason}, audit={t.audit}")
+    reject_cnt = sum(1 for t in tickets if t.status != "APPROVED")
+    if reject_cnt:
+        print(f"[step4][reject_audit] summary: rejected={reject_cnt}, total={len(tickets)}")
+    if save_ai_trade_orders(
+        run_id=run_id,
+        portfolio_id="AI_PAPER",
+        model=model,
+        trade_date=trade_date,
+        market_view=market_view,
+        orders=ticket_rows,
+    ):
+        print(f"[step4] 已写入 AI 订单记录: run_id={run_id}, count={len(ticket_rows)}")
+    else:
+        print("[step4] AI 订单记录写入失败（已忽略，不阻断流程）")
+
+    positions_value = max(float(total_equity) - float(portfolio.free_cash), 0.0)
+    if upsert_daily_nav(
+        portfolio_id="USER_LIVE",
+        trade_date=trade_date,
+        free_cash=portfolio.free_cash,
+        total_equity=float(total_equity),
+        positions_value=positions_value,
+    ):
+        print(f"[step4] 已写入 USER_LIVE 日净值快照: {trade_date}")
+    else:
+        print("[step4] USER_LIVE 日净值快照写入失败（已忽略）")
 
     report = _render_trade_ticket(
         model=model,
