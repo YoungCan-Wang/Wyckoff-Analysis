@@ -292,7 +292,6 @@ with content_col:
     )
 
     st.title("💼 持仓管理")
-    st.caption("管理 Step4 的 USER_LIVE 账本。删除行即清仓；Step4 将优先读取这里。")
 
     loading = show_page_loading(title="加载持仓中...", subtitle="正在读取 USER_LIVE")
     try:
