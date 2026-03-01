@@ -6,8 +6,9 @@ import time
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, timedelta
-from pathlib import Path
 from functools import lru_cache
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import akshare as ak
 import pandas as pd
@@ -20,6 +21,33 @@ from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 class TradingWindow:
     start_trade_date: date
     end_trade_date: date
+
+
+def _atomic_json_dump(path: Path, payload: object) -> None:
+    """原子写 JSON，避免并发写导致文件损坏。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_name: str | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            json.dump(payload, tmp, ensure_ascii=False)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_name = tmp.name
+        os.replace(tmp_name, path)
+        tmp_name = None
+    finally:
+        if tmp_name and os.path.exists(tmp_name):
+            try:
+                os.remove(tmp_name)
+            except Exception:
+                pass
 
 
 def _trade_dates() -> list[date]:
@@ -46,13 +74,30 @@ def _trade_dates() -> list[date]:
 
     def _write_cache(dates: list[date]) -> None:
         try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    [d.strftime("%Y-%m-%d") for d in dates], f, ensure_ascii=False
-                )
+            _atomic_json_dump(
+                cache_path,
+                [d.strftime("%Y-%m-%d") for d in dates],
+            )
         except Exception:
             return
+
+    def _fetch_from_akshare_calendar() -> list[date]:
+        """优先使用 akshare 提供的交易日历接口，降低手动 JS 解析脆弱性。"""
+        df = ak.tool_trade_date_hist_sina()
+        if df is None or df.empty:
+            raise RuntimeError("akshare trade calendar empty")
+        col = "trade_date"
+        if col not in df.columns:
+            if len(df.columns) == 1:
+                col = str(df.columns[0])
+            else:
+                raise RuntimeError("trade calendar column not found")
+        s = pd.to_datetime(df[col], errors="coerce").dropna().dt.date
+        dates = sorted(set(s.tolist()))
+        if not dates:
+            raise RuntimeError("trade calendar parsed empty")
+        dates.append(date(year=1992, month=5, day=4))
+        return sorted(set(dates))
 
     def _fetch_with_timeout(timeout: float) -> list[date]:
         try:
@@ -88,6 +133,13 @@ def _trade_dates() -> list[date]:
     last_err: Exception | None = None
     for _ in range(3):
         try:
+            dates = _fetch_from_akshare_calendar()
+            if dates:
+                _write_cache(dates)
+                return dates
+        except Exception as e:
+            last_err = e
+        try:
             dates = _fetch_with_timeout(timeout=10)
             if dates:
                 _write_cache(dates)
@@ -99,6 +151,18 @@ def _trade_dates() -> list[date]:
     cached = _read_cache()
     if cached:
         return cached
+
+    allow_approx = os.getenv("ALLOW_APPROX_TRADE_CALENDAR", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not allow_approx:
+        raise RuntimeError(
+            "failed to load accurate trade calendar and no cache available; "
+            "set ALLOW_APPROX_TRADE_CALENDAR=1 if you accept business-day approximation"
+        ) from last_err
 
     end = date.today() + timedelta(days=366)
     start = date(1990, 1, 1)
@@ -181,9 +245,7 @@ def get_all_stocks() -> list[dict[str, str]]:
 
         # 网络获取成功，更新本地缓存
         try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(records, f, ensure_ascii=False)
+            _atomic_json_dump(cache_path, records)
         except Exception:
             pass
 

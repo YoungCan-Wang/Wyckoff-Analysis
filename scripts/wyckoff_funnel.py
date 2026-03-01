@@ -1,15 +1,25 @@
 # -*- coding: utf-8 -*-
+# Copyright (c) 2024 youngcan. All Rights Reserved.
+# 本代码仅供个人学习研究使用，未经授权不得用于商业目的。
+# 商业授权请联系作者支付授权费用。
+
 """
 Wyckoff Funnel 定时任务：4 层漏斗筛选 → 飞书发送
 
 Layer 1: 剥离垃圾 → Layer 2: 强弱甄别 → Layer 3: 板块共振 → Layer 4: 威科夫狙击
 """
+
 from __future__ import annotations
 import os
 import socket
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    TimeoutError as FuturesTimeoutError,
+    as_completed,
+)
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -30,7 +40,12 @@ from core.wyckoff_engine import (
     layer4_triggers,
     normalize_hist_from_fetch,
 )
-from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
+from integrations.data_source import (
+    fetch_index_hist,
+    fetch_sector_map,
+    fetch_market_cap_map,
+    fetch_stock_spot_snapshot,
+)
 from utils.feishu import send_feishu_notification
 
 TRIGGER_LABELS = {
@@ -47,8 +62,28 @@ BATCH_TIMEOUT = int(os.getenv("FUNNEL_BATCH_TIMEOUT", "420"))
 BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "200"))
 BATCH_SLEEP = float(os.getenv("FUNNEL_BATCH_SLEEP", "2"))
 MAX_WORKERS = int(os.getenv("FUNNEL_MAX_WORKERS", "8"))
+EXECUTOR_MODE = os.getenv("FUNNEL_EXECUTOR_MODE", "thread").strip().lower()
+if EXECUTOR_MODE not in {"thread", "process"}:
+    EXECUTOR_MODE = "thread"
 CN_TZ = ZoneInfo("Asia/Shanghai")
 MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
+MARKET_DATA_READY_HOUR = int(
+    os.getenv(
+        "MARKET_DATA_READY_HOUR",
+        str(max(MARKET_CLOSE_HOUR, 20)),
+    )
+)
+ENFORCE_TARGET_TRADE_DATE = os.getenv(
+    "ENFORCE_TARGET_TRADE_DATE", "1"
+).strip().lower() in {"1", "true", "yes", "on"}
+FUNNEL_ENABLE_SPOT_PATCH = os.getenv("FUNNEL_ENABLE_SPOT_PATCH", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+FUNNEL_SPOT_PATCH_RETRIES = int(os.getenv("FUNNEL_SPOT_PATCH_RETRIES", "2"))
+FUNNEL_SPOT_PATCH_SLEEP = float(os.getenv("FUNNEL_SPOT_PATCH_SLEEP", "0.2"))
 
 
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
@@ -57,6 +92,7 @@ def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
 
 def _fetch_hist(symbol: str, window, adjust: str) -> pd.DataFrame:
     from integrations.fetch_a_share_csv import _fetch_hist as _fh
+
     df = _fh(symbol=symbol, window=window, adjust=adjust)
     return _normalize_hist(df)
 
@@ -64,18 +100,40 @@ def _fetch_hist(symbol: str, window, adjust: str) -> pd.DataFrame:
 def _stock_name_map() -> dict[str, str]:
     try:
         from integrations.fetch_a_share_csv import get_all_stocks
+
         items = get_all_stocks()
-        return {x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)}
+        return {
+            x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)
+        }
     except Exception:
         return {}
 
 
-def _fetch_one_with_retry(sym: str, window, max_retries: int = MAX_RETRIES) -> tuple[str, pd.DataFrame | None]:
+def _fetch_one_with_retry(
+    sym: str, window, max_retries: int = MAX_RETRIES
+) -> tuple[str, pd.DataFrame | None]:
     """在子进程中执行，单票硬超时 + 重试，避免个别数据源卡死拖慢整批。"""
     socket.setdefaulttimeout(SOCKET_TIMEOUT)
     for attempt in range(max_retries):
         try:
             df = _run_with_timeout(sym, window, FETCH_TIMEOUT)
+            return (sym, df)
+        except Exception:
+            if attempt < max_retries - 1:
+                delay = RETRY_BASE_DELAY * (attempt + 1)
+                time.sleep(delay)
+    return (sym, None)
+
+
+def _fetch_one_with_retry_thread(
+    sym: str, window, max_retries: int = MAX_RETRIES
+) -> tuple[str, pd.DataFrame | None]:
+    """
+    线程模式：避免 signal，依赖数据源请求超时与重试。
+    """
+    for attempt in range(max_retries):
+        try:
+            df = _fetch_hist(sym, window, "qfq")
             return (sym, df)
         except Exception:
             if attempt < max_retries - 1:
@@ -117,13 +175,75 @@ def _run_with_timeout(sym: str, window, timeout_s: int) -> pd.DataFrame:
 def _job_end_calendar_day() -> date:
     """
     定时任务统一口径：
-    - 北京时间收盘后（默认 >=15:00）走 T+0（当天）
-    - 收盘前走 T-1（上一自然日）
+    - 北京时间达到 MARKET_DATA_READY_HOUR（默认 >=20:00）走 T+0（当天）
+    - 否则走 T-1（上一自然日），避免 15:00~18:00 数据源时差导致截面错位
     """
     now = datetime.now(CN_TZ)
-    if now.hour >= MARKET_CLOSE_HOUR:
+    if now.hour >= MARKET_DATA_READY_HOUR:
         return now.date()
     return (now - timedelta(days=1)).date()
+
+
+def _latest_trade_date_from_hist(df: pd.DataFrame) -> date | None:
+    if df is None or df.empty or "date" not in df.columns:
+        return None
+    s = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if s.empty:
+        return None
+    return s.iloc[-1].date()
+
+
+def _append_spot_bar_if_needed(
+    symbol: str,
+    df: pd.DataFrame,
+    target_trade_date: date,
+) -> tuple[pd.DataFrame, bool]:
+    if not FUNNEL_ENABLE_SPOT_PATCH or df is None or df.empty:
+        return (df, False)
+    latest_trade_date = _latest_trade_date_from_hist(df)
+    if latest_trade_date is None or latest_trade_date >= target_trade_date:
+        return (df, False)
+    if target_trade_date != datetime.now(CN_TZ).date():
+        return (df, False)
+
+    df_s = df.sort_values("date").reset_index(drop=True)
+    last_close_series = pd.to_numeric(df_s.get("close"), errors="coerce").dropna()
+    prev_close = float(last_close_series.iloc[-1]) if not last_close_series.empty else None
+
+    for attempt in range(max(FUNNEL_SPOT_PATCH_RETRIES, 1)):
+        snap = fetch_stock_spot_snapshot(symbol, force_refresh=attempt > 0)
+        close_v = None if not snap else snap.get("close")
+        if close_v is None or float(close_v) <= 0:
+            if attempt < max(FUNNEL_SPOT_PATCH_RETRIES, 1) - 1:
+                time.sleep(max(FUNNEL_SPOT_PATCH_SLEEP, 0.0))
+            continue
+
+        close_f = float(close_v)
+        open_f = float(snap.get("open")) if snap and snap.get("open") is not None else close_f
+        high_raw = float(snap.get("high")) if snap and snap.get("high") is not None else close_f
+        low_raw = float(snap.get("low")) if snap and snap.get("low") is not None else close_f
+        high_f = max(high_raw, open_f, close_f)
+        low_f = min(low_raw, open_f, close_f)
+        volume_f = float(snap.get("volume")) if snap and snap.get("volume") is not None else 0.0
+        amount_f = float(snap.get("amount")) if snap and snap.get("amount") is not None else 0.0
+        pct_f = float(snap.get("pct_chg")) if snap and snap.get("pct_chg") is not None else None
+        if pct_f is None and prev_close and prev_close > 0:
+            pct_f = (close_f - prev_close) / prev_close * 100.0
+
+        new_row = {
+            "date": target_trade_date.isoformat(),
+            "open": open_f,
+            "high": high_f,
+            "low": low_f,
+            "close": close_f,
+            "volume": volume_f,
+            "amount": amount_f,
+            "pct_chg": pct_f if pct_f is not None else 0.0,
+        }
+        patched = pd.concat([df_s, pd.DataFrame([new_row])], ignore_index=True)
+        patched = patched.sort_values("date").reset_index(drop=True)
+        return (patched, True)
+    return (df, False)
 
 
 def _terminate_executor_processes(ex: ProcessPoolExecutor, batch_no: int) -> None:
@@ -198,8 +318,15 @@ def _analyze_benchmark_and_tune_cfg(
         and ma50_slope_5d is not None
         and recent3_cum is not None
     ):
-        risk_off = (close < ma200) and (ma50 < ma200) and (ma50_slope_5d < 0) and (recent3_cum <= -2.0)
-        risk_on = (close > ma50 > ma200) and (ma50_slope_5d > 0) and (recent3_cum >= 0.0)
+        risk_off = (
+            (close < ma200)
+            and (ma50 < ma200)
+            and (ma50_slope_5d < 0)
+            and (recent3_cum <= -2.0)
+        )
+        risk_on = (
+            (close > ma50 > ma200) and (ma50_slope_5d > 0) and (recent3_cum >= 0.0)
+        )
         if risk_off:
             regime = "RISK_OFF"
         elif risk_on:
@@ -218,20 +345,22 @@ def _analyze_benchmark_and_tune_cfg(
         cfg.rs_min_long = max(cfg.rs_min_long, 0.0)
         cfg.rs_min_short = max(cfg.rs_min_short, 0.0)
 
-    context.update({
-        "regime": regime,
-        "close": close,
-        "ma50": ma50,
-        "ma200": ma200,
-        "ma50_slope_5d": ma50_slope_5d,
-        "recent3_pct": recent3_list,
-        "recent3_cum_pct": recent3_cum,
-        "tuned": {
-            "min_avg_amount_wan": cfg.min_avg_amount_wan,
-            "rs_min_long": cfg.rs_min_long,
-            "rs_min_short": cfg.rs_min_short,
-        },
-    })
+    context.update(
+        {
+            "regime": regime,
+            "close": close,
+            "ma50": ma50,
+            "ma200": ma200,
+            "ma50_slope_5d": ma50_slope_5d,
+            "recent3_pct": recent3_list,
+            "recent3_cum_pct": recent3_cum,
+            "tuned": {
+                "min_avg_amount_wan": cfg.min_avg_amount_wan,
+                "rs_min_long": cfg.rs_min_long,
+                "rs_min_short": cfg.rs_min_short,
+            },
+        }
+    )
     return context
 
 
@@ -257,12 +386,15 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
             merged_code_to_name[code] = str(item.get("name", "")).strip()
     merged_symbols = _normalize_symbols(list(merged_code_to_name.keys()))
     st_symbols = [
-        sym for sym in merged_symbols
+        sym
+        for sym in merged_symbols
         if "ST" in merged_code_to_name.get(sym, "").upper()
     ]
     st_set = set(st_symbols)
     all_symbols = [sym for sym in merged_symbols if sym not in st_set]
-    total_batches = (len(all_symbols) + BATCH_SIZE - 1) // BATCH_SIZE if all_symbols else 0
+    total_batches = (
+        (len(all_symbols) + BATCH_SIZE - 1) // BATCH_SIZE if all_symbols else 0
+    )
     print(
         "[funnel] 股票池统计: "
         f"main={len(main_items)}, chinext={len(chinext_items)}, "
@@ -276,7 +408,9 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     print(f"[funnel] 加载市值数据...")
     market_cap_map = fetch_market_cap_map()
     if not market_cap_map:
-        print("[funnel] ⚠️ 市值数据为空（TUSHARE_TOKEN 可能缺失/失效），Layer1 将跳过市值过滤")
+        print(
+            "[funnel] ⚠️ 市值数据为空（TUSHARE_TOKEN 可能缺失/失效），Layer1 将跳过市值过滤"
+        )
     print(f"[funnel] 加载股票名称...")
     name_map = _stock_name_map()
 
@@ -303,22 +437,41 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     all_df_map: dict[str, pd.DataFrame] = {}
     fetch_ok = 0
     fetch_fail = 0
+    fetch_date_mismatch = 0
+    fetch_spot_patched = 0
 
     print(
         f"[funnel] 开始拉取 {len(all_symbols)} 只股票日线 "
-        f"(batch_size={BATCH_SIZE}, max_workers={MAX_WORKERS}, batch_timeout={BATCH_TIMEOUT}s, "
+        f"(executor={EXECUTOR_MODE}, batch_size={BATCH_SIZE}, max_workers={MAX_WORKERS}, batch_timeout={BATCH_TIMEOUT}s, "
         f"fetch_timeout={FETCH_TIMEOUT}s, retries={MAX_RETRIES})"
     )
+    _baostock_orig = os.environ.get("DATA_SOURCE_DISABLE_BAOSTOCK")
+    if EXECUTOR_MODE == "process":
+        if not _baostock_orig:
+            os.environ["DATA_SOURCE_DISABLE_BAOSTOCK"] = "1"
+            print(
+                "[funnel] 检测到 process 并发，已自动设置 DATA_SOURCE_DISABLE_BAOSTOCK=1 "
+                "以规避并发 login 风险（任务结束后自动还原）。"
+            )
+    total_fetch_started = time.monotonic()
     for i in range(0, len(all_symbols), BATCH_SIZE):
         batch_no = i // BATCH_SIZE + 1
-        batch = all_symbols[i: i + BATCH_SIZE]
+        batch = all_symbols[i : i + BATCH_SIZE]
         batch_ok = 0
         batch_fail = 0
         batch_started = time.monotonic()
         print(f"[funnel] 批次#{batch_no}/{total_batches} 启动，股票数={len(batch)}")
 
-        ex = ProcessPoolExecutor(max_workers=MAX_WORKERS)
-        futures = {ex.submit(_fetch_one_with_retry, s, window): s for s in batch}
+        use_process = EXECUTOR_MODE == "process"
+        ex = (
+            ProcessPoolExecutor(max_workers=MAX_WORKERS)
+            if use_process
+            else ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        )
+        fetch_fn = (
+            _fetch_one_with_retry if use_process else _fetch_one_with_retry_thread
+        )
+        futures = {ex.submit(fetch_fn, s, window): s for s in batch}
         try:
             for f in as_completed(futures, timeout=BATCH_TIMEOUT):
                 sym = futures[f]
@@ -330,6 +483,28 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
                     fetch_fail += 1
                     continue
                 if df is not None:
+                    if ENFORCE_TARGET_TRADE_DATE:
+                        latest_trade_date = _latest_trade_date_from_hist(df)
+                        if latest_trade_date != window.end_trade_date:
+                            df, patched = _append_spot_bar_if_needed(
+                                sym,
+                                df,
+                                window.end_trade_date,
+                            )
+                            if patched:
+                                latest_trade_date = _latest_trade_date_from_hist(df)
+                                fetch_spot_patched += 1
+                            batch_fail += 1
+                            if latest_trade_date != window.end_trade_date:
+                                fetch_fail += 1
+                                fetch_date_mismatch += 1
+                                print(
+                                    f"[funnel] 批次#{batch_no} 跳过 {sym}: "
+                                    f"latest_trade_date={latest_trade_date}, "
+                                    f"target_trade_date={window.end_trade_date}"
+                                )
+                                continue
+                            batch_fail -= 1
                     batch_ok += 1
                     fetch_ok += 1
                     all_df_map[sym] = df
@@ -350,39 +525,51 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
                 preview = ", ".join(pending_symbols[:10])
                 suffix = "..." if len(pending_symbols) > 10 else ""
                 print(f"[funnel] 批次#{batch_no} 超时股票: {preview}{suffix}")
-            _terminate_executor_processes(ex, batch_no)
+            if use_process:
+                _terminate_executor_processes(ex, batch_no)
         finally:
             for ft in futures:
                 ft.cancel()
             ex.shutdown(wait=False, cancel_futures=True)
 
         batch_elapsed = time.monotonic() - batch_started
+        batch_qps = (batch_ok / batch_elapsed) if batch_elapsed > 0 else 0.0
         print(
             f"[funnel] 批次#{batch_no} 完成: 成功={batch_ok}, 失败={batch_fail}, "
-            f"耗时={batch_elapsed:.1f}s, 累计成功={fetch_ok}, 累计失败={fetch_fail}"
+            f"耗时={batch_elapsed:.1f}s, qps={batch_qps:.2f}, 累计成功={fetch_ok}, 累计失败={fetch_fail}"
         )
         if i + BATCH_SIZE < len(all_symbols) and BATCH_SLEEP > 0:
             time.sleep(BATCH_SLEEP)
 
-    print(f"[funnel] 日线拉取完成: 成功={fetch_ok}, 失败={fetch_fail}")
+    total_fetch_elapsed = time.monotonic() - total_fetch_started
+    overall_qps = (fetch_ok / total_fetch_elapsed) if total_fetch_elapsed > 0 else 0.0
+    print(
+        f"[funnel] 日线拉取完成: 成功={fetch_ok}, 失败={fetch_fail}, "
+        f"总耗时={total_fetch_elapsed:.1f}s, 平均qps={overall_qps:.2f}"
+    )
+    if ENFORCE_TARGET_TRADE_DATE:
+        print(
+            f"[funnel] 交易日对齐检查: mismatch={fetch_date_mismatch}, "
+            f"spot_patched={fetch_spot_patched}, target_trade_date={window.end_trade_date}"
+        )
 
     # 统一漏斗计算：L1 -> L2 -> L3 -> L4
     print(f"[funnel] 开始执行全量漏斗筛选...")
-    
+
     # Layer 1
     l1_input = list(all_df_map.keys())
     l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg)
-    
+
     # Layer 2
     l2_passed = layer2_strength(l1_passed, all_df_map, bench_df, cfg)
-    
+
     # Layer 3 (Sector Resonance)
     l3_passed, top_sectors = layer3_sector_resonance(l2_passed, sector_map, cfg)
-    
+
     # Layer 4 (Wyckoff Triggers)
     # L4 需要 l2_df_map，这里直接用 all_df_map 即可，因为 key 都在里面
     triggers = layer4_triggers(l3_passed, all_df_map, cfg)
-    
+
     total_hits = sum(len(v) for v in triggers.values())
     metrics = {
         "total_symbols": len(all_symbols),
@@ -393,6 +580,8 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         "pool_batches": total_batches,
         "fetch_ok": fetch_ok,
         "fetch_fail": fetch_fail,
+        "fetch_date_mismatch": fetch_date_mismatch,
+        "fetch_spot_patched": fetch_spot_patched,
         "layer1": len(l1_passed),
         "layer2": len(l2_passed),
         "layer3": len(l3_passed),
@@ -401,9 +590,16 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         "by_trigger": {k: len(v) for k, v in triggers.items()},
         "benchmark_context": benchmark_context,
     }
-    print(f"[funnel] L1={metrics['layer1']}, L2={metrics['layer2']}, "
-          f"L3={metrics['layer3']}, 命中={total_hits}, "
-          f"Top行业={top_sectors}, 各触发={metrics['by_trigger']}")
+    print(
+        f"[funnel] L1={metrics['layer1']}, L2={metrics['layer2']}, "
+        f"L3={metrics['layer3']}, 命中={total_hits}, "
+        f"Top行业={top_sectors}, 各触发={metrics['by_trigger']}"
+    )
+
+    # 还原环境变量，避免污染同进程内的后续任务
+    if EXECUTOR_MODE == "process" and not _baostock_orig:
+        os.environ.pop("DATA_SOURCE_DISABLE_BAOSTOCK", None)
+
     return triggers, metrics
 
 
@@ -450,11 +646,13 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
 
     lines = [
         (
-            f"**股票池**: 主板{metrics['pool_main']} + 创业板{metrics['pool_chinext']} "
-            f"-> 去重{metrics['pool_merged']} -> 去ST{metrics['pool_st_excluded']} "
-            f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
+        f"**股票池**: 主板{metrics['pool_main']} + 创业板{metrics['pool_chinext']} "
+        f"-> 去重{metrics['pool_merged']} -> 去ST{metrics['pool_st_excluded']} "
+        f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
+        f"**数据对齐**: fetch_ok={metrics['fetch_ok']} / fetch_fail={metrics['fetch_fail']} / "
+        f"date_mismatch={metrics.get('fetch_date_mismatch', 0)} / spot_patched={metrics.get('fetch_spot_patched', 0)}",
         f"**大盘水温**: {bench_line}",
         f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)}",
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
@@ -465,7 +663,9 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     for code in selected_for_ai:
         name = name_map.get(code, code)
         reasons = "、".join(code_to_reasons[code])
-        lines.append(f"• {code} {name} | {reasons} | score={code_to_best_score.get(code, 0):.2f}")
+        lines.append(
+            f"• {code} {name} | {reasons} | score={code_to_best_score.get(code, 0):.2f}"
+        )
 
     if not selected_for_ai:
         lines.append("无")

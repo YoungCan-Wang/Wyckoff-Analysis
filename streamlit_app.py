@@ -1,3 +1,7 @@
+# Copyright (c) 2024 youngcan. All Rights Reserved.
+# 本代码仅供个人学习研究使用，未经授权不得用于商业目的。
+# 商业授权请联系作者支付授权费用。
+
 import streamlit as st
 from datetime import date, timedelta, datetime
 import zipfile
@@ -229,7 +233,9 @@ with content_col:
             st.markdown("##### 📌 2. 按板块批量添加 (可选)", help=board_help)
             col_b1, col_b2, col_b3, col_b4 = st.columns(4)
             with col_b1:
-                check_main = st.checkbox("主板", key="check_board_main", help=board_help)
+                check_main = st.checkbox(
+                    "主板", key="check_board_main", help=board_help
+                )
             with col_b2:
                 check_chinext = st.checkbox("创业板", key="check_board_chinext")
             with col_b3:
@@ -266,13 +272,17 @@ with content_col:
 
             stock_options = []
             if enable_stock_search:
-                loading = show_page_loading(title="加载中...", subtitle="正在加载股票列表")
+                loading = show_page_loading(
+                    title="加载中...", subtitle="正在加载股票列表"
+                )
                 try:
                     all_stocks = load_stock_list()
                 finally:
                     loading.empty()
                 stock_options = (
-                    [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
+                    [f"{s['code']} {s['name']}" for s in all_stocks]
+                    if all_stocks
+                    else []
                 )
 
             if stock_options:
@@ -416,7 +426,9 @@ with content_col:
 
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                         for idx, symbol in enumerate(symbols, start=1):
-                            status_ph.caption(f"({idx}/{len(symbols)}) 正在处理：{symbol}")
+                            status_ph.caption(
+                                f"({idx}/{len(symbols)}) 正在处理：{symbol}"
+                            )
                             try:
                                 name = name_map.get(symbol) or "Unknown"
 
@@ -428,8 +440,12 @@ with content_col:
 
                                 safe_symbol = safe_filename_part(symbol)
                                 safe_name = safe_filename_part(name)
-                                file_name_export = f"{safe_symbol}_{safe_name}_ohlcv.csv"
-                                file_name_hist = f"{safe_symbol}_{safe_name}_hist_data.csv"
+                                file_name_export = (
+                                    f"{safe_symbol}_{safe_name}_ohlcv.csv"
+                                )
+                                file_name_hist = (
+                                    f"{safe_symbol}_{safe_name}_hist_data.csv"
+                                )
 
                                 csv_export = df_export.to_csv(
                                     index=False, encoding="utf-8-sig"
@@ -493,7 +509,9 @@ with content_col:
                     if st.session_state.feishu_webhook:
                         success_count = len([r for r in results if r["status"] == "ok"])
                         failed_count = len(results) - success_count
-                        notify_title = f"📦 批量下载完成 ({success_count}/{len(symbols)})"
+                        notify_title = (
+                            f"📦 批量下载完成 ({success_count}/{len(symbols)})"
+                        )
                         notify_text = (
                             f"**任务状态**: 已完成\n"
                             f"**成功**: {success_count} 个\n"
@@ -594,7 +612,9 @@ with content_col:
                 csv_hist = df_hist.to_csv(index=False, encoding="utf-8-sig").encode(
                     "utf-8-sig"
                 )
-                file_name_hist = f"{st.session_state.current_symbol}_{name}_hist_data.csv"
+                file_name_hist = (
+                    f"{st.session_state.current_symbol}_{name}_hist_data.csv"
+                )
 
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:

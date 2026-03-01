@@ -2,8 +2,8 @@ name: Wyckoff Funnel
 
 on:
   schedule:
-    # 北京 16:30 (UTC+8)，周一到周五
-    - cron: '30 8 * * 1-5'
+    # 北京 20:10 (UTC+8)，周一到周五
+    - cron: '10 12 * * 1-5'
   workflow_dispatch:
 
 concurrency:
@@ -21,7 +21,13 @@ jobs:
       MY_PORTFOLIO_STATE: ${{ secrets.MY_PORTFOLIO_STATE }}
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
       TZ: Asia/Shanghai
+      MARKET_DATA_READY_HOUR: "20"
 
     steps:
       - uses: actions/checkout@v4

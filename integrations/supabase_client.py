@@ -9,6 +9,8 @@ def _get_supabase_client_base() -> Client:
     # 优先尝试从 os.getenv 读取（本地 .env 文件）
     # 其次尝试从 st.secrets 读取（Streamlit Cloud 部署环境）
     url = os.getenv("SUPABASE_URL")
+    # ⚠️  此处必须填 anon key（公开权限），不得填 service_role key。
+    # 若误填 service_role key，未登录用户将绕过 RLS，可读写所有用户数据。
     key = os.getenv("SUPABASE_KEY")
 
     if not url or not key:
@@ -43,7 +45,8 @@ def _apply_user_session(supabase: Client) -> None:
     if access_token:
         supabase.postgrest.auth(access_token)
     else:
-        # 回退到 anon/service key（未登录场景）
+        # 回退到 anon key（未登录场景）。
+        # ⚠️  此处 supabase_key 应为 anon key；若误配 service_role key 会绕过 RLS。
         supabase.postgrest.auth(supabase.supabase_key)
 
 
@@ -94,6 +97,7 @@ def save_user_settings(user_id: str, settings: dict):
         return True
     except APIError as e:
         print(f"Supabase API Error in save_user_settings: {e.code} - {e.message}")
+        return False
     except Exception as e:
         print(f"Unexpected error in save_user_settings: {e}")
         return False
