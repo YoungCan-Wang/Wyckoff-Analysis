@@ -24,6 +24,9 @@ data/*.csv
 data/trade_dates_cache.json
 data/sector_map_cache.json
 data/market_cap_cache.json
+data/funnel_snapshots/*
+!data/funnel_snapshots/.gitkeep
+logs/
 *.csv
 *.xlsx
 *.xls

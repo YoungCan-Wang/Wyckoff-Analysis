@@ -36,9 +36,7 @@ from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 TRADING_DAYS = 500
 TELEGRAM_MAX_LEN = 3900
-ENFORCE_TARGET_TRADE_DATE = os.getenv(
-    "ENFORCE_TARGET_TRADE_DATE", "1"
-).strip().lower() in {"1", "true", "yes", "on"}
+ENFORCE_TARGET_TRADE_DATE = False
 DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
 STEP4_MAX_OUTPUT_TOKENS = 8192
