@@ -9,8 +9,62 @@
 from __future__ import annotations
 
 import os
+import re
 import requests
 import time
+
+
+_TERM_GLOSSARY_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # Regime / risk state
+    (re.compile(r"\bBLACK_SWAN\b(?!\s*[（(])"), "BLACK_SWAN（黑天鹅高风险）"),
+    (re.compile(r"\bRISK_OFF\b(?!\s*[（(])"), "RISK_OFF（风险收缩）"),
+    (re.compile(r"\bRISK_ON\b(?!\s*[（(])"), "RISK_ON（风险偏好）"),
+    (re.compile(r"\bNORMAL\b(?!\s*[（(])"), "NORMAL（常态）"),
+    (re.compile(r"\bPANIC_REPAIR\b(?!\s*[（(])"), "PANIC_REPAIR（恐慌修复）"),
+    # Macro / market indicators
+    (re.compile(r"\bVIX\b(?!\s*[（(])"), "VIX（波动率恐慌指数）"),
+    (re.compile(r"\bA50\b(?!\s*[（(])"), "A50（富时中国A50期货）"),
+    (re.compile(r"\bATR\b(?!\s*[（(])"), "ATR（真实波动幅度）"),
+    (re.compile(r"\bRPS\b(?!\s*[（(])"), "RPS（相对强弱百分位）"),
+    (re.compile(r"\bQPS\b(?!\s*[（(])"), "QPS（每秒请求量）"),
+    # OMS actions
+    (re.compile(r"\bFULL_ATTACK\b(?!\s*[（(])"), "FULL_ATTACK（全仓进攻）"),
+    (re.compile(r"\bLIGHT_ADD\b(?!\s*[（(])"), "LIGHT_ADD（轻量加仓）"),
+    (re.compile(r"\bATTACK\b(?!\s*[（(])"), "ATTACK（进攻建仓）"),
+    (re.compile(r"\bPROBE\b(?!\s*[（(])"), "PROBE（试探建仓）"),
+    (re.compile(r"\bTRIM\b(?!\s*[（(])"), "TRIM（减仓）"),
+    (re.compile(r"\bHOLD\b(?!\s*[（(])"), "HOLD（持有观察）"),
+    (re.compile(r"\bEXIT\b(?!\s*[（(])"), "EXIT（清仓离场）"),
+    (re.compile(r"\bNO_TRADE\b(?!\s*[（(])"), "NO_TRADE（拒单）"),
+    (re.compile(r"\bAPPROVED\b(?!\s*[（(])"), "APPROVED（核准执行）"),
+    # Wyckoff terms
+    (re.compile(r"\bComposite Man\b(?!\s*[（(])"), "Composite Man（综合人/主力）"),
+    (re.compile(r"\bTape Reading\b(?!\s*[（(])"), "Tape Reading（盘面解读）"),
+    (re.compile(r"\bSpring\b(?!\s*[（(])"), "Spring（弹簧/假跌破）"),
+    (re.compile(r"\bLPS\b(?!\s*[（(])"), "LPS（最后支撑点）"),
+    (re.compile(r"\bSOS\b(?!\s*[（(])"), "SOS（强势信号）"),
+    (re.compile(r"\bUTAD\b(?!\s*[（(])"), "UTAD（上冲诱多）"),
+    (re.compile(r"\bEVR\b(?!\s*[（(])"), "EVR（努力无结果）"),
+    (re.compile(r"\bJAC\b(?!\s*[（(])"), "JAC（跃过小溪）"),
+    (re.compile(r"\bBUEC\b(?!\s*[（(])"), "BUEC（回踩小溪边缘）"),
+    # Common trade terms
+    (re.compile(r"\bStop[- ]?Loss\b(?!\s*[（(])", re.IGNORECASE), "Stop-Loss（止损位）"),
+    (re.compile(r"\bEntry\b(?!\s*[（(])", re.IGNORECASE), "Entry（入场区）"),
+    (re.compile(r"\bTarget\b(?!\s*[（(])", re.IGNORECASE), "Target（目标位）"),
+]
+
+
+def _annotate_financial_terms(content: str) -> str:
+    """
+    将常见金融英文术语补充为“术语（中文解释）”，提升飞书可读性。
+    已带括号解释的术语会跳过，避免重复注释。
+    """
+    if not content:
+        return content
+    out = content
+    for pattern, replacement in _TERM_GLOSSARY_PATTERNS:
+        out = pattern.sub(replacement, out)
+    return out
 
 
 def _normalize_for_lark_md(content: str) -> str:
@@ -98,7 +152,8 @@ def send_feishu_notification(webhook_url: str, title: str, content: str) -> bool
     if not webhook_url or not webhook_url.strip():
         return False
 
-    normalized = _normalize_for_lark_md(content)
+    annotated = _annotate_financial_terms(content)
+    normalized = _normalize_for_lark_md(annotated)
     max_len = int(os.getenv("FEISHU_LARK_MAX_LEN", "2800"))
     chunks = _split_lark_md(normalized, max_len=max_len)
 

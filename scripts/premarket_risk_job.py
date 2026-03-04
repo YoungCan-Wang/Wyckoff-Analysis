@@ -30,6 +30,42 @@ RISK_VIX_CRASH_PCT = float(os.getenv("PREMARKET_VIX_CRASH_PCT", "15.0"))
 RISK_VIX_OFF_PCT = float(os.getenv("PREMARKET_VIX_RISK_OFF_PCT", "8.0"))
 
 
+def _build_action_matrix(regime: str) -> list[str]:
+    """盘前动作开关（仅门控建议，不直接下单）"""
+    if regime == "BLACK_SWAN":
+        return [
+            "🔒 **盘前动作开关**（BLACK_SWAN）",
+            "- ✅ `EXIT`：允许（破位/止损优先执行）",
+            "- ✅ `TRIM`：允许（主动降风险）",
+            "- ⚠️ `HOLD`：允许（仅守防线，不主观乐观）",
+            "- ⛔ `LIGHT_ADD`：禁止",
+            "- ⛔ `PROBE`：禁止",
+            "- ⛔ `ATTACK`：禁止",
+            "- ⛔ `FULL_ATTACK`：禁止",
+        ]
+    if regime == "RISK_OFF":
+        return [
+            "🔒 **盘前动作开关**（RISK_OFF）",
+            "- ✅ `EXIT`：允许",
+            "- ✅ `TRIM`：允许",
+            "- ✅ `HOLD`：允许（防守为主）",
+            "- ⚠️ `LIGHT_ADD`：仅允许对**已有浮盈仓位**小幅加仓（总权益 <= 5%）",
+            "- ⛔ `PROBE`：默认禁止",
+            "- ⛔ `ATTACK`：禁止",
+            "- ⛔ `FULL_ATTACK`：禁止",
+        ]
+    return [
+        "🔓 **盘前动作开关**（NORMAL）",
+        "- ✅ `EXIT`：允许",
+        "- ✅ `TRIM`：允许",
+        "- ✅ `HOLD`：允许",
+        "- ⚠️ `LIGHT_ADD`：条件允许（仅确认强势且量价匹配）",
+        "- ⚠️ `PROBE`：条件允许（控制仓位）",
+        "- ⚠️ `ATTACK`：条件允许（需盘中二次确认）",
+        "- ⛔ `FULL_ATTACK`：默认禁止；仅在强一致 Risk-On 且盘中确认后考虑",
+    ]
+
+
 def _now() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -322,21 +358,28 @@ def main() -> int:
     _log(f"A50: {json.dumps(a50, ensure_ascii=False)}", logs_path)
     _log(f"VIX: {json.dumps(vix, ensure_ascii=False)}", logs_path)
     _log(f"风控结论: regime={regime}, reasons={reasons}", logs_path)
+    action_lines = _build_action_matrix(regime)
+    _log("盘前动作开关: " + " | ".join(action_lines[1:]), logs_path)
 
-    content = "\n".join(
+    content_parts = [
+        f"**当前北京时间**: {_now()}",
+        f"**结论**: `{regime}`",
+        f"**触发原因**: {'；'.join(reasons)}",
+        "",
+        f"**A50** ({a50.get('source')}): "
+        f"date={a50.get('date')}, close={a50.get('close')}, pct={a50.get('pct_chg')}",
+        f"**VIX** ({vix.get('source')}): "
+        f"date={vix.get('date')}, close={vix.get('close')}, pct={vix.get('pct_chg')}",
+        "",
+    ]
+    content_parts.extend(action_lines)
+    content_parts.extend(
         [
-            f"**当前北京时间**: {_now()}",
-            f"**结论**: `{regime}`",
-            f"**触发原因**: {'；'.join(reasons)}",
             "",
-            f"**A50** ({a50.get('source')}): "
-            f"date={a50.get('date')}, close={a50.get('close')}, pct={a50.get('pct_chg')}",
-            f"**VIX** ({vix.get('source')}): "
-            f"date={vix.get('date')}, close={vix.get('close')}, pct={vix.get('pct_chg')}",
-            "",
-            "说明：该任务仅做盘前风控判定，不执行选股和下单。",
+            "说明：该任务仅做盘前风控与动作门控建议，不执行选股和下单。",
         ]
     )
+    content = "\n".join(content_parts)
 
     if args.dry_run:
         _log("--dry-run: 不发送飞书", logs_path)
