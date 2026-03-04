@@ -167,7 +167,19 @@ def _semantic_negative_via_gemini(
 
     from integrations.llm_client import call_llm
 
-    content = "\n\n".join([s for s in snippets if str(s or "").strip()][:3]).strip()
+    normalized_hits = [str(h or "").strip().lower() for h in hits if str(h or "").strip()]
+    cleaned_snippets = [s for s in snippets if str(s or "").strip()]
+    relevant_snippets: list[str] = []
+    if normalized_hits:
+        for s in cleaned_snippets:
+            ss = str(s).lower()
+            if any(h in ss for h in normalized_hits):
+                relevant_snippets.append(s)
+    if not relevant_snippets:
+        # 兜底：至少给模型看少量上下文，不空判。
+        relevant_snippets = cleaned_snippets[:2]
+
+    content = "\n\n".join(relevant_snippets[:3]).strip()
     if not content:
         return (None, "semantic_disabled:empty_snippets")
     if len(content) > 3000:

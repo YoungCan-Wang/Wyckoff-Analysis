@@ -260,18 +260,18 @@ def _close_on_or_before(
 
 def _build_daily_ohlc_lookup(
     df: pd.DataFrame,
-) -> dict[date, tuple[float, float, float]]:
-    out: dict[date, tuple[float, float, float]] = {}
+) -> dict[date, tuple[float, float, float, float]]:
+    out: dict[date, tuple[float, float, float, float]] = {}
     if df is None or df.empty:
         return out
 
-    cols = [c for c in ["date", "high", "low", "close"] if c in df.columns]
+    cols = [c for c in ["date", "open", "high", "low", "close"] if c in df.columns]
     if "date" not in cols or "close" not in cols:
         return out
 
     work = df[cols].copy()
     work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.date
-    for c in ["high", "low", "close"]:
+    for c in ["open", "high", "low", "close"]:
         if c in work.columns:
             work[c] = pd.to_numeric(work[c], errors="coerce")
     work = work.dropna(subset=["date", "close"])
@@ -279,17 +279,22 @@ def _build_daily_ohlc_lookup(
     for row in work.itertuples(index=False):
         d = row.date
         close_v = float(row.close)
+        open_v = (
+            float(row.open)
+            if hasattr(row, "open") and pd.notna(row.open)
+            else close_v
+        )
         high_v = (
             float(row.high)
             if hasattr(row, "high") and pd.notna(row.high)
-            else close_v
+            else max(open_v, close_v)
         )
         low_v = (
             float(row.low)
             if hasattr(row, "low") and pd.notna(row.low)
-            else close_v
+            else min(open_v, close_v)
         )
-        out[d] = (high_v, low_v, close_v)
+        out[d] = (open_v, high_v, low_v, close_v)
     return out
 
 
@@ -410,7 +415,7 @@ def run_backtest(
     records: list[TradeRecord] = []
     signal_days = 0
     eval_days = 0
-    ohlc_lookup_cache: dict[str, dict[date, tuple[float, float, float]]] = {}
+    ohlc_lookup_cache: dict[str, dict[date, tuple[float, float, float, float]]] = {}
 
     max_idx = len(trade_dates) - hold_days
     for idx in range(max_idx):
@@ -505,7 +510,7 @@ def run_backtest(
                     candle = day_ohlc.get(mkt_day)
                     if candle is None:
                         continue
-                    high, low, _ = candle
+                    open_px, high, low, _ = candle
 
                     if sltp_priority == "stop_first":
                         checks = [("sl", sl_price), ("tp", tp_price)]
@@ -517,12 +522,14 @@ def run_backtest(
                         if px is None:
                             continue
                         if kind == "sl" and low <= px:
-                            exit_close = px
+                            # 若开盘已跳空跌破止损，只能按开盘附近成交；否则按止损价成交。
+                            exit_close = px if open_px >= px else open_px
                             exit_date = mkt_day
                             hit = True
                             break
                         if kind == "tp" and high >= px:
-                            exit_close = px
+                            # 若开盘已跳空高开越过止盈，按开盘附近成交；否则按止盈价成交。
+                            exit_close = px if open_px <= px else open_px
                             exit_date = mkt_day
                             hit = True
                             break

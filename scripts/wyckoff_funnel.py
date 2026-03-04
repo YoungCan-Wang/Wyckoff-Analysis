@@ -127,6 +127,9 @@ def _apply_funnel_cfg_overrides(cfg: FunnelConfig) -> None:
     示例：FUNNEL_CFG_MIN_MARKET_CAP_YI=20
     """
     for f in dataclass_fields(FunnelConfig):
+        if f.name == "enable_evr_trigger":
+            # EVR 仅由 regime 自动决策，不接受环境变量覆盖。
+            continue
         key = f"FUNNEL_CFG_{f.name.upper()}"
         raw = os.getenv(key)
         if raw is None:
@@ -269,6 +272,16 @@ def _append_spot_bar_if_needed(
     df_s = df.sort_values("date").reset_index(drop=True)
     last_close_series = pd.to_numeric(df_s.get("close"), errors="coerce").dropna()
     prev_close = float(last_close_series.iloc[-1]) if not last_close_series.empty else None
+    prev_volume = None
+    prev_amount = None
+    if "volume" in df_s.columns:
+        vol_s = pd.to_numeric(df_s.get("volume"), errors="coerce").dropna()
+        if not vol_s.empty:
+            prev_volume = float(vol_s.iloc[-1])
+    if "amount" in df_s.columns:
+        amt_s = pd.to_numeric(df_s.get("amount"), errors="coerce").dropna()
+        if not amt_s.empty:
+            prev_amount = float(amt_s.iloc[-1])
 
     for attempt in range(max(FUNNEL_SPOT_PATCH_RETRIES, 1)):
         snap = fetch_stock_spot_snapshot(symbol, force_refresh=attempt > 0)
@@ -289,8 +302,9 @@ def _append_spot_bar_if_needed(
             volume_f = float(snap.get("volume")) if snap.get("volume") is not None else 0.0
             amount_f = float(snap.get("amount")) if snap.get("amount") is not None else 0.0
         else:
-            volume_f = 0.0
-            amount_f = 0.0
+            # 单位不可信时仅补价格，量额沿用上一交易日，避免把量能信号污染为 0。
+            volume_f = float(prev_volume) if prev_volume is not None else float("nan")
+            amount_f = float(prev_amount) if prev_amount is not None else float("nan")
         pct_f = float(snap.get("pct_chg")) if snap and snap.get("pct_chg") is not None else None
         if pct_f is None and prev_close and prev_close > 0:
             pct_f = (close_f - prev_close) / prev_close * 100.0
@@ -544,6 +558,10 @@ def _analyze_benchmark_and_tune_cfg(
                 ),
             ]
 
+    # EVR 按市场水温自动开关（不受环境变量覆盖）。
+    # 冷市场（RISK_OFF/CRASH/BLACK_SWAN）开启 EVR 防派发；其余关闭以减少踏空。
+    cfg.enable_evr_trigger = regime in {"RISK_OFF", "CRASH", "BLACK_SWAN"}
+
     # 动态调参：风险越冷，过滤越严
     if regime == "BLACK_SWAN":
         cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 30000.0)
@@ -611,6 +629,7 @@ def _analyze_benchmark_and_tune_cfg(
                 "rs_min_short": cfg.rs_min_short,
                 "rps_fast_min": cfg.rps_fast_min,
                 "rps_slow_min": cfg.rps_slow_min,
+                "enable_evr_trigger": bool(cfg.enable_evr_trigger),
             },
             "breadth": {
                 "ratio_pct": breadth_ratio,
