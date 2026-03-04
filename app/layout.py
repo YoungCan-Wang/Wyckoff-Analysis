@@ -37,9 +37,9 @@ def init_session_state() -> None:
     if st.session_state.tushare_token is None:
         st.session_state.tushare_token = ""
 
-    _set_default("gemini_model", "gemini-2.0-flash")
+    _set_default("gemini_model", "gemini-2.5-flash-lite")
     if st.session_state.gemini_model is None:
-        st.session_state.gemini_model = "gemini-2.0-flash"
+        st.session_state.gemini_model = "gemini-2.5-flash-lite"
 
     _set_default("tg_bot_token", "")
     if st.session_state.tg_bot_token is None:

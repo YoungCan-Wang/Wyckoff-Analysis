@@ -26,7 +26,7 @@ from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 from core.wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
-GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
+GEMINI_MODEL_FALLBACK = "gemini-2.5-flash-lite"
 STEP3_MAX_AI_INPUT = 0
 STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
 STEP3_MAX_OUTPUT_TOKENS = 32768

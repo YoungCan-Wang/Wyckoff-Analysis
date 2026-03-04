@@ -81,7 +81,7 @@ def main() -> int:
 
     webhook = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
 
     logs_path = args.logs or os.path.join(
         os.getenv("LOGS_DIR", "logs"),

@@ -54,7 +54,7 @@ RAG_SEMANTIC_TIMEOUT = int(os.getenv("RAG_SEMANTIC_TIMEOUT", "25"))
 RAG_SEMANTIC_MODEL = (
     os.getenv("RAG_SEMANTIC_MODEL", "").strip()
     or os.getenv("GEMINI_MODEL", "").strip()
-    or "gemini-2.0-flash"
+    or "gemini-2.5-flash-lite"
 )
 _STAR_ST_PATTERN = re.compile(r"(?<![a-z0-9])(?:\*|＊)st\s*[\u4e00-\u9fff]", re.IGNORECASE)
 _ST_PATTERN = re.compile(r"(?<![a-z0-9\*＊])st\s*[\u4e00-\u9fff]", re.IGNORECASE)
