@@ -26,7 +26,7 @@ from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 from core.wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
-GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
+GEMINI_MODEL_FALLBACK = "gemini-2.5-flash-lite"
 STEP3_MAX_AI_INPUT = 0
 STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
 STEP3_MAX_OUTPUT_TOKENS = 32768
@@ -343,8 +343,13 @@ def _append_spot_bar_if_needed(
         low_raw = float(snap.get("low")) if snap and snap.get("low") is not None else close_f
         high_f = max(high_raw, open_f, close_f)
         low_f = min(low_raw, open_f, close_f)
-        volume_f = float(snap.get("volume")) if snap and snap.get("volume") is not None else 0.0
-        amount_f = float(snap.get("amount")) if snap and snap.get("amount") is not None else 0.0
+        turnover_ok = bool(float(snap.get("turnover_unit_ok", 0.0))) if snap else False
+        if turnover_ok:
+            volume_f = float(snap.get("volume")) if snap.get("volume") is not None else 0.0
+            amount_f = float(snap.get("amount")) if snap.get("amount") is not None else 0.0
+        else:
+            volume_f = 0.0
+            amount_f = 0.0
         pct_f = float(snap.get("pct_chg")) if snap and snap.get("pct_chg") is not None else None
         if pct_f is None and prev_close and prev_close > 0:
             pct_f = (close_f - prev_close) / prev_close * 100.0
@@ -723,7 +728,15 @@ def run(
                 vetoed_codes.append(code)
                 hit_text = "、".join(result.hits[:5]) if result.hits else "负面关键词"
                 ev_text = f" | 证据: {result.evidence[0]}" if result.evidence else ""
-                rag_veto_lines.append(f"- {code} {result.name}: 命中 {hit_text}{ev_text}")
+                semantic_text = ""
+                if result.semantic_checked:
+                    semantic_text = (
+                        f" | 语义判定: 极端负面={result.semantic_negative}"
+                        + (f"({result.semantic_reason})" if result.semantic_reason else "")
+                    )
+                rag_veto_lines.append(
+                    f"- {code} {result.name}: 命中 {hit_text}{semantic_text}{ev_text}"
+                )
         if vetoed_codes:
             before_n = len(selected_df)
             selected_df = selected_df[~selected_df["code"].astype(str).isin(set(vetoed_codes))].reset_index(drop=True)

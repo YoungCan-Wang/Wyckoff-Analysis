@@ -682,8 +682,14 @@ def _append_spot_bar_if_needed(
         low_raw = float(snap.get("low")) if snap and snap.get("low") is not None else close_f
         high_f = max(high_raw, open_f, close_f)
         low_f = min(low_raw, open_f, close_f)
-        volume_f = float(snap.get("volume")) if snap and snap.get("volume") is not None else 0.0
-        amount_f = float(snap.get("amount")) if snap and snap.get("amount") is not None else 0.0
+        turnover_ok = bool(float(snap.get("turnover_unit_ok", 0.0))) if snap else False
+        if turnover_ok:
+            volume_f = float(snap.get("volume")) if snap.get("volume") is not None else 0.0
+            amount_f = float(snap.get("amount")) if snap.get("amount") is not None else 0.0
+        else:
+            # 单位不确定时，宁可放弃量能，避免污染均量/ATR相关计算。
+            volume_f = 0.0
+            amount_f = 0.0
         pct_f = float(snap.get("pct_chg")) if snap and snap.get("pct_chg") is not None else None
         if pct_f is None and prev_close and prev_close > 0:
             pct_f = (close_f - prev_close) / prev_close * 100.0

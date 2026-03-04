@@ -36,6 +36,8 @@ DEFAULT_EXIT_MODE = "sltp"
 DEFAULT_STOP_LOSS_PCT = -9.0
 DEFAULT_TAKE_PROFIT_PCT = 0.0
 DEFAULT_USE_CURRENT_META = False
+DEFAULT_BUY_FRICTION_PCT = float(os.getenv("BACKTEST_BUY_FRICTION_PCT", "0.2"))
+DEFAULT_SELL_FRICTION_PCT = float(os.getenv("BACKTEST_SELL_FRICTION_PCT", "0.2"))
 
 
 @dataclass
@@ -306,6 +308,8 @@ def run_backtest(
     take_profit_pct: float = DEFAULT_TAKE_PROFIT_PCT,
     sltp_priority: str = "stop_first",
     use_current_meta: bool = DEFAULT_USE_CURRENT_META,
+    buy_friction_pct: float = DEFAULT_BUY_FRICTION_PCT,
+    sell_friction_pct: float = DEFAULT_SELL_FRICTION_PCT,
 ) -> tuple[pd.DataFrame, dict]:
     if end_dt <= start_dt:
         raise ValueError("end 必须晚于 start")
@@ -319,6 +323,10 @@ def run_backtest(
         raise ValueError("stop_loss_pct 必须 <= 0，0 表示不设止损")
     if take_profit_pct < 0:
         raise ValueError("take_profit_pct 必须 >= 0，0 表示不设止盈")
+    if buy_friction_pct < 0 or sell_friction_pct < 0:
+        raise ValueError("buy_friction_pct / sell_friction_pct 必须 >= 0")
+    if buy_friction_pct >= 100 or sell_friction_pct >= 100:
+        raise ValueError("buy_friction_pct / sell_friction_pct 必须 < 100")
 
     symbols, name_map = _build_universe(board=board, sample_size=sample_size)
     if not symbols:
@@ -531,7 +539,11 @@ def run_backtest(
 
             if exit_close is None or exit_date is None:
                 continue
-            ret_pct = (exit_close - entry_close) / entry_close * 100.0
+            entry_exec = entry_close * (1.0 + buy_friction_pct / 100.0)
+            exit_exec = exit_close * (1.0 - sell_friction_pct / 100.0)
+            if entry_exec <= 0:
+                continue
+            ret_pct = (exit_exec - entry_exec) / entry_exec * 100.0
             score, trigger_name = score_map[code]
             records.append(
                 TradeRecord(
@@ -571,6 +583,8 @@ def run_backtest(
         "take_profit_pct": take_profit_pct,
         "sltp_priority": sltp_priority,
         "use_current_meta": bool(use_current_meta),
+        "buy_friction_pct": float(buy_friction_pct),
+        "sell_friction_pct": float(sell_friction_pct),
     }
     if not trades_df.empty:
         ret = pd.to_numeric(trades_df["ret_pct"], errors="coerce").dropna()
@@ -659,7 +673,8 @@ def _build_summary_md(summary: dict) -> str:
         else "disabled_current_snapshot_filters (bias-reduced)"
     )
     notes = [
-        "- 该回测仅使用日线数据（qfq），不含盘口、滑点、涨跌停成交约束。",
+        "- 该回测仅使用日线数据（qfq），不含盘口逐笔成交与涨跌停成交约束。",
+        "- 已纳入双边交易摩擦成本（买入/卖出），用于近似滑点 + 佣金 + 税费影响。",
         "- ⚠️ 仍存在幸存者偏差：股票池来自当前在市样本，未包含历史退市股票。",
     ]
     if use_current_meta:
@@ -686,6 +701,8 @@ def _build_summary_md(summary: dict) -> str:
             f"- 止损线: {_fmt_metric(summary.get('stop_loss_pct'), 1)}%",
             f"- 止盈线: {_fmt_metric(summary.get('take_profit_pct'), 1)}%",
             f"- 日内触发优先级: {summary.get('sltp_priority')}",
+            f"- 买入摩擦成本: {_fmt_metric(summary.get('buy_friction_pct'), 3)}%",
+            f"- 卖出摩擦成本: {_fmt_metric(summary.get('sell_friction_pct'), 3)}%",
             f"- 元数据口径: {meta_mode}",
             f"- 成交样本: {summary.get('trades')}",
             "",
@@ -762,6 +779,18 @@ def main() -> int:
         action="store_true",
         help="使用当前截面市值/行业映射过滤（会引入 look-ahead bias，默认关闭）",
     )
+    parser.add_argument(
+        "--buy-friction-pct",
+        type=float,
+        default=DEFAULT_BUY_FRICTION_PCT,
+        help=f"买入端摩擦成本(%%): 滑点+手续费近似 (default: {DEFAULT_BUY_FRICTION_PCT})",
+    )
+    parser.add_argument(
+        "--sell-friction-pct",
+        type=float,
+        default=DEFAULT_SELL_FRICTION_PCT,
+        help=f"卖出端摩擦成本(%%): 滑点+手续费+税费近似 (default: {DEFAULT_SELL_FRICTION_PCT})",
+    )
     args = parser.parse_args()
 
     start_dt = _parse_date(args.start)
@@ -781,6 +810,8 @@ def main() -> int:
         take_profit_pct=args.take_profit,
         sltp_priority=args.sltp_priority,
         use_current_meta=args.use_current_meta,
+        buy_friction_pct=args.buy_friction_pct,
+        sell_friction_pct=args.sell_friction_pct,
     )
 
     out_dir = Path(args.output_dir).resolve()

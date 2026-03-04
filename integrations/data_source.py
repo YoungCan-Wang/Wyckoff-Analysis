@@ -38,6 +38,7 @@ _SPOT_SNAPSHOT_TIMEOUT_SECONDS = float(
 _SPOT_SNAPSHOT_TS = 0.0
 _SPOT_SNAPSHOT_MAP: dict[str, dict[str, float | None]] = {}
 _SPOT_SNAPSHOT_LOCK = threading.RLock()
+_SPOT_TURNOVER_MAX_REL_ERR = float(os.getenv("SPOT_TURNOVER_MAX_REL_ERR", "0.35"))
 _DATA_SOURCE_DEBUG = os.getenv("DATA_SOURCE_DEBUG", "").strip().lower() in {
     "1",
     "true",
@@ -181,6 +182,49 @@ def _normalize_spot_symbol(v: Any) -> str:
     return ""
 
 
+def _normalize_spot_turnover(
+    close_v: float | None,
+    volume_v: float | None,
+    amount_v: float | None,
+) -> tuple[float | None, float | None, bool]:
+    """
+    统一实时快照的量能单位到“股/元”。
+    不同数据源可能返回“股/手”与“元/千元/万元”混合口径。
+    用“隐含成交均价≈最新价”做最优匹配；若误差过大，返回不可用。
+    """
+    if close_v is None or volume_v is None or amount_v is None:
+        return (None, None, False)
+    close = float(close_v)
+    vol_raw = float(volume_v)
+    amt_raw = float(amount_v)
+    if close <= 0 or vol_raw <= 0 or amt_raw <= 0:
+        return (None, None, False)
+
+    # volume: 原始可能是 股 或 手；amount: 原始可能是 元 / 千元 / 万元
+    vol_factors = (1.0, 100.0)
+    amt_factors = (1.0, 1000.0, 10000.0)
+    best: tuple[float, float, float] | None = None  # (rel_err, vol_shares, amt_yuan)
+    for vf in vol_factors:
+        vol_shares = vol_raw * vf
+        if vol_shares <= 0:
+            continue
+        for af in amt_factors:
+            amt_yuan = amt_raw * af
+            if amt_yuan <= 0:
+                continue
+            implied_price = amt_yuan / vol_shares
+            rel_err = abs(implied_price - close) / max(close, 1e-9)
+            if best is None or rel_err < best[0]:
+                best = (rel_err, vol_shares, amt_yuan)
+    if best is None:
+        return (None, None, False)
+
+    rel_err, vol_shares, amt_yuan = best
+    if rel_err <= max(_SPOT_TURNOVER_MAX_REL_ERR, 0.0):
+        return (float(vol_shares), float(amt_yuan), True)
+    return (None, None, False)
+
+
 def _load_spot_snapshot_map(force_refresh: bool = False) -> dict[str, dict[str, float | None]]:
     global _SPOT_SNAPSHOT_TS, _SPOT_SNAPSHOT_MAP
     now_ts = time.time()
@@ -222,8 +266,13 @@ def _load_spot_snapshot_map(force_refresh: bool = False) -> dict[str, dict[str, 
                 open_v = _to_float_or_none(_pick_first(row, ("今开", "开盘")))
                 high_v = _to_float_or_none(_pick_first(row, ("最高",)))
                 low_v = _to_float_or_none(_pick_first(row, ("最低",)))
-                volume_v = _to_float_or_none(_pick_first(row, ("成交量", "总手", "总量")))
-                amount_v = _to_float_or_none(_pick_first(row, ("成交额", "金额")))
+                volume_raw = _to_float_or_none(_pick_first(row, ("成交量", "总手", "总量")))
+                amount_raw = _to_float_or_none(_pick_first(row, ("成交额", "金额")))
+                volume_v, amount_v, turnover_unit_ok = _normalize_spot_turnover(
+                    close_v=close_v,
+                    volume_v=volume_raw,
+                    amount_v=amount_raw,
+                )
                 pct_v = _to_float_or_none(_pick_first(row, ("涨跌幅", "涨跌幅%")))
 
                 spot_map[symbol] = {
@@ -234,6 +283,7 @@ def _load_spot_snapshot_map(force_refresh: bool = False) -> dict[str, dict[str, 
                     "volume": volume_v,
                     "amount": amount_v,
                     "pct_chg": pct_v,
+                    "turnover_unit_ok": 1.0 if turnover_unit_ok else 0.0,
                 }
             if not spot_map:
                 raise RuntimeError("spot snapshot parsed empty")

@@ -145,6 +145,7 @@ python -m scripts.backtest_runner \
 - 默认**关闭**当前截面市值/行业映射过滤（降低 look-ahead bias）。
 - 若你要复现旧口径，可显式加 `--use-current-meta`（会引入前视偏差，仅用于对比）。
 - 无论是否开启，仍存在幸存者偏差（股票池来自当前在市名单）。
+- 回测默认纳入双边摩擦成本：`--buy-friction-pct 0.2 --sell-friction-pct 0.2`（可按券商与滑点实况调整）。
 
 输出文件：
 - `summary_*.md`：收益统计 + 风险统计（最大回撤、VaR95、CVaR95、最长连亏）

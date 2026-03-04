@@ -12,7 +12,7 @@ def reset_user_settings_state() -> None:
     st.session_state.feishu_webhook = ""
     st.session_state.gemini_api_key = ""
     st.session_state.tushare_token = ""
-    st.session_state.gemini_model = "gemini-2.0-flash"
+    st.session_state.gemini_model = "gemini-2.5-flash-lite"
     st.session_state.tg_bot_token = ""
     st.session_state.tg_chat_id = ""
 
@@ -90,7 +90,7 @@ def load_user_settings(user_id: str):
             st.session_state.feishu_webhook = settings.get("feishu_webhook") or ""
             st.session_state.gemini_api_key = settings.get("gemini_api_key") or ""
             st.session_state.tushare_token = settings.get("tushare_token") or ""
-            st.session_state.gemini_model = settings.get("gemini_model") or "gemini-2.5-flash"
+            st.session_state.gemini_model = settings.get("gemini_model") or "gemini-2.5-flash-lite"
             st.session_state.tg_bot_token = settings.get("tg_bot_token") or ""
             st.session_state.tg_chat_id = settings.get("tg_chat_id") or ""
             return True

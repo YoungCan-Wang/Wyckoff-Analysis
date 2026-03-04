@@ -6,6 +6,7 @@ RAG 防雷：基于新闻检索做负面关键词 veto
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,6 +44,18 @@ RAG_TIMEOUT = int(os.getenv("RAG_TIMEOUT", "12"))
 RAG_MAX_WORKERS = int(os.getenv("RAG_MAX_WORKERS", "6"))
 RAG_NEWS_LOOKBACK_DAYS = int(os.getenv("RAG_NEWS_LOOKBACK_DAYS", "7"))
 RAG_MAX_RESULTS = int(os.getenv("RAG_MAX_RESULTS", "5"))
+RAG_SEMANTIC_VETO_ENABLED = os.getenv("RAG_SEMANTIC_VETO_ENABLED", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RAG_SEMANTIC_TIMEOUT = int(os.getenv("RAG_SEMANTIC_TIMEOUT", "25"))
+RAG_SEMANTIC_MODEL = (
+    os.getenv("RAG_SEMANTIC_MODEL", "").strip()
+    or os.getenv("GEMINI_MODEL", "").strip()
+    or "gemini-2.5-flash-lite"
+)
 _STAR_ST_PATTERN = re.compile(r"(?<![a-z0-9])(?:\*|＊)st\s*[\u4e00-\u9fff]", re.IGNORECASE)
 _ST_PATTERN = re.compile(r"(?<![a-z0-9\*＊])st\s*[\u4e00-\u9fff]", re.IGNORECASE)
 
@@ -54,6 +67,9 @@ class VetoResult:
     veto: bool
     hits: list[str]
     evidence: list[str]
+    semantic_checked: bool = False
+    semantic_negative: bool | None = None
+    semantic_reason: str | None = None
     error: str | None = None
 
 
@@ -100,6 +116,92 @@ def _extract_hits(text: str, keywords: list[str]) -> list[str]:
     if _ST_PATTERN.search(text):
         hits.append("st")
     return hits
+
+
+def _parse_semantic_judgement(raw: str) -> tuple[bool | None, str]:
+    text = str(raw or "").strip()
+    if not text:
+        return (None, "")
+    # 优先 JSON 解析
+    try:
+        obj = json.loads(text)
+        v = obj.get("is_extreme_negative")
+        reason = str(obj.get("reason", "")).strip()
+        if isinstance(v, bool):
+            return (v, reason)
+    except Exception:
+        pass
+
+    m = re.search(r'"is_extreme_negative"\s*:\s*(true|false)', text, flags=re.IGNORECASE)
+    if m:
+        v = m.group(1).lower() == "true"
+        rm = re.search(r'"reason"\s*:\s*"([^"]*)"', text, flags=re.IGNORECASE)
+        reason = rm.group(1).strip() if rm else ""
+        return (v, reason)
+
+    upper = text.upper()
+    if "TRUE" in upper and "FALSE" not in upper:
+        return (True, "")
+    if "FALSE" in upper and "TRUE" not in upper:
+        return (False, "")
+    return (None, "")
+
+
+def _semantic_negative_via_gemini(
+    code: str,
+    name: str,
+    hits: list[str],
+    snippets: list[str],
+) -> tuple[bool | None, str | None]:
+    """
+    关键词命中后的二次语义判定：
+    True  => 极端负面，维持 veto
+    False => 中性/澄清，不 veto
+    None  => 判定失败，调用方决定回退策略
+    """
+    if not RAG_SEMANTIC_VETO_ENABLED:
+        return (None, None)
+    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        return (None, "semantic_disabled:missing_gemini_api_key")
+
+    from integrations.llm_client import call_llm
+
+    content = "\n\n".join([s for s in snippets if str(s or "").strip()][:3]).strip()
+    if not content:
+        return (None, "semantic_disabled:empty_snippets")
+    if len(content) > 3000:
+        content = content[:3000]
+
+    system_prompt = (
+        "你是A股舆情风控判定器。任务是判断新闻是否构成“极端负面实锤风险”。\n"
+        "极端负面=监管立案属实、财务造假属实、退市风险、重大诉讼败诉、债务违约等会显著打击股价的事件。\n"
+        "若新闻为辟谣、澄清、误传、传闻未证实、或中性事件，则判定为 false。\n"
+        "只输出 JSON，不要输出额外文本。"
+    )
+    user_message = (
+        f"股票: {code} {name}\n"
+        f"关键词命中: {', '.join(hits[:8])}\n"
+        "新闻片段:\n"
+        f"{content}\n\n"
+        '输出格式: {"is_extreme_negative": true|false, "reason": "<20字内原因>"}'
+    )
+    try:
+        raw = call_llm(
+            provider="gemini",
+            model=RAG_SEMANTIC_MODEL,
+            api_key=api_key,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            timeout=max(RAG_SEMANTIC_TIMEOUT, 8),
+            max_output_tokens=256,
+        )
+        verdict, reason = _parse_semantic_judgement(raw)
+        if verdict is None:
+            return (None, f"semantic_parse_failed:{str(raw)[:120]}")
+        return (verdict, reason or None)
+    except Exception as e:
+        return (None, f"semantic_llm_err:{e}")
 
 
 def _tavily_search(query: str, max_results: int = RAG_MAX_RESULTS) -> list[dict[str, Any]]:
@@ -181,6 +283,7 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
 
     text_parts: list[str] = []
     evidence: list[str] = []
+    semantic_snippets: list[str] = []
     for item in results:
         title = str(item.get("title", "")).strip()
         content = str(item.get("content", "")).strip()
@@ -190,13 +293,46 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
         merged = f"{title}\n{content}".strip()
         if merged:
             text_parts.append(merged.lower())
+            semantic_snippets.append(merged)
         if title:
             evidence.append(f"{title} | {url}" if url else title)
     combined = "\n".join(text_parts)
 
     hits = _extract_hits(combined, keywords)
-    veto = len(hits) > 0
-    return VetoResult(code=code, name=name, veto=veto, hits=hits, evidence=evidence[:3], error=None)
+    keyword_veto = len(hits) > 0
+    if not keyword_veto:
+        return VetoResult(code=code, name=name, veto=False, hits=[], evidence=evidence[:3], error=None)
+
+    semantic_checked = False
+    semantic_negative: bool | None = None
+    semantic_reason: str | None = None
+    semantic_err: str | None = None
+    verdict, reason_or_err = _semantic_negative_via_gemini(
+        code=code,
+        name=name,
+        hits=hits,
+        snippets=semantic_snippets,
+    )
+    if verdict is not None:
+        semantic_checked = True
+        semantic_negative = bool(verdict)
+        semantic_reason = reason_or_err
+        veto = bool(verdict)
+    else:
+        veto = True
+        semantic_err = reason_or_err
+
+    return VetoResult(
+        code=code,
+        name=name,
+        veto=veto,
+        hits=hits,
+        evidence=evidence[:3],
+        semantic_checked=semantic_checked,
+        semantic_negative=semantic_negative,
+        semantic_reason=semantic_reason,
+        error=semantic_err,
+    )
 
 
 def run_negative_news_veto(candidates: list[dict[str, str]]) -> dict[str, VetoResult]:
