@@ -91,24 +91,25 @@ def _call_gemini(
     timeout: int,
     max_output_tokens: Optional[int],
 ) -> str:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 
-    genai.configure(api_key=api_key)
-    generative_model = genai.GenerativeModel(
-        model_name=model,
-        system_instruction=system_prompt,
-    )
+    # 包含 timeout 的 HTTP 参数传入 Client
+    client = genai.Client(api_key=api_key, http_options={"timeout": timeout * 1000})
+    
     resolved_max_tokens = (
         int(max_output_tokens)
         if max_output_tokens is not None
         else GEMINI_MAX_OUTPUT_TOKENS_DEFAULT
     )
-    generation_config = {
-        "temperature": 0.4,
-        "top_p": 0.95,
-        "top_k": 40,
-        "max_output_tokens": max(1024, resolved_max_tokens),
-    }
+    
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        temperature=0.4,
+        top_p=0.95,
+        top_k=40,
+        max_output_tokens=max(1024, resolved_max_tokens),
+    )
 
     contents = [user_message]
     if images:
@@ -117,10 +118,10 @@ def _call_gemini(
     last_err: Exception | None = None
     for attempt in range(1, GEMINI_MAX_RETRIES + 1):
         try:
-            response = generative_model.generate_content(
-                contents,
-                generation_config=generation_config,
-                request_options={"timeout": timeout},
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
             )
             if response is None:
                 raise RuntimeError("Gemini 返回空响应")
@@ -142,8 +143,12 @@ def _call_gemini(
                 raise RuntimeError("Gemini 返回内容为空")
 
             finish_reason = ""
-            if getattr(response, "candidates", None):
-                finish_reason = str(getattr(response.candidates[0], "finish_reason", "") or "")
+            if getattr(response, "candidates", None) and len(response.candidates) > 0:
+                fr = getattr(response.candidates[0], "finish_reason", "")
+                if fr is not None:
+                    # 枚举处理
+                    finish_reason = getattr(fr, "name", str(fr))
+                    
             usage = getattr(response, "usage_metadata", None)
             prompt_tokens = getattr(usage, "prompt_token_count", None) if usage else None
             completion_tokens = getattr(usage, "candidates_token_count", None) if usage else None
@@ -156,7 +161,7 @@ def _call_gemini(
                     prompt_tokens,
                     completion_tokens,
                     total_tokens,
-                    generation_config["max_output_tokens"],
+                    config.max_output_tokens,
                 )
             )
             if finish_reason_norm in _GEMINI_TRUNCATION_REASONS:

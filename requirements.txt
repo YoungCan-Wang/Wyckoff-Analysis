@@ -5,7 +5,7 @@ tushare>=1.2.89
 pandas>=2.3.3
 streamlit>=1.52.2
 streamlit-javascript>=0.1.5
-google-generativeai>=0.8.3
+google-genai>=0.6.0
 requests>=2.31.0
 certifi
 tavily-python>=0.3.0

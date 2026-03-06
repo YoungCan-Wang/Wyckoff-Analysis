@@ -97,7 +97,7 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 
 | 名称 | 必填 | 说明 |
 |------|------|------|
-| `FEISHU_WEBHOOK_URL` | 是 | 接收选股结果与研报 |
+| `FEISHU_WEBHOOK_URL` | 是 | 接收选股结果与研报 ([配置教程](https://open.feishu.cn/community/articles/7271149634339422210)) |
 | `GEMINI_API_KEY` | 是 | AI 研报 |
 | `TUSHARE_TOKEN` | 是 | 行情与市值数据 |
 | `GEMINI_MODEL` | 否 | 未配则用默认模型 |
