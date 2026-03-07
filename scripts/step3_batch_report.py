@@ -165,8 +165,14 @@ def _send_input_preview(
 
 def _has_required_sections(report: str) -> bool:
     text = (report or "").replace(" ", "")
-    has_watch = ("继续观察" in text) or ("观察池" in text)
-    has_trade = ("立刻建仓" in text) or ("可操作池" in text) or ("操作池" in text)
+    has_watch = any(
+        token in text
+        for token in ("继续观察", "观察池", "逻辑破产", "储备营地")
+    )
+    has_trade = any(
+        token in text
+        for token in ("立刻建仓", "可操作池", "操作池", "处于起跳板")
+    )
     return has_watch and has_trade
 
 
@@ -177,15 +183,16 @@ def _repair_report_structure(
     selected_codes: list[str],
 ) -> str:
     """
-    当模型未给出“继续观察/立刻建仓”双层结构时，做一次结构修复重写。
+    当模型未给出可识别的分层结构时，做一次结构修复重写。
     """
     if not report.strip():
         return report
 
     repair_system = (
         "你是格式修复器。请将输入研报重排为标准 Markdown，"
-        "必须包含两个章节：1) 继续观察（数量不限，含观察条件）"
-        " 2) 立刻建仓（数量不限，按优先级排序）。"
+        "优先修复为三阵营结构：1) 逻辑破产 2) 储备营地 3) 处于起跳板。"
+        "如果输入原本是旧口径的继续观察/立刻建仓，也要将其重排到上述三阵营中。"
+        "明显假突破、派发、放量失守归入逻辑破产；其余未到起跳点的非操作标的归入储备营地。"
         "不可新增未在输入中出现的股票代码。"
     )
     repair_user = (
@@ -212,17 +219,20 @@ def _repair_report_structure(
 
 def _build_fallback_sections(selected_df: pd.DataFrame) -> str:
     """
-    最后兜底：确保飞书一定出现“继续观察/立刻建仓”结果块。
+    最后兜底：确保飞书一定出现标准三阵营结果块。
     """
     if selected_df is None or selected_df.empty:
         return (
-            "## 👀 继续观察（系统兜底）\n"
-            "- 本轮无可用候选。\n\n"
-            "## 🚀 立刻建仓（系统兜底）\n"
-            "- 本轮无可建仓标的。"
+            "## 💀 逻辑破产（系统兜底）\n"
+            "- 无（本轮无明确失效标的可判定）。\n\n"
+            "## ⏳ 储备营地（系统兜底）\n"
+            "- 无（本轮无可用候选）。\n\n"
+            "## 🏹 处于起跳板（系统兜底）\n"
+            "- 无（本轮无可操作标的）。"
         )
 
-    lines = ["## 👀 继续观察（系统兜底）"]
+    lines = ["## 💀 逻辑破产（系统兜底）", "- 无（系统未判定明确逻辑破产标的）。", ""]
+    lines.append("## ⏳ 储备营地（系统兜底）")
     for _, row in selected_df.iterrows():
         code = str(row.get("code", ""))
         name = str(row.get("name", code))
@@ -230,12 +240,12 @@ def _build_fallback_sections(selected_df: pd.DataFrame) -> str:
         score = row.get("wyckoff_score")
         score_text = f"{float(score):.3f}" if pd.notna(score) else "-"
         lines.append(
-            f"- `{code} {name}` | 标签: {tag or '-'} | 量化分: {score_text} | 观察条件: 回踩结构战区时需缩量确认。"
+            f"- `{code} {name}` | 标签: {tag or '-'} | 量化分: {score_text} | 仍需条件: 回踩结构战区时需缩量确认。"
         )
 
     lines.append("")
-    lines.append("## 🚀 立刻建仓（系统兜底）")
-    lines.append("- 无（模型未输出可建仓标的，保持观察）")
+    lines.append("## 🏹 处于起跳板（系统兜底）")
+    lines.append("- 无（模型未输出可操作标的，保持耐心观察）")
     return "\n".join(lines)
 
 
@@ -256,25 +266,46 @@ def _normalize_structured_pool(
     allowed_codes: set[str],
     code_name: dict[str, str],
 ) -> dict[str, list[dict[str, str]]]:
-    watch_raw = (
-        payload.get("continue_watch")
-        or payload.get("observe_pool")
-        or payload.get("watch_pool")
-        or payload.get("observation_pool")
-        or payload.get("watchlist")
-        or payload.get("继续观察")
-        or payload.get("观察池")
-        or []
+    def _collect_items(keys: tuple[str, ...]) -> list[dict]:
+        out: list[dict] = []
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                out.extend(v for v in value if isinstance(v, dict))
+            elif isinstance(value, dict):
+                out.append(value)
+        return out
+
+    watch_raw = _collect_items(
+        (
+            "continue_watch",
+            "observe_pool",
+            "watch_pool",
+            "observation_pool",
+            "watchlist",
+            "继续观察",
+            "观察池",
+            "逻辑破产",
+            "储备营地",
+            "invalidated",
+            "building_cause",
+            "building_camp",
+        )
     )
-    ops_raw = (
-        payload.get("build_now")
-        or payload.get("immediate_build")
-        or payload.get("operation_pool")
-        or payload.get("tradable_pool")
-        or payload.get("立刻建仓")
-        or payload.get("操作池")
-        or payload.get("可操作池")
-        or []
+    ops_raw = _collect_items(
+        (
+            "build_now",
+            "immediate_build",
+            "operation_pool",
+            "tradable_pool",
+            "actionable_pool",
+            "立刻建仓",
+            "操作池",
+            "可操作池",
+            "处于起跳板",
+            "on_the_springboard",
+            "springboard_pool",
+        )
     )
 
     watch_items: list[dict[str, str]] = []
@@ -629,7 +660,7 @@ def _build_track_user_message(
         scope = (
             "[本轮分析范围]\n"
             "本轮仅分析 Accum轨（左侧潜伏 / Spring / LPS / Accum_C 组）。\n"
-            "请重点审查供应是否真正枯竭；若下跌放量或支撑反复失守，应归入继续观察。若出现长下影、高收位、放量拉回，不得机械判死刑，必须分辨是真Spring还是失败反抽。"
+            "请重点审查供应是否真正枯竭；若下跌放量或支撑反复失守，应归入逻辑破产或储备营地。若出现长下影、高收位、放量拉回，不得机械判死刑，必须分辨是真Spring还是失败反抽。"
         )
 
     message = (
@@ -643,8 +674,9 @@ def _build_track_user_message(
             else ""
         )
         + "以下是本轮候选名单。\n"
-        + "请仅做二分类：1) 继续观察 2) 立刻建仓。\n"
-        + "输出必须包含这两个部分，且只能使用输入列表中的股票代码，不得遗漏或新增。\n\n"
+        + "请做三阵营分流：1) 逻辑破产 2) 储备营地 3) 处于起跳板。\n"
+        + "其中前两类属于非操作区，第三类才是可执行区。\n"
+        + "输出必须包含这三个部分，且只能使用输入列表中的股票代码，不得遗漏或新增。\n\n"
         + "交易执行硬约束：\n"
         + "1) 禁止单点价格指令，必须给“结构战区(Action Zone) + 盘面确认条件(Tape Condition)”。\n"
         + "2) 战区需围绕每只股票的“价格锚点（最新收盘价）”描述，但不得刻舟求剑。\n"
@@ -702,7 +734,7 @@ def _call_track_report(
                 return (False, "", "")
 
     if not _has_required_sections(report):
-        print(f"[step3] {track} 轨首版研报缺少继续观察/立刻建仓，执行一次结构修复")
+        print(f"[step3] {track} 轨首版研报缺少可识别分层章节，执行一次结构修复")
         report = _repair_report_structure(
             report=report,
             model=used_model or model,
@@ -1068,11 +1100,13 @@ def run(
     selected_codes = [str(x) for x in selected_df["code"].tolist()]
     if not selected_codes:
         report = (
-            "# 🏛️ Alpha 投委会机密电报：今日最终决断\n\n"
-            "## 👀 继续观察\n"
+            "# 🏛️ Alpha 投委会机密电报：威科夫盘面审判\n\n"
+            "## 💀 逻辑破产\n"
+            "- 无（本轮无明确失效标的可判定）\n\n"
+            "## ⏳ 储备营地\n"
             "- 无（候选均被 RAG 防雷 veto 或数据不足）\n\n"
-            "## 🚀 立刻建仓\n"
-            "- 无（风险过高，今日观望）"
+            "## 🏹 处于起跳板\n"
+            "- 无（风险过高，今日保持观望）"
         )
         if rag_veto_lines:
             report += "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
@@ -1248,7 +1282,7 @@ def run(
                 ops_codes.append(code)
     ops_lines = [f"- {c} {code_name.get(c, c)}" for c in ops_codes]
     ops_preview = (
-        "## 🚀 立刻建仓速览（前置）\n"
+        "## 🏹 处于起跳板速览（前置）\n"
         + ("\n".join(ops_lines) if ops_lines else "- 无")
         + "\n\n---\n"
     )
