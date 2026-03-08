@@ -792,7 +792,6 @@ def generate_stock_payload(
     sector_state: str | None = None,
     sector_state_code: str | None = None,
     sector_note: str | None = None,
-    sector_guidance: str | None = None,
     track: str | None = None,
     stage: str | None = None,
     funnel_score: float | None = None,
@@ -803,7 +802,7 @@ def generate_stock_payload(
     """
     第五步：将 500 天 OHLCV 浓缩为发给 AI 的高密度文本。
     1. 大背景（MA50 / MA200 / 乖离率 / 市值 / 成交额）
-    1.5 板块状态（轮动水温 + 动作限制）
+    1.5 板块状态（轮动水温 + 证据）
     2. 近 15 日量价切片（放量比 + 涨跌幅 + 振幅 + 收盘位置）
     3. 近 60 日异动高光时刻
     """
@@ -864,9 +863,16 @@ def generate_stock_payload(
     if raw_tag:
         # Convert internal trigger tags to neutral fact-based labels
         facts = []
-        for t in ["sos", "spring", "lps", "evr"]:
-            if t.lower() in raw_tag.lower():
-                facts.append(t.upper())
+        lowered = raw_tag.lower()
+        neutral_map = [
+            ("sos", "向上突破异动"),
+            ("spring", "假跌破回收异动"),
+            ("lps", "缩量回踩企稳异动"),
+            ("evr", "放量滞涨背离异动"),
+        ]
+        for token, label in neutral_map:
+            if token in lowered:
+                facts.append(label)
         if facts:
             tag_text = f" | 量化初筛假设：{'/'.join(facts)}"
         else:
@@ -874,7 +880,7 @@ def generate_stock_payload(
             
     header = (
         f"• {stock_code} {stock_name}{policy_prefix}{tag_text}\n"
-        f"  [价格锚点] 最新实际收盘价={close_val:.2f}（执行建议需围绕该锚点给出结构战区，不得给单点预测价）。\n"
+        f"  [价格锚点] 最新收盘价:{close_val:.2f}\n"
         f"{background}\n"
     )
     if stage:
@@ -889,8 +895,6 @@ def generate_stock_payload(
         header += f"  [板块状态] {state_text}\n"
     if sector_note:
         header += f"  [板块证据] {str(sector_note).strip()}\n"
-    if sector_guidance:
-        header += f"  [轮动指引] {str(sector_guidance).strip()}\n"
 
     supply_summary = _build_supply_demand_summary(df)
 
@@ -991,9 +995,6 @@ def run(
             or SECTOR_STATE_LABELS.get("NEUTRAL_MIXED", "中性混沌")
         ).strip()
         sector_note = str(item.get("sector_note") or rotation_info.get("note", "") or "").strip()
-        sector_guidance = str(
-            item.get("sector_guidance") or rotation_info.get("guidance", "") or ""
-        ).strip()
         try:
             df_raw = _fetch_hist(code, window, "qfq")
             df = normalize_hist_from_fetch(df_raw)
@@ -1064,7 +1065,6 @@ def run(
                     "sector_state": sector_state,
                     "sector_state_code": sector_state_code,
                     "sector_note": sector_note,
-                    "sector_guidance": sector_guidance,
                     "market_cap_yi": pd.to_numeric(market_cap_map.get(code), errors="coerce"),
                     "avg_amount_20_yi": avg_amount_20_yi,
                     "bias_200": bias_200,
@@ -1219,7 +1219,6 @@ def run(
             sector_state=str(row.get("sector_state", "")).strip() or None,
             sector_state_code=str(row.get("sector_state_code", "")).strip() or None,
             sector_note=str(row.get("sector_note", "")).strip() or None,
-            sector_guidance=str(row.get("sector_guidance", "")).strip() or None,
         )
         payloads_by_track.setdefault(track_key, []).append(payload)
         df_by_track[track_key] = pd.concat(
