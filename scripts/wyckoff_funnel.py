@@ -46,6 +46,7 @@ from core.wyckoff_engine import (
     layer5_exit_signals,
     FunnelResult,
     allocate_ai_candidates,
+    resolve_ai_candidate_policy,
 )
 from core.sector_rotation import (
     SECTOR_STATE_LABELS,
@@ -98,6 +99,18 @@ CRASH_MAIN_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_MAIN_DAY_DROP_PCT", "-1.
 CRASH_SMALL_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_SMALL_DAY_DROP_PCT", "-2.5"))
 CRASH_BREADTH_RATIO_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_RATIO_PCT", "15.0"))
 CRASH_BREADTH_DELTA_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_DELTA_PCT", "-20.0"))
+PANIC_REPAIR_MIN_AVG_AMOUNT_WAN = float(
+    os.getenv("FUNNEL_PANIC_REPAIR_MIN_AVG_AMOUNT_WAN", "7000.0")
+)
+RISK_OFF_MIN_AVG_AMOUNT_WAN = float(
+    os.getenv("FUNNEL_RISK_OFF_MIN_AVG_AMOUNT_WAN", "8000.0")
+)
+RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN = float(
+    os.getenv("FUNNEL_RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN", "10000.0")
+)
+CRASH_MIN_AVG_AMOUNT_WAN = float(
+    os.getenv("FUNNEL_CRASH_MIN_AVG_AMOUNT_WAN", "12000.0")
+)
 PANIC_REPAIR_ENABLE = os.getenv("FUNNEL_PANIC_REPAIR_ENABLE", "1").strip().lower() in {
     "1",
     "true",
@@ -636,25 +649,28 @@ def _analyze_benchmark_and_tune_cfg(
 
     # 动态调参：风险越冷，过滤越严
     if regime == "CRASH":
-        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 18000.0)
+        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, CRASH_MIN_AVG_AMOUNT_WAN)
         cfg.rs_min_long = max(cfg.rs_min_long, 4.0)
         cfg.rs_min_short = max(cfg.rs_min_short, 1.0)
         cfg.rps_fast_min = max(cfg.rps_fast_min, 80.0)  # 改为 80.0（从 90.0）
         cfg.rps_slow_min = max(cfg.rps_slow_min, 75.0)  # 改为 75.0（从 85.0）
     elif regime == "PANIC_REPAIR":
-        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 8000.0)
+        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, PANIC_REPAIR_MIN_AVG_AMOUNT_WAN)
         cfg.rs_min_long = max(cfg.rs_min_long, 1.0)
         cfg.rs_min_short = max(cfg.rs_min_short, 0.2)
         cfg.rps_fast_min = max(cfg.rps_fast_min, 75.0)
         cfg.rps_slow_min = max(cfg.rps_slow_min, 65.0)
     elif regime == "RISK_OFF":
-        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 10000.0)
+        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, RISK_OFF_MIN_AVG_AMOUNT_WAN)
         cfg.rs_min_long = max(cfg.rs_min_long, 2.0)
         cfg.rs_min_short = max(cfg.rs_min_short, 0.5)
         cfg.rps_fast_min = max(cfg.rps_fast_min, 80.0)
         cfg.rps_slow_min = max(cfg.rps_slow_min, 75.0)
         if recent3_cum is not None and recent3_cum <= -4.0:
-            cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 15000.0)
+            cfg.min_avg_amount_wan = max(
+                cfg.min_avg_amount_wan,
+                RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN,
+            )
             cfg.rs_min_long = max(cfg.rs_min_long, 4.0)
             cfg.rs_min_short = max(cfg.rs_min_short, 1.0)
     elif regime == "RISK_ON":
@@ -1362,6 +1378,7 @@ def run(
         l3_ranked_symbols,
         regime,
     )
+    ai_policy = resolve_ai_candidate_policy(regime)
     alloc_elapsed = time.monotonic() - alloc_started
     print(
         f"[funnel] AI候选分配完成: trend={len(trend_selected)}, accum={len(accum_selected)}, "
@@ -1432,20 +1449,21 @@ def run(
         if str((exit_signals.get(code, {}) or {}).get("signal", "")).strip() in blocked_exit_signals_set
     ]
 
-    total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "20")), 0)
-    if regime == "RISK_ON":
-        trend_quota = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "15")), 0)
-        accum_quota = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "8")), 0)
-    elif regime == "RISK_OFF":
-        trend_quota = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "5")), 0)
-        accum_quota = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "15")), 0)
-    else:
-        trend_quota = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "10")), 0)
-        accum_quota = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "10")), 0)
+    total_cap = int(ai_policy["total_cap"])
+    trend_quota = int(ai_policy["trend_quota"])
+    accum_quota = int(ai_policy["accum_quota"])
+    requested_trend_quota = int(ai_policy["requested_trend_quota"])
+    requested_accum_quota = int(ai_policy["requested_accum_quota"])
+    quota_family = str(ai_policy["quota_family"])
+    max_trend_l3_fill = int(ai_policy["max_trend_l3_fill"])
+    max_accum_l3_fill = int(ai_policy["max_accum_l3_fill"])
 
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
-        f"配额配置=[{regime}: Trend={trend_quota}, Accum={accum_quota}, 总上限={total_cap}], "
+        f"配额配置=[{regime}->{quota_family}: requested Trend={requested_trend_quota}, "
+        f"requested Accum={requested_accum_quota}, effective Trend={trend_quota}, "
+        f"effective Accum={accum_quota}, 总上限={total_cap}, "
+        f"l3_fill_limit Trend={max_trend_l3_fill}, Accum={max_accum_l3_fill}], "
         f"最终选入: Trend={len(trend_selected)}, Accum={len(accum_selected)}, 总计={len(selected_for_ai)}"
     )
 
@@ -1529,11 +1547,12 @@ def run(
         f"- **硬剔除**：{len(blocked_exit_codes)} 只（已触发结构止损或派发警告，不再送入 AI）",
         (
             f"- **最终送 AI**：{len(selected_for_ai)} 只"
-            f"（{regime} 配额：Trend={trend_quota} / Accum={accum_quota} / 总上限={total_cap}）"
+            f"（{regime}->{quota_family}：Trend={trend_quota} / Accum={accum_quota} / 总上限={total_cap}）"
         ),
         f"- **AI 入选构成**：L4命中 {hit_selected_count} | L3补充 {l3_only_count}",
         f"- **Trend 轨**：{len(trend_selected)} 只（L4命中 {trend_hit_selected} | L3补充 {trend_l3_only}）",
         f"- **Accum 轨**：{len(accum_selected)} 只（L4命中 {accum_hit_selected} | L3补充 {accum_l3_only}）",
+        f"- **L3 补位上限**：Trend {max_trend_l3_fill} | Accum {max_accum_l3_fill}",
         f"- **高优先级候选**：{top_priority_count} 只",
         f"- **AI 输入通道分布**：{ai_channel_summary}",
     ]
@@ -1584,9 +1603,10 @@ def run(
             elif exit_sig.get("signal") == "distribution_warning":
                 exit_str = "| ⚠Distribution警告"
 
-            score = float(l3_score_map.get(code, 0.0))
+            priority_score = float(score_map.get(code, 0.0))
+            l3_score = float(l3_score_map.get(code, 0.0))
             lines_obj.append(
-                f"- {code} {name} {stage_str} | {reasons} {exit_str} | score={score:.2f}"
+                f"- {code} {name} {stage_str} | {reasons} {exit_str} | priority={priority_score:.2f}, l3={l3_score:.2f}"
             )
 
     _append_ai_section(
@@ -1618,6 +1638,15 @@ def run(
     title = f"🔬 Wyckoff Funnel {date.today().strftime('%Y-%m-%d')}"
     ok = True if not notify else send_feishu_notification(webhook_url, title, content)
 
+    def _selection_source(code: str) -> str:
+        if code in hit_set:
+            return "l4_hit"
+        if code in markup_symbols:
+            return "markup"
+        if _stage_name(code) == "Accum_C":
+            return "accum_c"
+        return "l3_fill"
+
     symbols_for_report = [
         {
             "code": c,
@@ -1633,6 +1662,10 @@ def run(
             ),
             "stage": _stage_name(c),
             "score": float(l3_score_map.get(c, 0.0)),
+            "priority_score": float(score_map.get(c, 0.0)),
+            "priority_rank": idx + 1,
+            "selection_source": _selection_source(c),
+            "selection_is_fill": _selection_source(c) == "l3_fill",
             "industry": str(sector_map.get(c, "") or "未知行业"),
             "sector_state_code": str(
                 (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get("state", "")
@@ -1653,7 +1686,7 @@ def run(
             "exit_price": (exit_signals.get(c, {}) or {}).get("price"),
             "exit_reason": str((exit_signals.get(c, {}) or {}).get("reason", "")).strip(),
         }
-        for c in selected_for_ai
+        for idx, c in enumerate(selected_for_ai)
     ]
     if return_details:
         details = {
@@ -1665,6 +1698,7 @@ def run(
             "selected_for_ai": selected_for_ai,
             "trend_selected": trend_selected,
             "accum_selected": accum_selected,
+            "priority_score_map": score_map,
             "name_map": name_map,
             "sector_map": sector_map,
         }
