@@ -130,6 +130,10 @@ FUNNEL_EXPORT_FULL_FETCH = os.getenv("FUNNEL_EXPORT_FULL_FETCH", "0").strip().lo
     "on",
 }
 FUNNEL_EXPORT_DIR = os.getenv("FUNNEL_EXPORT_DIR", "data/funnel_snapshots").strip() or "data/funnel_snapshots"
+FUNNEL_AI_SELECTION_MODE = (
+    os.getenv("FUNNEL_AI_SELECTION_MODE", "legacy_full_hits").strip().lower()
+)
+FUNNEL_CARD_STYLE = os.getenv("FUNNEL_CARD_STYLE", "legacy_compact").strip().lower()
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -1349,6 +1353,18 @@ def run(
         key=lambda c: -code_to_best_score.get(c, 0),
     )
     unique_hit_count = len(sorted_codes)
+    use_legacy_selection = FUNNEL_AI_SELECTION_MODE in {
+        "legacy_full_hits",
+        "legacy_hits",
+        "all_hits",
+        "classic",
+    }
+    use_legacy_card = FUNNEL_CARD_STYLE in {
+        "legacy",
+        "legacy_compact",
+        "classic",
+        "v1",
+    }
     l3_ranked_symbols = [
         str(c).strip()
         for c in (metrics.get("layer3_symbols", []) or [])
@@ -1359,34 +1375,161 @@ def run(
     markup_symbols = metrics.get("markup_symbols", []) or []
     accum_stage_map = metrics.get("accum_stage_map", {}) or {}
     exit_signals = metrics.get("exit_signals", {}) or {}
+    sector_rotation = metrics.get("sector_rotation", {}) or {}
+    sector_rotation_map = sector_rotation.get("state_map", {}) or {}
     # 策略：大盘水温驱动的双轨制（Top-Down 择时顺势策略）
     regime = benchmark_context.get("regime", "NEUTRAL")
-    mock_result = FunnelResult(
-        layer1_symbols=[],
-        layer2_symbols=[],
-        layer3_symbols=metrics.get("layer3_symbols", []) or [],
-        top_sectors=[],
-        triggers=triggers,
-        stage_map=accum_stage_map,
-        markup_symbols=markup_symbols,
-        exit_signals=exit_signals,
-        channel_map=l2_channel_map,
-    )
-    alloc_started = time.monotonic()
-    trend_selected, accum_selected, score_map = allocate_ai_candidates(
-        mock_result,
-        l3_ranked_symbols,
-        regime,
-        sector_map=sector_map,
-        max_per_sector=2,
-    )
-    ai_policy = resolve_ai_candidate_policy(regime)
-    alloc_elapsed = time.monotonic() - alloc_started
-    print(
-        f"[funnel] AI候选分配完成: trend={len(trend_selected)}, accum={len(accum_selected)}, "
-        f"elapsed={alloc_elapsed:.3f}s"
-    )
-    selected_for_ai = trend_selected + accum_selected
+    if use_legacy_selection:
+        trend_selected = []
+        accum_selected = []
+        score_map = {c: float(code_to_best_score.get(c, 0.0)) for c in sorted_codes}
+        ai_policy = {
+            "total_cap": len(sorted_codes),
+            "trend_quota": 0,
+            "accum_quota": 0,
+            "requested_trend_quota": 0,
+            "requested_accum_quota": 0,
+            "quota_family": "LEGACY_FULL_HITS",
+            "max_trend_l3_fill": 0,
+            "max_accum_l3_fill": 0,
+        }
+        selected_for_ai = list(sorted_codes)
+        print(
+            f"[funnel] AI候选分配完成(legacy_full_hits): total={len(selected_for_ai)}"
+        )
+    else:
+        mock_result = FunnelResult(
+            layer1_symbols=[],
+            layer2_symbols=[],
+            layer3_symbols=metrics.get("layer3_symbols", []) or [],
+            top_sectors=[],
+            triggers=triggers,
+            stage_map=accum_stage_map,
+            markup_symbols=markup_symbols,
+            exit_signals=exit_signals,
+            channel_map=l2_channel_map,
+        )
+        alloc_started = time.monotonic()
+        trend_selected, accum_selected, score_map = allocate_ai_candidates(
+            mock_result,
+            l3_ranked_symbols,
+            regime,
+            sector_map=sector_map,
+            max_per_sector=2,
+        )
+        ai_policy = resolve_ai_candidate_policy(regime)
+        alloc_elapsed = time.monotonic() - alloc_started
+        print(
+            f"[funnel] AI候选分配完成: trend={len(trend_selected)}, accum={len(accum_selected)}, "
+            f"elapsed={alloc_elapsed:.3f}s"
+        )
+        selected_for_ai = trend_selected + accum_selected
+
+    if use_legacy_card and use_legacy_selection:
+        bench_line = "未知"
+        if benchmark_context:
+            bench_line = (
+                f"{benchmark_context.get('regime')} | close={benchmark_context.get('close')} "
+                f"ma50={benchmark_context.get('ma50')} ma200={benchmark_context.get('ma200')} "
+                f"3d={benchmark_context.get('recent3_pct')} cum3={benchmark_context.get('recent3_cum_pct')}"
+            )
+
+        lines = [
+            (
+                f"**股票池**: 主板{metrics['pool_main']} + 创业板{metrics['pool_chinext']} "
+                f"-> 去重{metrics['pool_merged']} -> 去ST{metrics['pool_st_excluded']} "
+                f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
+            ),
+            f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
+            f"**大盘水温**: {bench_line}",
+            f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)}",
+            f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
+            "",
+            "**命中列表（按优先级）代码 名称 | 筛选理由 | 分值**",
+            "",
+        ]
+        for code in selected_for_ai:
+            name = name_map.get(code, code)
+            reasons = "、".join(code_to_reasons.get(code, []))
+            lines.append(
+                f"• {code} {name} | {reasons} | score={code_to_best_score.get(code, 0):.2f}"
+            )
+        if not selected_for_ai:
+            lines.append("无")
+
+        content = "\n".join(lines)
+        title = f"🔬 Wyckoff Funnel {date.today().strftime('%Y-%m-%d')}"
+        ok = True if not notify else send_feishu_notification(webhook_url, title, content)
+
+        sos_hit_set = set(str(c).strip() for c, _ in triggers.get("sos", []))
+        evr_hit_set = set(str(c).strip() for c, _ in triggers.get("evr", []))
+        spring_hit_set = set(str(c).strip() for c, _ in triggers.get("spring", []))
+        lps_hit_set = set(str(c).strip() for c, _ in triggers.get("lps", []))
+
+        def _infer_track(code: str) -> str:
+            if code in sos_hit_set or code in evr_hit_set:
+                return "Trend"
+            if code in spring_hit_set or code in lps_hit_set:
+                return "Accum"
+            return "Trend"
+
+        def _legacy_stage(code: str) -> str:
+            if code in markup_symbols:
+                return "Markup"
+            return str(accum_stage_map.get(code, "") or "").strip()
+
+        symbols_for_report = [
+            {
+                "code": c,
+                "name": name_map.get(c, c),
+                "tag": "、".join(code_to_reasons.get(c, [])),
+                "track": _infer_track(c),
+                "stage": _legacy_stage(c),
+                "score": float((metrics.get("layer3_score_map", {}) or {}).get(c, 0.0)),
+                "priority_score": float(code_to_best_score.get(c, 0.0)),
+                "priority_rank": idx + 1,
+                "selection_source": "l4_hit",
+                "selection_is_fill": False,
+                "industry": str(sector_map.get(c, "") or "未知行业"),
+                "sector_state_code": str(
+                    (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get("state", "")
+                ).strip(),
+                "sector_state": str(
+                    (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get(
+                        "label",
+                        "",
+                    )
+                ).strip(),
+                "sector_note": str(
+                    (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get("note", "")
+                ).strip(),
+                "sector_guidance": str(
+                    (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get(
+                        "guidance", ""
+                    )
+                ).strip(),
+                "exit_signal": str((exit_signals.get(c, {}) or {}).get("signal", "")).strip(),
+                "exit_price": (exit_signals.get(c, {}) or {}).get("price"),
+                "exit_reason": str((exit_signals.get(c, {}) or {}).get("reason", "")).strip(),
+            }
+            for idx, c in enumerate(selected_for_ai)
+        ]
+        if return_details:
+            details = {
+                "metrics": metrics,
+                "triggers": triggers,
+                "content": content,
+                "title": title,
+                "symbols_for_report": symbols_for_report,
+                "selected_for_ai": selected_for_ai,
+                "trend_selected": [],
+                "accum_selected": [],
+                "priority_score_map": score_map,
+                "name_map": name_map,
+                "sector_map": sector_map,
+            }
+            return (ok, symbols_for_report, benchmark_context, details)
+        return (ok, symbols_for_report, benchmark_context)
     
     def _channel_tags(code: str) -> set[str]:
         raw = str(l2_channel_map.get(code, "")).strip()

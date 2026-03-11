@@ -33,8 +33,28 @@ from core.sector_rotation import SECTOR_STATE_LABELS
 
 TRADING_DAYS = 500
 GEMINI_MODEL_FALLBACK = "gemini-3.1-flash-lite-preview"
-STEP3_MAX_AI_INPUT = int(os.getenv("STEP3_MAX_AI_INPUT", "0"))
-STEP3_DEFAULT_CONTEXT_CAP = max(int(os.getenv("STEP3_DEFAULT_CONTEXT_CAP", "8")), 0)
+OPERATION_TARGET = 6
+STEP3_REPORT_STYLE = (
+    os.getenv("STEP3_REPORT_STYLE", "legacy_dual_pool").strip().lower()
+)
+STEP3_USE_LEGACY_REPORT = STEP3_REPORT_STYLE in {
+    "legacy",
+    "legacy_dual_pool",
+    "dual_pool",
+    "classic",
+    "v1",
+}
+STEP3_SPLIT_BY_TRACK = os.getenv(
+    "STEP3_SPLIT_BY_TRACK",
+    "0" if STEP3_USE_LEGACY_REPORT else "1",
+).strip().lower() in {"1", "true", "yes", "on"}
+STEP3_MAX_AI_INPUT = int(
+    os.getenv("STEP3_MAX_AI_INPUT", "25" if STEP3_USE_LEGACY_REPORT else "0")
+)
+STEP3_DEFAULT_CONTEXT_CAP = max(
+    int(os.getenv("STEP3_DEFAULT_CONTEXT_CAP", "25" if STEP3_USE_LEGACY_REPORT else "8")),
+    0,
+)
 STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
 STEP3_EMPTY_COMPRESSION_FALLBACK_CAP = max(
     int(os.getenv("STEP3_EMPTY_COMPRESSION_FALLBACK_CAP", "8")),
@@ -48,14 +68,16 @@ DYNAMIC_MAINLINE_MIN_CLUSTER = 2
 STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "1").strip().lower() in {
     "1", "true", "yes", "on"
 }
-STEP3_ENABLE_RAG_VETO = os.getenv("STEP3_ENABLE_RAG_VETO", "1").strip().lower() in {
+STEP3_ENABLE_RAG_VETO = os.getenv(
+    "STEP3_ENABLE_RAG_VETO", "0" if STEP3_USE_LEGACY_REPORT else "1"
+).strip().lower() in {
     "1", "true", "yes", "on"
 }
 STEP3_SKIP_LLM = os.getenv("STEP3_SKIP_LLM", "0").strip().lower() in {
     "1", "true", "yes", "on"
 }
 STEP3_RESPECT_UPSTREAM_PRIORITY = os.getenv(
-    "STEP3_RESPECT_UPSTREAM_PRIORITY", "1"
+    "STEP3_RESPECT_UPSTREAM_PRIORITY", "0" if STEP3_USE_LEGACY_REPORT else "1"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -177,6 +199,10 @@ def _send_input_preview(
 
 def _has_required_sections(report: str) -> bool:
     text = (report or "").replace(" ", "")
+    if STEP3_USE_LEGACY_REPORT:
+        has_watch = ("观察池" in text) or ("自选观察池" in text) or ("继续观察" in text)
+        has_trade = ("可操作池" in text) or ("操作池" in text) or ("立刻建仓" in text)
+        return has_watch and has_trade
     has_watch = any(
         token in text
         for token in ("继续观察", "观察池", "逻辑破产", "储备营地")
@@ -200,13 +226,21 @@ def _repair_report_structure(
     if not report.strip():
         return report
 
-    repair_system = (
-        "你是格式修复器。请将输入研报重排为标准 Markdown，"
-        "优先修复为三阵营结构：1) 逻辑破产 2) 储备营地 3) 处于起跳板。"
-        "如果输入原本是旧口径的继续观察/立刻建仓，也要将其重排到上述三阵营中。"
-        "明显假突破、派发、放量失守归入逻辑破产；其余未到起跳点的非操作标的归入储备营地。"
-        "不可新增未在输入中出现的股票代码。"
-    )
+    if STEP3_USE_LEGACY_REPORT:
+        repair_system = (
+            "你是格式修复器。请将输入研报重排为标准 Markdown，"
+            "必须包含两个章节：1) 观察池（数量不限，含观察条件）"
+            f" 2) 可操作池（固定 {OPERATION_TARGET} 只，若不足需说明原因）。"
+            "不可新增未在输入中出现的股票代码。"
+        )
+    else:
+        repair_system = (
+            "你是格式修复器。请将输入研报重排为标准 Markdown，"
+            "优先修复为三阵营结构：1) 逻辑破产 2) 储备营地 3) 处于起跳板。"
+            "如果输入原本是旧口径的继续观察/立刻建仓，也要将其重排到上述三阵营中。"
+            "明显假突破、派发、放量失守归入逻辑破产；其余未到起跳点的非操作标的归入储备营地。"
+            "不可新增未在输入中出现的股票代码。"
+        )
     repair_user = (
         "允许使用的股票代码："
         + ", ".join(selected_codes)
@@ -233,6 +267,40 @@ def _build_fallback_sections(selected_df: pd.DataFrame) -> str:
     """
     最后兜底：确保飞书一定出现标准三阵营结果块。
     """
+    if STEP3_USE_LEGACY_REPORT:
+        if selected_df is None or selected_df.empty:
+            return (
+                "## 📚 观察池（系统兜底）\n"
+                "- 本轮无可用候选。\n\n"
+                f"## ⚔️ 可操作池（系统兜底，目标 {OPERATION_TARGET} 只）\n"
+                "- 本轮无可操作标的。"
+            )
+
+        lines = ["## 📚 观察池（系统兜底）"]
+        for _, row in selected_df.iterrows():
+            code = str(row.get("code", ""))
+            name = str(row.get("name", code))
+            tag = str(row.get("tag", ""))
+            score = row.get("wyckoff_score")
+            score_text = f"{float(score):.3f}" if pd.notna(score) else "-"
+            lines.append(
+                f"- `{code} {name}` | 标签: {tag or '-'} | 量化分: {score_text} | 观察条件: 回踩结构战区时需缩量确认。"
+            )
+
+        lines.append("")
+        lines.append(f"## ⚔️ 可操作池（系统兜底，目标 {OPERATION_TARGET} 只）")
+        top_ops = selected_df.head(OPERATION_TARGET)
+        if top_ops.empty:
+            lines.append("- 无")
+        else:
+            for _, row in top_ops.iterrows():
+                code = str(row.get("code", ""))
+                name = str(row.get("name", code))
+                lines.append(
+                    f"- `{code} {name}` | 条件建仓: 仅在战区内缩量回踩或强势确认后 1/3 试单。"
+                )
+        return "\n".join(lines)
+
     if selected_df is None or selected_df.empty:
         return (
             "## 💀 逻辑破产（系统兜底）\n"
@@ -847,6 +915,37 @@ def _build_track_user_message(
     return message
 
 
+def _build_legacy_user_message(
+    benchmark_lines: list[str],
+    payloads: list[str],
+    *,
+    compressed: bool,
+    raw_count: int,
+    selected_count: int,
+) -> str:
+    return (
+        ("{}\n\n".format("\n".join(benchmark_lines)) if benchmark_lines else "")
+        + (
+            (
+                f"[量化压缩] 候选已从 {raw_count} 只压缩到 {selected_count} 只。\n\n"
+            )
+            if compressed and raw_count > selected_count
+            else ""
+        )
+        + "以下是通过 Wyckoff Funnel 命中并经量化筛选后的候选名单。\n"
+        + "请先从全部输入中筛出“值得加入观察池”的标的（数量不限），并明确每只的观察条件；"
+        + f"再从观察池中严格挑选“次日可买入的可操作池”{OPERATION_TARGET}只。\n"
+        + f"输出必须包含两个部分：1) 观察池（不限，含观察条件） 2) 可操作池（固定{OPERATION_TARGET}只）。\n"
+        + "硬约束：可操作池必须是观察池子集，且两部分只能使用输入列表中的股票代码。\n\n"
+        + "交易执行硬约束：\n"
+        + "1) 禁止单点价格指令，必须给“结构战区(Action Zone) + 盘面确认条件(Tape Condition)”。\n"
+        + "2) 战区需围绕每只股票的“价格锚点（最新收盘价）”描述，但不得刻舟求剑。\n"
+        + "3) 买入触发必须包含量价确认条件（如缩量回踩/拒绝下破）；若放量下破，必须取消买入。\n"
+        + "4) 强势突破标的必须给“防踏空策略”：开盘强势确认后可先用计划仓位1/3试单，其余等待二次确认。\n\n"
+        + "\n".join(payloads)
+    )
+
+
 def _strip_report_title(text: str) -> str:
     lines = str(text or "").strip().splitlines()
     if lines and lines[0].lstrip().startswith("# "):
@@ -1337,15 +1436,24 @@ def run(
 
     selected_codes = [str(x) for x in selected_df["code"].tolist()]
     if not selected_codes:
-        report = (
-            "# 🏛️ Alpha 投委会机密电报：威科夫盘面审判\n\n"
-            "## 💀 逻辑破产\n"
-            "- 无（本轮无明确失效标的可判定）\n\n"
-            "## ⏳ 储备营地\n"
-            "- 无（候选均被 RAG 防雷 veto 或数据不足）\n\n"
-            "## 🏹 处于起跳板\n"
-            "- 无（风险过高，今日保持观望）"
-        )
+        if STEP3_USE_LEGACY_REPORT:
+            report = (
+                "# 🏛️ Alpha 投委会机密电报：今日最终决断\n\n"
+                "## 📚 观察池\n"
+                "- 无（候选均被过滤或数据不足）。\n\n"
+                f"## ⚔️ 可操作池（固定 {OPERATION_TARGET} 只）\n"
+                "- 无（风险过高，今日保持观望）。"
+            )
+        else:
+            report = (
+                "# 🏛️ Alpha 投委会机密电报：威科夫盘面审判\n\n"
+                "## 💀 逻辑破产\n"
+                "- 无（本轮无明确失效标的可判定）\n\n"
+                "## ⏳ 储备营地\n"
+                "- 无（候选均被 RAG 防雷 veto 或数据不足）\n\n"
+                "## 🏹 处于起跳板\n"
+                "- 无（风险过高，今日保持观望）"
+            )
         if rag_veto_lines:
             report = rag_veto_preview + report + "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
         if notify:
@@ -1362,6 +1470,8 @@ def run(
         "Trend": selected_df.iloc[0:0].copy(),
         "Accum": selected_df.iloc[0:0].copy(),
     }
+    payloads_all: list[str] = []
+    items_all: list[dict] = []
     selected_codes_by_track: dict[str, list[str]] = {"Trend": [], "Accum": []}
     items_by_track: dict[str, list[dict]] = {"Trend": [], "Accum": []}
 
@@ -1394,6 +1504,7 @@ def run(
             sector_note=str(row.get("sector_note", "")).strip() or None,
         )
         payloads_by_track.setdefault(track_key, []).append(payload)
+        payloads_all.append(payload)
         df_by_track[track_key] = pd.concat(
             [df_by_track[track_key], row.to_frame().T],
             ignore_index=True,
@@ -1402,6 +1513,7 @@ def run(
         item = next((x for x in items if str(x.get("code")) == code), None)
         if item:
             items_by_track[track_key].append(item)
+            items_all.append(item)
 
     benchmark_lines = []
     if benchmark_context:
@@ -1429,6 +1541,115 @@ def run(
             if rotation_headline:
                 benchmark_lines.append(rotation_headline)
             benchmark_lines.extend(rotation_lines[:4])
+
+    if STEP3_USE_LEGACY_REPORT and not STEP3_SPLIT_BY_TRACK:
+        if not payloads_all:
+            detail = ", ".join(f"{s}({e})" for s, e in failed) if failed else "无可用 payload"
+            print(f"[step3] 候选存在，但未能生成可用模型输入: {detail}")
+            return (False, "payload_build_failed", "")
+        user_message = _build_legacy_user_message(
+            benchmark_lines=benchmark_lines,
+            payloads=payloads_all,
+            compressed=STEP3_ENABLE_COMPRESSION,
+            raw_count=len(candidates_df),
+            selected_count=len(payloads_all),
+        )
+        _dump_model_input(
+            items=items_all,
+            model=model,
+            system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT,
+            user_message=user_message,
+            name_hint="legacy",
+        )
+
+        if STEP3_SKIP_LLM:
+            preview_requests = [
+                {
+                    "track": "Legacy",
+                    "selected_count": len(payloads_all),
+                    "user_message": user_message,
+                }
+            ]
+            if notify:
+                ok, preview_report = _send_input_preview(
+                    webhook_url=webhook_url,
+                    model=model,
+                    system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT,
+                    previews=preview_requests,
+                )
+                if not ok:
+                    return (False, "feishu_failed", preview_report)
+            else:
+                preview_report = (
+                    "# 🧪 Step3 模型输入预演（未调用大模型）\n\n"
+                    f"- 目标模型: `{model}`\n"
+                    f"- 输入股票数: `{len(payloads_all)}`\n"
+                    "- 模式: `STEP3_SKIP_LLM=1`\n\n"
+                    "```text\n"
+                    f"{user_message}\n"
+                    "```"
+                )
+            return (True, "ok_preview", preview_report)
+
+        ok, report, used_model = _call_track_report(
+            track="Legacy",
+            system_prompt=WYCKOFF_FUNNEL_SYSTEM_PROMPT,
+            user_message=user_message,
+            model=model,
+            api_key=api_key,
+            selected_codes=selected_codes,
+            selected_df=selected_df,
+        )
+        if not ok:
+            return (False, "llm_failed", "")
+
+        code_name = {
+            str(row.get("code")): str(row.get("name", row.get("code")))
+            for _, row in selected_df.iterrows()
+        }
+        selected_set = set(selected_codes)
+        ops_codes = _extract_ops_codes_from_markdown(report, selected_set)
+        structured = _try_parse_structured_report(
+            report=report,
+            allowed_codes=selected_set,
+            code_name=code_name,
+        )
+        if not ops_codes and structured and structured.get("operation_pool"):
+            for item in structured["operation_pool"]:
+                code = str(item.get("code", "")).strip()
+                if code and code not in ops_codes:
+                    ops_codes.append(code)
+        if len(ops_codes) < OPERATION_TARGET:
+            for code in selected_codes:
+                if code in ops_codes:
+                    continue
+                ops_codes.append(code)
+                if len(ops_codes) >= OPERATION_TARGET:
+                    break
+        ops_lines = [f"- {c} {code_name.get(c, c)}" for c in ops_codes[:OPERATION_TARGET]]
+        ops_preview = (
+            "## ⚔️ 可操作池速览（前置）\n"
+            + ("\n".join(ops_lines) if ops_lines else "- 无")
+            + "\n\n---\n"
+        )
+
+        model_banner = f"🤖 模型: {used_model or model}"
+        content = f"{model_banner}\n\n{rag_veto_preview}{ops_preview}\n{report}"
+        if rag_veto_lines:
+            content += "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
+        print(f"[step3] 飞书发送原文长度={len(content)}（不压缩，交由飞书分片）")
+        print(f"[step3] 研报实际使用模型={used_model or model}")
+        if failed:
+            content += f"\n\n**获取失败**: {', '.join(f'{s}({e})' for s, e in failed)}"
+
+        title = f"📄 批量研报 {date.today().strftime('%Y-%m-%d')}"
+        if notify:
+            sent = send_feishu_notification(webhook_url, title, content)
+            if not sent:
+                print("[step3] 飞书推送失败")
+                return (False, "feishu_failed", report)
+        print(f"[step3] 研报发送成功，股票数={len(payloads_all)}，拉取失败数={len(failed)}")
+        return (True, "ok", report)
 
     active_tracks = [
         track for track in ["Trend", "Accum"] if payloads_by_track.get(track)
