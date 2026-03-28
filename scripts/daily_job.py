@@ -23,11 +23,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import _resolve_trading_window
 from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS
 from integrations.supabase_market_signal import upsert_market_signal_daily
-from integrations.supabase_recommendation import (
-    mark_ai_recommendations,
-    sync_all_tracking_prices,
-    upsert_recommendations,
-)
 from utils.trading_clock import resolve_end_calendar_day
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -213,7 +208,6 @@ def main() -> int:
     symbols_info: list[dict] = []
     benchmark_context: dict = {}
     step3_report_text = ""
-    recommend_trade_date_int: int | None = None
 
     _log("开始定时任务", logs_path)
 
@@ -239,19 +233,6 @@ def main() -> int:
         has_blocking_failure = True
     elif benchmark_context:
         _persist_benchmark_context(benchmark_context, logs_path)
-    price_map_from_funnel = (benchmark_context or {}).get("latest_close_map") or {}
-
-    # 存入推荐跟踪表
-    if step2_ok and symbols_info:
-        try:
-            recommend_trade_date_int = int(_latest_trade_date_str().replace("-", ""))
-            rec_ok = upsert_recommendations(recommend_trade_date_int, symbols_info)
-            _log(
-                f"推荐记录入库: ok={rec_ok}, count={len(symbols_info)}, date={recommend_trade_date_int}",
-                logs_path,
-            )
-        except Exception as e:
-            _log(f"推荐记录入库失败: {e}", logs_path)
 
     # 阶段 2：批量研报（可降级：失败不影响 Funnel 成功）
     step3_ok = True
@@ -305,19 +286,6 @@ def main() -> int:
             f"阶段 2 批量研报: 起跳板代码={len(step3_springboard_codes)} ({preview_codes})",
             logs_path,
         )
-        if recommend_trade_date_int is not None:
-            try:
-                ai_mark_ok = mark_ai_recommendations(
-                    recommend_date=recommend_trade_date_int,
-                    ai_codes=step3_springboard_codes,
-                )
-                _log(
-                    "推荐记录AI标记: "
-                    f"ok={ai_mark_ok}, date={recommend_trade_date_int}, ai_count={len(step3_springboard_codes)}",
-                    logs_path,
-                )
-            except Exception as e:
-                _log(f"推荐记录AI标记失败: {e}", logs_path)
     else:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
         _log("阶段 2 批量研报: 跳过（无筛选结果）", logs_path)
@@ -410,36 +378,6 @@ def main() -> int:
                 f"ok={step4_ok}, reason={step4_reason}, elapsed={elapsed4:.1f}s, err={step4_err}",
                 logs_path,
             )
-
-    _log(
-        "开始同步所有推荐记录的实时价格..."
-        f"（price_map_size={len(price_map_from_funnel) if isinstance(price_map_from_funnel, dict) else 0}）",
-        logs_path,
-    )
-    try:
-        updated_n = sync_all_tracking_prices(price_map=price_map_from_funnel)
-        _log(f"实时价格同步完成，共更新 {updated_n} 条记录", logs_path)
-    except Exception as e:
-        _log(f"实时价格同步失败: {e}", logs_path)
-
-    enable_daily_correction = os.getenv(
-        "RECOMMENDATION_ENABLE_DAILY_CORRECTION",
-        "",
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if enable_daily_correction:
-        _log("开始推荐表纠错流程（按推荐日历史收盘回填加入价并重算涨跌幅）...", logs_path)
-        try:
-            from integrations.supabase_recommendation import correct_tracking_initial_prices
-
-            corrected_n = correct_tracking_initial_prices()
-            _log(f"推荐表纠错完成，共修正 {corrected_n} 条记录", logs_path)
-        except Exception as e:
-            _log(f"推荐表纠错失败: {e}", logs_path)
-    else:
-        _log(
-            "推荐表纠错流程已跳过（RECOMMENDATION_ENABLE_DAILY_CORRECTION 未开启）",
-            logs_path,
-        )
 
     # 汇总
     total_elapsed = sum(s.get("elapsed_s", 0) for s in summary)

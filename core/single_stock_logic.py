@@ -5,6 +5,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 import time
+from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -31,6 +32,7 @@ ALLOW_LLM_PLOT_EXEC = os.getenv("ALLOW_LLM_PLOT_EXEC", "").strip().lower() in {
     "yes",
     "on",
 }
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 SAFE_EXEC_BUILTINS = {
     "abs": abs,
@@ -507,14 +509,14 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
         _diag(symbol, f"prompt_csv_ready rows={len(csv_df)} cols={list(csv_df.columns)}")
 
         # 准备 Prompt
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_time = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
         font_path = get_chinese_font_path()
         font_hint = f"\n【系统检测】当前环境建议中文字体路径：'{font_path}'" if font_path else "\n【系统检测】未检测到常见中文字体，请尝试自动查找。"
 
         final_system_prompt = WYCKOFF_SINGLE_SYSTEM_PROMPT + font_hint
 
         user_msg = (
-            f"当前北京时间：{current_time}\n"
+            f"当前北京时间（系统注入，UTC+8）：{current_time}\n"
             f"分析标的：{symbol} {name} ({sector})\n"
             f"数据长度：{len(df_hist)} 交易日\n\n"
             f"{stage_info}"

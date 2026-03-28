@@ -5,8 +5,10 @@ Supabase 推荐跟踪数据存取模块
 from __future__ import annotations
 
 import os
+from bisect import bisect_right
 from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from supabase import Client, create_client
@@ -485,3 +487,170 @@ def load_recommendation_tracking(limit: int = 1000) -> list[dict[str, Any]]:
     except Exception as e:
         print(f"[supabase_recommendation] load_recommendation_tracking failed: {e}")
         return []
+
+
+def _to_ts_code_recommendation(symbol: str) -> str:
+    s = "".join(ch for ch in str(symbol or "") if ch.isdigit())
+    s = s[-6:].zfill(6)
+    if s.startswith(("600", "601", "603", "605", "688")):
+        return f"{s}.SH"
+    return f"{s}.SZ"
+
+
+def _recommend_date_to_yyyymmdd(raw: Any) -> str:
+    d = _parse_recommend_date(raw)
+    if d is None:
+        return ""
+    return d.strftime("%Y%m%d")
+
+
+def _pick_close_on_or_before(sorted_trade_dates: list[str], target_yyyymmdd: str) -> str:
+    if not sorted_trade_dates or not target_yyyymmdd:
+        return ""
+    i = bisect_right(sorted_trade_dates, target_yyyymmdd) - 1
+    if i < 0:
+        return ""
+    return sorted_trade_dates[i]
+
+
+def refresh_tracking_prices_with_tushare_unadjusted() -> dict[str, Any]:
+    """
+    使用 Tushare（日线不复权）回填并刷新推荐跟踪价格：
+    - initial_price: 推荐日（或之前最近交易日）收盘价
+    - current_price: 当前系统时间对应最近交易日收盘价
+    - change_pct: (current - initial) / initial * 100
+    """
+    from utils.tushare_client import get_pro
+
+    if not is_supabase_configured():
+        raise ValueError("SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 未配置")
+
+    pro = get_pro()
+    if pro is None:
+        raise ValueError("TUSHARE_TOKEN 未配置或 tushare 不可用")
+
+    client = _get_supabase_admin_client()
+    resp = (
+        client.table(TABLE_RECOMMENDATION_TRACKING)
+        .select("id,code,recommend_date")
+        .execute()
+    )
+    records = resp.data or []
+    if not records:
+        return {
+            "rows_total": 0,
+            "rows_updated": 0,
+            "rows_skipped": 0,
+            "codes_total": 0,
+            "codes_no_data": 0,
+            "latest_trade_date": "",
+        }
+
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    end_date = today.strftime("%Y%m%d")
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in records:
+        code_digits = "".join(ch for ch in str(row.get("code", "")) if ch.isdigit())
+        if not code_digits:
+            continue
+        code6 = code_digits[-6:].zfill(6)
+        grouped.setdefault(code6, []).append(row)
+
+    updates: list[dict[str, Any]] = []
+    codes_no_data = 0
+    latest_trade_date_global = ""
+
+    for code6, rows in grouped.items():
+        rec_dates = [
+            _recommend_date_to_yyyymmdd(r.get("recommend_date"))
+            for r in rows
+        ]
+        rec_dates = [d for d in rec_dates if d]
+        if not rec_dates:
+            continue
+        start_date = min(rec_dates)
+        ts_code = _to_ts_code_recommendation(code6)
+
+        try:
+            df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        except Exception as e:
+            print(f"[supabase_recommendation] tushare daily failed {ts_code}: {e}")
+            codes_no_data += 1
+            continue
+
+        if df is None or df.empty:
+            codes_no_data += 1
+            continue
+
+        work = df.copy()
+        if "trade_date" not in work.columns or "close" not in work.columns:
+            codes_no_data += 1
+            continue
+        work["trade_date"] = work["trade_date"].astype(str).str.replace(r"\.0$", "", regex=True)
+        work["close"] = pd.to_numeric(work["close"], errors="coerce")
+        work = work.dropna(subset=["trade_date", "close"])
+        work = work[work["close"] > 0]
+        if work.empty:
+            codes_no_data += 1
+            continue
+
+        close_map = {
+            str(td): float(px)
+            for td, px in zip(work["trade_date"].tolist(), work["close"].tolist())
+        }
+        trade_dates = sorted(close_map.keys())
+        current_trade_date = trade_dates[-1]
+        current_close = float(close_map[current_trade_date])
+        if not latest_trade_date_global or current_trade_date > latest_trade_date_global:
+            latest_trade_date_global = current_trade_date
+
+        for row in rows:
+            rec_date = _recommend_date_to_yyyymmdd(row.get("recommend_date"))
+            pick_date = _pick_close_on_or_before(trade_dates, rec_date)
+            if not pick_date:
+                continue
+            initial_close = float(close_map[pick_date])
+            if initial_close <= 0 or current_close <= 0:
+                continue
+            change_pct = round((current_close - initial_close) / initial_close * 100.0, 2)
+            row_id = row.get("id")
+            updates.append(
+                {
+                    "id": row_id,
+                    "code": int(code6),
+                    "recommend_date": int(rec_date) if rec_date.isdigit() else None,
+                    "initial_price": round(initial_close, 4),
+                    "current_price": round(current_close, 4),
+                    "change_pct": change_pct,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            )
+
+    if updates:
+        for item in updates:
+            row_id = item.pop("id", None)
+            code_val = item.pop("code", None)
+            rec_date_val = item.pop("recommend_date", None)
+            q = client.table(TABLE_RECOMMENDATION_TRACKING).update(item)
+            if row_id is not None:
+                q = q.eq("id", row_id)
+            elif code_val is not None and rec_date_val is not None:
+                q = q.eq("code", code_val).eq("recommend_date", rec_date_val)
+            else:
+                continue
+            q.execute()
+
+    updated_keys = {
+        f"{x.get('code', '')}:{x.get('recommend_date', '')}"
+        for x in updates
+        if x.get("code") is not None and x.get("recommend_date") is not None
+    }
+    return {
+        "rows_total": len(records),
+        "rows_updated": len(updated_keys),
+        "rows_skipped": max(len(records) - len(updated_keys), 0),
+        "codes_total": len(grouped),
+        "codes_no_data": codes_no_data,
+        "latest_trade_date": latest_trade_date_global,
+    }
