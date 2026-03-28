@@ -381,6 +381,22 @@ def _vix_chip_tone(raw) -> str:
     return "neutral"
 
 
+def _fmt_date_ymd(raw) -> str:
+    try:
+        if raw is None:
+            return "--"
+        text = str(raw).strip()
+        if not text:
+            return "--"
+        if len(text) >= 10 and "-" in text:
+            return text[:10]
+        if len(text) == 8 and text.isdigit():
+            return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+        return text
+    except Exception:
+        return "--"
+
+
 def _render_market_signal_banner() -> None:
     row = load_latest_market_signal_daily()
     if not isinstance(row, dict):
@@ -392,6 +408,9 @@ def _render_market_signal_banner() -> None:
     body = str(banner.get("banner_message", "") or "").strip()
     benchmark_regime_raw = str(row.get("benchmark_regime", "") or "")
     regime = _benchmark_regime_cn(benchmark_regime_raw)
+    benchmark_date = _fmt_date_ymd(row.get("trade_date"))
+    a50_date = _fmt_date_ymd(row.get("a50_value_date") or row.get("trade_date"))
+    vix_date = _fmt_date_ymd(row.get("vix_value_date") or row.get("trade_date"))
     main_close = row.get("main_index_close")
     a50_close = row.get("a50_close")
     a50_pct = row.get("a50_pct_chg")
@@ -415,9 +434,21 @@ def _render_market_signal_banner() -> None:
             return "--"
 
     chips = [
-        ("大盘水温（上证）", f"{regime} {_fmt_plain(main_close)}", _benchmark_chip_tone(benchmark_regime_raw)),
-        ("A50（盘前风向标）", f"{_fmt_plain(a50_close)} / {_fmt_pct(a50_pct)}", _signed_chip_tone(a50_pct)),
-        ("VIX（恐慌指数）", f"{_fmt_plain(vix_close)} / {_fmt_pct(vix_pct)}", _vix_chip_tone(vix_pct)),
+        (
+            f"大盘水温（上证 {benchmark_date}）",
+            f"{regime} {_fmt_plain(main_close)}",
+            _benchmark_chip_tone(benchmark_regime_raw),
+        ),
+        (
+            f"A50（盘前风向标 {a50_date}）",
+            f"{_fmt_plain(a50_close)} / {_fmt_pct(a50_pct)}",
+            _signed_chip_tone(a50_pct),
+        ),
+        (
+            f"VIX（恐慌指数 {vix_date}）",
+            f"{_fmt_plain(vix_close)} / {_fmt_pct(vix_pct)}",
+            _vix_chip_tone(vix_pct),
+        ),
     ]
     chips_html = "".join(
         (

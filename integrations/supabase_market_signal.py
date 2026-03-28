@@ -336,7 +336,7 @@ def compose_market_banner(row: dict[str, Any] | None) -> dict[str, str]:
         or "亲爱的投资者，最新交易日请顺势而为，保持节奏。"
     )
     body = (
-        "以上指标均为最新交易日盘后数据。"
+        "以上指标按各自最新可用时间更新。"
         f"{_benchmark_state_sentence(benchmark_regime)}，{_premarket_state_sentence(premarket_regime)}。"
         f"当前{state['wind_phrase']}，{state['water_phrase']}。"
         f"{state['action_phrase']}。"
@@ -453,8 +453,7 @@ def upsert_market_signal_daily(trade_date: date | str, patch: dict[str, Any]) ->
                 on_conflict="trade_date",
             ).execute()
         return True
-    except Exception as e:
-        print(f"[supabase_market_signal] upsert_market_signal_daily failed: {e}")
+    except Exception:
         return False
 
 
@@ -471,6 +470,18 @@ def load_market_signal_daily(trade_date: date | str, client: Client | None = Non
 
 
 def load_latest_market_signal_daily(client: Client | None = None) -> dict[str, Any] | None:
+    def _is_non_empty(value: Any) -> bool:
+        if value is None:
+            return False
+        text = str(value).strip()
+        return text != ""
+
+    def _pick_latest_with_fields(rows: list[dict[str, Any]], required_any: tuple[str, ...]) -> dict[str, Any] | None:
+        for r in rows:
+            if any(_is_non_empty(r.get(k)) for k in required_any):
+                return r
+        return None
+
     for sb in _iter_market_signal_clients(client):
         try:
             if sb is None:
@@ -479,11 +490,65 @@ def load_latest_market_signal_daily(client: Client | None = None) -> dict[str, A
                 sb.table(TABLE_MARKET_SIGNAL_DAILY)
                 .select("*")
                 .order("trade_date", desc=True)
-                .limit(1)
+                .order("updated_at", desc=True)
+                .limit(120)
                 .execute()
             )
-            if resp.data:
-                return dict(resp.data[0])
+            rows = [dict(x) for x in (resp.data or []) if isinstance(x, dict)]
+            if not rows:
+                continue
+
+            # 基础记录：整体最新一条，用于兜底字段。
+            merged = dict(rows[0])
+
+            benchmark_row = _pick_latest_with_fields(
+                rows,
+                ("benchmark_regime", "main_index_close", "main_index_ma50", "main_index_ma200"),
+            )
+            premarket_row = _pick_latest_with_fields(
+                rows,
+                ("premarket_regime", "premarket_reasons"),
+            )
+            a50_row = _pick_latest_with_fields(
+                rows,
+                ("a50_close", "a50_pct_chg", "a50_value_date"),
+            )
+            vix_row = _pick_latest_with_fields(
+                rows,
+                ("vix_close", "vix_pct_chg", "vix_value_date"),
+            )
+
+            if benchmark_row:
+                for key in (
+                    "trade_date",
+                    "benchmark_regime",
+                    "main_index_code",
+                    "main_index_close",
+                    "main_index_ma50",
+                    "main_index_ma200",
+                    "main_index_recent3_cum_pct",
+                    "main_index_today_pct",
+                    "smallcap_index_code",
+                    "smallcap_close",
+                    "smallcap_recent3_cum_pct",
+                ):
+                    merged[key] = benchmark_row.get(key)
+
+            if premarket_row:
+                for key in ("premarket_regime", "premarket_reasons"):
+                    merged[key] = premarket_row.get(key)
+
+            if a50_row:
+                for key in ("a50_value_date", "a50_source", "a50_close", "a50_pct_chg"):
+                    merged[key] = a50_row.get(key)
+
+            if vix_row:
+                for key in ("vix_value_date", "vix_source", "vix_close", "vix_pct_chg"):
+                    merged[key] = vix_row.get(key)
+
+            # 用合并后的“最新可用分组数据”重算文案
+            merged.update(compose_market_banner(merged))
+            return merged
         except Exception:
             continue
     return None

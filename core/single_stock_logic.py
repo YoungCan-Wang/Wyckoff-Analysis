@@ -239,10 +239,6 @@ def _run_with_timeout(desc: str, timeout_s: int, fn):
         executor.shutdown(wait=False, cancel_futures=True)
 
 
-def _diag(symbol: str, msg: str) -> None:
-    print(f"[single_stock] symbol={symbol} {msg}", flush=True)
-
-
 def _validate_plot_code(code_block: str) -> tuple[bool, str]:
     try:
         tree = ast.parse(code_block)
@@ -407,17 +403,10 @@ def render_single_stock_page(provider, model, api_key, *, base_url: str = ""):
 
 def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str = ""):
     """执行分析流程"""
-    t0_total = time.monotonic()
-    _diag(symbol, "analysis_start")
     end_calendar = date.today() - timedelta(days=1)
     try:
         window = _resolve_trading_window(end_calendar, TRADING_DAYS_OHLCV)
-        _diag(
-            symbol,
-            f"window_resolved start={window.start_trade_date} end={window.end_trade_date}",
-        )
     except Exception as e:
-        _diag(symbol, f"window_resolve_failed err={e}")
         st.error(f"无法解析交易日窗口：{e}")
         return
 
@@ -425,41 +414,26 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
         title="威科夫大师正在读图...",
         subtitle=f"正在拉取 {symbol} 近 {TRADING_DAYS_OHLCV} 天数据并进行结构分析",
     )
-    _diag(symbol, "loading_shown")
 
     try:
         # 获取 CSV 数据
-        t_fetch = time.monotonic()
-        _diag(symbol, f"hist_fetch_start timeout={SINGLE_STOCK_FETCH_TIMEOUT_S}s")
         df_hist = _run_with_timeout(
             "历史行情拉取",
             SINGLE_STOCK_FETCH_TIMEOUT_S,
             lambda: _fetch_hist(symbol, window, ADJUST),
         )
-        _diag(
-            symbol,
-            f"hist_fetch_done elapsed={time.monotonic() - t_fetch:.2f}s rows={len(df_hist)} cols={list(df_hist.columns)}",
-        )
         try:
-            t_sector = time.monotonic()
-            _diag(symbol, f"sector_fetch_start timeout={SINGLE_STOCK_SECTOR_TIMEOUT_S}s")
             sector = _run_with_timeout(
                 "行业信息获取",
                 SINGLE_STOCK_SECTOR_TIMEOUT_S,
                 lambda: stock_sector_em(symbol, timeout=SINGLE_STOCK_SECTOR_TIMEOUT_S),
             )
-            _diag(
-                symbol,
-                f"sector_fetch_done elapsed={time.monotonic() - t_sector:.2f}s sector={sector}",
-            )
         except Exception:
             sector = "未知行业"
-            _diag(symbol, "sector_fetch_fallback unknown")
         try:
             name = _stock_name_from_code(symbol)
         except Exception:
             name = symbol
-        _diag(symbol, f"name_resolved name={name}")
 
         # 计算该股票的威科夫阶段信息
         from core.wyckoff_engine import (
@@ -473,7 +447,6 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
 
         df_normalized = normalize_hist_from_fetch(df_hist)
         cfg = FunnelConfig()
-        _diag(symbol, f"wyckoff_normalized rows={len(df_normalized)}")
 
         # 检测阶段
         stage_info = ""
@@ -504,9 +477,7 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
             csv_df = _prepare_plot_dataframe(df_hist)
         except Exception:
             csv_df = df_hist.copy()
-            _diag(symbol, "plot_df_prepare_fallback raw_hist")
         csv_text = csv_df.to_csv(index=False, encoding="utf-8-sig")
-        _diag(symbol, f"prompt_csv_ready rows={len(csv_df)} cols={list(csv_df.columns)}")
 
         # 准备 Prompt
         current_time = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
@@ -533,15 +504,6 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
             img = Image.open(image_file)
             images.append(img)
             user_msg += "\n\n【用户已上传今日盘面截图，请结合分析】"
-
-        _diag(
-            symbol,
-            (
-                f"llm_start provider={provider} model={model} "
-                f"total_timeout={SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S}s req_timeout={SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S}s"
-            ),
-        )
-        t_llm = time.monotonic()
         response_text = _run_with_timeout(
             "大模型分析",
             SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S,
@@ -556,19 +518,10 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
                 timeout=SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S,
             ),
         )
-        _diag(
-            symbol,
-            f"llm_done elapsed={time.monotonic() - t_llm:.2f}s text_len={len(response_text or '')}",
-        )
         loading.empty()
-        _diag(symbol, "loading_cleared")
 
         code_block = extract_python_code(response_text)
         report_text = _strip_code_blocks_for_ui(response_text)
-        _diag(
-            symbol,
-            f"report_parsed has_code_block={bool(code_block)} ui_text_len={len(report_text or '')}",
-        )
         st.markdown("### 📝 威科夫大师研报")
         st.markdown(report_text or "（研报正文已生成）")
 
@@ -583,60 +536,45 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
             )
         except Exception as e:
             traceback.print_exc()
-            _diag(symbol, f"notify_failed err={e}")
             st.toast(f"通知推送失败: {e}", icon="⚠️")
 
         if code_block:
             st.markdown("### 📊 结构标注图")
             if not ALLOW_LLM_PLOT_EXEC:
-                _diag(symbol, "plot_mode=safe_template")
                 st.info("安全模式已启用：当前展示系统自动生成的结构图（未执行模型代码）。")
                 with st.spinner("正在生成结构图..."):
                     try:
                         fig = _build_safe_structure_plot(df_hist, symbol, name)
                         st.pyplot(fig)
-                        _diag(symbol, "safe_plot_rendered")
                     except Exception as e:
-                        _diag(symbol, f"safe_plot_failed err={e}")
                         st.error(f"结构图生成失败：{e}")
                         st.expander("错误详情").text(traceback.format_exc())
-                _diag(symbol, f"analysis_end elapsed={time.monotonic() - t0_total:.2f}s")
                 return
             with st.spinner("正在绘制图表..."):
                 try:
-                    _diag(symbol, "plot_mode=llm_exec")
                     fig = _run_plot_code_safely(code_block, df_hist)
                     st.pyplot(fig)
-                    _diag(symbol, "llm_plot_rendered")
                 except Exception as e:
-                    _diag(symbol, f"llm_plot_failed err={e}; fallback=safe_template")
                     st.warning(f"模型绘图执行失败，已回退到系统结构图：{e}")
                     try:
                         fig = _build_safe_structure_plot(df_hist, symbol, name)
                         st.pyplot(fig)
-                        _diag(symbol, "safe_plot_rendered_after_fallback")
                     except Exception:
-                        _diag(symbol, "safe_plot_failed_after_fallback")
                         st.error("结构图生成失败。")
                         st.expander("错误详情").text(traceback.format_exc())
         else:
-            _diag(symbol, "plot_mode=no_code_block_safe_template")
             st.markdown("### 📊 结构标注图")
             st.info("未检测到模型绘图代码，已展示系统自动生成的结构图。")
             with st.spinner("正在生成结构图..."):
                 try:
                     fig = _build_safe_structure_plot(df_hist, symbol, name)
                     st.pyplot(fig)
-                    _diag(symbol, "safe_plot_rendered_without_code")
                 except Exception as e:
-                    _diag(symbol, f"safe_plot_failed_without_code err={e}")
                     st.error(f"结构图生成失败：{e}")
                     st.expander("错误详情").text(traceback.format_exc())
-        _diag(symbol, f"analysis_end elapsed={time.monotonic() - t0_total:.2f}s")
 
     except Exception as e:
         loading.empty()
-        _diag(symbol, f"analysis_failed err={e}")
         msg = str(e)
         if is_data_source_failure_message(msg):
             st.error(msg)
