@@ -377,7 +377,14 @@ def _build_safe_structure_plot(df_hist: pd.DataFrame, symbol: str, name: str):
     fig.tight_layout()
     return fig
 
-def render_single_stock_page(provider, model, api_key, *, base_url: str = ""):
+def render_single_stock_page(
+    provider,
+    model,
+    api_key,
+    *,
+    base_url: str = "",
+    feishu_webhook: str = "",
+):
     """渲染单股分析页面"""
     st.markdown("### 🔍 威科夫单股分析 (大师模式)")
     st.caption("上传 K 线/分时图（可选），配合近 320 个交易日数据，生成大师级威科夫分析与标注图表。")
@@ -408,9 +415,26 @@ def render_single_stock_page(provider, model, api_key, *, base_url: str = ""):
     run_btn = st.button("开始大师分析", type="primary", disabled=not symbol, key="run_single_stock")
 
     if run_btn and symbol:
-        _run_analysis(symbol, uploaded_file, provider, model, api_key, base_url=base_url)
+        _run_analysis(
+            symbol,
+            uploaded_file,
+            provider,
+            model,
+            api_key,
+            base_url=base_url,
+            feishu_webhook=feishu_webhook,
+        )
 
-def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str = ""):
+def _run_analysis(
+    symbol,
+    image_file,
+    provider,
+    model,
+    api_key,
+    *,
+    base_url: str = "",
+    feishu_webhook: str = "",
+):
     """执行分析流程"""
     end_calendar = date.today() - timedelta(days=1)
     try:
@@ -536,8 +560,11 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
 
         try:
             from utils.notify import send_all_webhooks
+            effective_feishu_webhook = str(feishu_webhook or "").strip() or str(
+                st.session_state.get("feishu_webhook") or ""
+            ).strip()
             send_all_webhooks(
-                st.session_state.get("feishu_webhook") or "",
+                effective_feishu_webhook,
                 st.session_state.get("wecom_webhook") or "",
                 st.session_state.get("dingtalk_webhook") or "",
                 f"AI 深度研报 (单股 - {symbol})",

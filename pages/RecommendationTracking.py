@@ -2,6 +2,7 @@
 """推荐跟踪页面。"""
 import os
 import sys
+from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
@@ -69,11 +70,26 @@ with content_col:
     df["recommend_date"] = pd.to_numeric(df.get("recommend_date"), errors="coerce").fillna(0).astype(int)
     
     # 格式化日期 (INT YYYYMMDD -> YYYY-MM-DD str)
-    def _format_date(v: int) -> str:
+    def _parse_date(v: int):
         s = str(int(v))
         if len(s) == 8 and s.isdigit():
-            return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+            try:
+                return datetime.strptime(s, "%Y%m%d").date()
+            except Exception:
+                return None
+        return None
+
+    def _format_date(v: int) -> str:
+        dt = _parse_date(v)
+        if dt is not None:
+            return dt.strftime("%Y-%m-%d")
         return "-"
+
+    today = date.today()
+    df["recommend_date_dt"] = df["recommend_date"].apply(_parse_date)
+    df["days_since_recommend"] = df["recommend_date_dt"].apply(
+        lambda d: (today - d).days if d is not None else pd.NA
+    )
     df['recommend_date_str'] = df['recommend_date'].apply(_format_date)
     
     # 格式化代码 (INT -> 000001 str)
@@ -154,20 +170,29 @@ with content_col:
     # 5. 结果展示
     # 构建最终展示的列表
     display_df = filtered_df[[
-        'recommend_date_str', 'display_code', 'name', 
-        'recommend_reason', 'is_ai_recommended', 'funnel_score',
-        'initial_price', 'current_price', 'change_pct', 'recommend_count'
+        'display_code',
+        'name',
+        'change_pct',
+        'initial_price',
+        'current_price',
+        'is_ai_recommended',
+        'recommend_count',
+        'days_since_recommend',
+        'recommend_date_str',
+        'recommend_reason',
+        'funnel_score',
     ]].copy()
     display_df["is_ai_recommended"] = display_df["is_ai_recommended"].map(lambda x: "是" if bool(x) else "否")
 
     display_df.columns = [
-        "推荐日期", "代码", "名称", "推荐原因", "AI推荐", "分值", "加入价", "当前价", "累计涨跌幅", "推荐次数"
+        "代码", "名称", "累计涨跌幅", "加入价", "当前价", "AI推荐", "推荐次数", "加入推荐天数", "推荐日期", "推荐原因", "推荐分值"
     ]
 
     # 使用 dataframe 渲染，增加一些样式建议
     st.dataframe(
         display_df.style.format({
-            "分值": lambda v: "-" if pd.isna(v) else f"{float(v):.2f}",
+            "加入推荐天数": lambda v: "-" if pd.isna(v) else f"{int(v)}",
+            "推荐分值": lambda v: "-" if pd.isna(v) else f"{float(v):.2f}",
             "加入价": "{:.2f}",
             "当前价": "{:.2f}",
             "累计涨跌幅": "{:+.2f}%"

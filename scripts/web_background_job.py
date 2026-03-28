@@ -216,17 +216,18 @@ def _run_batch_ai_report(request_id: str, payload: dict[str, Any]) -> dict[str, 
         os.environ["STEP3_SKIP_LLM"] = "1"
 
     provider, api_key, model, base_url = _resolve_model_credentials(payload)
+    webhook_url = str(payload.get("webhook_url", "") or "").strip()
     benchmark_context = payload.get("benchmark_context", {}) or {}
 
     from scripts.step3_batch_report import run as run_step3
 
     ok, reason, report_text = run_step3(
         symbols_info,
-        webhook_url="",
+        webhook_url=webhook_url,
         api_key=api_key,
         model=model,
         benchmark_context=benchmark_context,
-        notify=False,
+        notify=bool(webhook_url),
         provider=provider,
         llm_base_url=base_url,
     )
@@ -238,6 +239,7 @@ def _run_batch_ai_report(request_id: str, payload: dict[str, Any]) -> dict[str, 
         "provider": provider,
         "model": model,
         "base_url": base_url,
+        "webhook_url": webhook_url,
         "preview_only": preview_only,
         "symbol_count": len(symbols_info),
         "symbols_info": symbols_info,
