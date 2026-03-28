@@ -2,6 +2,7 @@
 import ast
 import re
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 import pandas as pd
 import streamlit as st
@@ -19,6 +20,10 @@ from app.ui_helpers import show_page_loading
 
 TRADING_DAYS_OHLCV = 500  # 威科夫分析需要较长周期
 ADJUST = "qfq"
+SINGLE_STOCK_FETCH_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_FETCH_TIMEOUT_S", "70")), 20)
+SINGLE_STOCK_SECTOR_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_SECTOR_TIMEOUT_S", "20")), 5)
+SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S", "160")), 60)
+SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S", "45")), 15)
 ALLOW_LLM_PLOT_EXEC = os.getenv("ALLOW_LLM_PLOT_EXEC", "").strip().lower() in {
     "1",
     "true",
@@ -216,6 +221,21 @@ def _prepare_plot_dataframe(df_hist: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _run_with_timeout(desc: str, timeout_s: int, fn):
+    """
+    为单股分析关键步骤增加硬超时，避免页面无限转圈。
+    """
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(fn)
+    try:
+        return future.result(timeout=max(int(timeout_s), 1))
+    except FuturesTimeoutError:
+        future.cancel()
+        raise TimeoutError(f"{desc} 超时（>{timeout_s}s）")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def _validate_plot_code(code_block: str) -> tuple[bool, str]:
     try:
         tree = ast.parse(code_block)
@@ -394,8 +414,19 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
 
     try:
         # 获取 CSV 数据
-        df_hist = _fetch_hist(symbol, window, ADJUST)
-        sector = stock_sector_em(symbol, timeout=30)
+        df_hist = _run_with_timeout(
+            "历史行情拉取",
+            SINGLE_STOCK_FETCH_TIMEOUT_S,
+            lambda: _fetch_hist(symbol, window, ADJUST),
+        )
+        try:
+            sector = _run_with_timeout(
+                "行业信息获取",
+                SINGLE_STOCK_SECTOR_TIMEOUT_S,
+                lambda: stock_sector_em(symbol, timeout=SINGLE_STOCK_SECTOR_TIMEOUT_S),
+            )
+        except Exception:
+            sector = "未知行业"
         try:
             name = _stock_name_from_code(symbol)
         except Exception:
@@ -471,15 +502,19 @@ def _run_analysis(symbol, image_file, provider, model, api_key, *, base_url: str
             images.append(img)
             user_msg += "\n\n【用户已上传今日盘面截图，请结合分析】"
 
-        response_text = call_llm(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            system_prompt=final_system_prompt,
-            user_message=user_msg,
-            images=images,
-            base_url=base_url or None,
-            timeout=180,
+        response_text = _run_with_timeout(
+            "大模型分析",
+            SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S,
+            lambda: call_llm(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                system_prompt=final_system_prompt,
+                user_message=user_msg,
+                images=images,
+                base_url=base_url or None,
+                timeout=SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S,
+            ),
         )
         loading.empty()
 
