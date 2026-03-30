@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import os
 from typing import Optional
 
 import pandas as pd
 from postgrest.exceptions import APIError
+from supabase import Client, create_client
 
-from core.constants import TABLE_STOCK_CACHE_DATA, TABLE_STOCK_CACHE_META
-from integrations.supabase_client import get_supabase_client
+from core.constants import TABLE_STOCK_HIST_CACHE
+
+_ADMIN_CLIENT: Client | None = None
 
 
 def _parse_iso_datetime(value: str) -> datetime:
@@ -56,33 +59,96 @@ def denormalize_hist_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def get_cache_meta(symbol: str, adjust: str) -> Optional[CacheMeta]:
-    supabase = get_supabase_client()
+def _parse_iso_date(value: str) -> date:
+    return pd.to_datetime(str(value)).date()
+
+
+def _get_admin_supabase_client() -> Client | None:
+    global _ADMIN_CLIENT
+    if _ADMIN_CLIENT is not None:
+        return _ADMIN_CLIENT
+    url = str(os.getenv("SUPABASE_URL", "") or "").strip()
+    key = str(
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        or os.getenv("SUPABASE_KEY", "")
+        or ""
+    ).strip()
+    if not url or not key:
+        return None
     try:
-        resp = (
-            supabase.table(TABLE_STOCK_CACHE_META)
-            .select("symbol,adjust,source,start_date,end_date,updated_at")
-            .eq("symbol", symbol)
-            .eq("adjust", adjust)
-            .order("updated_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if not resp.data:
-            return None
-        row = resp.data[0]
-        return CacheMeta(
-            symbol=row["symbol"],
-            adjust=row["adjust"],
-            source=row["source"],
-            start_date=_parse_iso_datetime(row["start_date"]).date(),
-            end_date=_parse_iso_datetime(row["end_date"]).date(),
-            updated_at=_parse_iso_datetime(row["updated_at"]),
-        )
-    except APIError:
-        return None
+        _ADMIN_CLIENT = create_client(url, key)
     except Exception:
+        _ADMIN_CLIENT = None
+    return _ADMIN_CLIENT
+
+
+def _get_stock_cache_client(context: str = "auto") -> Client | None:
+    """
+    context:
+    - web/session: 优先使用登录态 session client（RLS）
+    - background/admin: 使用 service-role/admin client
+    - auto: session 优先，失败后回退 admin client
+    """
+    ctx = str(context or "auto").strip().lower()
+    try_session = ctx in {"auto", "web", "session"}
+    try_admin = ctx in {"auto", "background", "admin"}
+
+    if try_session:
+        try:
+            from integrations.supabase_client import get_supabase_client
+
+            client = get_supabase_client()
+            if client is not None:
+                return client
+        except Exception:
+            if ctx in {"web", "session"}:
+                return None
+
+    if try_admin:
+        return _get_admin_supabase_client()
+    return None
+
+
+def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> Optional[CacheMeta]:
+    supabase = _get_stock_cache_client(context=context)
+    if supabase is None:
         return None
+    first_resp = (
+        supabase.table(TABLE_STOCK_HIST_CACHE)
+        .select("date")
+        .eq("symbol", symbol)
+        .eq("adjust", adjust)
+        .order("date", desc=False)
+        .limit(1)
+        .execute()
+    )
+    if not first_resp.data:
+        return None
+
+    last_resp = (
+        supabase.table(TABLE_STOCK_HIST_CACHE)
+        .select("date,updated_at")
+        .eq("symbol", symbol)
+        .eq("adjust", adjust)
+        .order("date", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not last_resp.data:
+        return None
+
+    first_row = first_resp.data[0]
+    last_row = last_resp.data[0]
+    updated_raw = last_row.get("updated_at")
+    updated_at = _parse_iso_datetime(updated_raw) if updated_raw else datetime.utcnow()
+    return CacheMeta(
+        symbol=symbol,
+        adjust=adjust,
+        source="cache",
+        start_date=_parse_iso_date(first_row["date"]),
+        end_date=_parse_iso_date(last_row["date"]),
+        updated_at=updated_at,
+    )
 
 
 def load_cached_history(
@@ -91,27 +157,30 @@ def load_cached_history(
     source: str,
     start_date: date,
     end_date: date,
+    *,
+    context: str = "auto",
 ) -> Optional[pd.DataFrame]:
-    supabase = get_supabase_client()
+    supabase = _get_stock_cache_client(context=context)
+    if supabase is None:
+        return None
     try:
         resp = (
-            supabase.table(TABLE_STOCK_CACHE_DATA)
+            supabase.table(TABLE_STOCK_HIST_CACHE)
             .select("date,open,high,low,close,volume,amount,pct_chg")
             .eq("symbol", symbol)
             .eq("adjust", adjust)
-            .eq("source", source)
             .gte("date", start_date.isoformat())
             .lte("date", end_date.isoformat())
             .order("date")
             .execute()
         )
-        if not resp.data:
-            return None
-        return pd.DataFrame(resp.data)
+        if resp.data:
+            return pd.DataFrame(resp.data)
     except APIError:
         return None
     except Exception:
         return None
+    return None
 
 
 def upsert_cache_data(
@@ -119,21 +188,29 @@ def upsert_cache_data(
     adjust: str,
     source: str,
     df: pd.DataFrame,
+    *,
+    context: str = "auto",
 ) -> None:
     if df is None or df.empty:
         return
-    supabase = get_supabase_client()
-    payload = df.copy()
-    payload["symbol"] = symbol
-    payload["adjust"] = adjust
-    payload["source"] = source
-    payload["updated_at"] = datetime.utcnow().isoformat()
-    records = payload.to_dict(orient="records")
-    try:
-        supabase.table(TABLE_STOCK_CACHE_DATA).upsert(records).execute()
-    except Exception:
+    supabase = _get_stock_cache_client(context=context)
+    if supabase is None:
         return
 
+    payload = df.copy()
+    payload["date"] = payload["date"].astype(str)
+    payload["symbol"] = symbol
+    payload["adjust"] = adjust
+    payload["updated_at"] = datetime.utcnow().isoformat()
+    records = payload.to_dict(orient="records")
+
+    try:
+        supabase.table(TABLE_STOCK_HIST_CACHE).upsert(records).execute()
+        return
+    except APIError:
+        return
+    except Exception:
+        return
 
 def upsert_cache_meta(
     symbol: str,
@@ -141,34 +218,22 @@ def upsert_cache_meta(
     source: str,
     start_date: date,
     end_date: date,
+    *,
+    context: str = "auto",
 ) -> None:
-    supabase = get_supabase_client()
-    payload = {
-        "symbol": symbol,
-        "adjust": adjust,
-        "source": source,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-    try:
-        supabase.table(TABLE_STOCK_CACHE_META).upsert(payload).execute()
-    except Exception:
+    # breaking change: 单表架构不再维护独立 meta 表
+    _ = (symbol, adjust, source, start_date, end_date, context)
+    return
+
+
+def cleanup_cache(ttl_days: int = 30, *, context: str = "auto") -> None:
+    supabase = _get_stock_cache_client(context=context)
+    if supabase is None:
         return
-
-
-def cleanup_cache(ttl_days: int = 30) -> None:
-    supabase = get_supabase_client()
     cutoff = datetime.utcnow() - timedelta(days=ttl_days)
     cutoff_iso = cutoff.isoformat()
     try:
-        supabase.table(TABLE_STOCK_CACHE_DATA).delete().lt(
-            "updated_at", cutoff_iso
-        ).execute()
-    except Exception:
-        pass
-    try:
-        supabase.table(TABLE_STOCK_CACHE_META).delete().lt(
+        supabase.table(TABLE_STOCK_HIST_CACHE).delete().lt(
             "updated_at", cutoff_iso
         ).execute()
     except Exception:

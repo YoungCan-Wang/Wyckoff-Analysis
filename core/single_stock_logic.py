@@ -25,6 +25,7 @@ SINGLE_STOCK_FETCH_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_FETCH_TIMEOUT_S",
 SINGLE_STOCK_SECTOR_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_SECTOR_TIMEOUT_S", "20")), 5)
 SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S", "240")), 60)
 SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S", "90")), 15)
+SINGLE_STOCK_PLOT_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_PLOT_TIMEOUT_S", "45")), 10)
 ALLOW_LLM_PLOT_EXEC = os.getenv("ALLOW_LLM_PLOT_EXEC", "").strip().lower() in {
     "1",
     "true",
@@ -580,7 +581,11 @@ def _run_analysis(
                 st.info("安全模式已启用：当前展示系统自动生成的结构图（未执行模型代码）。")
                 with st.spinner("正在生成结构图..."):
                     try:
-                        fig = _build_safe_structure_plot(df_hist, symbol, name)
+                        fig = _run_with_timeout(
+                            "结构图生成",
+                            SINGLE_STOCK_PLOT_TIMEOUT_S,
+                            lambda: _build_safe_structure_plot(df_hist, symbol, name),
+                        )
                         st.pyplot(fig)
                     except Exception as e:
                         st.error(f"结构图生成失败：{e}")
@@ -588,12 +593,20 @@ def _run_analysis(
                 return
             with st.spinner("正在绘制图表..."):
                 try:
-                    fig = _run_plot_code_safely(code_block, df_hist)
+                    fig = _run_with_timeout(
+                        "模型绘图执行",
+                        SINGLE_STOCK_PLOT_TIMEOUT_S,
+                        lambda: _run_plot_code_safely(code_block, df_hist),
+                    )
                     st.pyplot(fig)
                 except Exception as e:
                     st.warning(f"模型绘图执行失败，已回退到系统结构图：{e}")
                     try:
-                        fig = _build_safe_structure_plot(df_hist, symbol, name)
+                        fig = _run_with_timeout(
+                            "回退结构图生成",
+                            SINGLE_STOCK_PLOT_TIMEOUT_S,
+                            lambda: _build_safe_structure_plot(df_hist, symbol, name),
+                        )
                         st.pyplot(fig)
                     except Exception:
                         st.error("结构图生成失败。")
@@ -603,7 +616,11 @@ def _run_analysis(
             st.info("未检测到模型绘图代码，已展示系统自动生成的结构图。")
             with st.spinner("正在生成结构图..."):
                 try:
-                    fig = _build_safe_structure_plot(df_hist, symbol, name)
+                    fig = _run_with_timeout(
+                        "结构图生成",
+                        SINGLE_STOCK_PLOT_TIMEOUT_S,
+                        lambda: _build_safe_structure_plot(df_hist, symbol, name),
+                    )
                     st.pyplot(fig)
                 except Exception as e:
                     st.error(f"结构图生成失败：{e}")

@@ -12,7 +12,7 @@ import pandas as pd
 from core.download_history import add_download_history
 from core.export_artifacts import cleanup_export_artifacts, file_loader, write_dataframe_csv
 from integrations.fetch_a_share_csv import get_all_stocks
-from integrations.data_source import fetch_stock_hist
+from integrations.stock_hist_repository import get_stock_hist
 from app.layout import is_data_source_failure_message, setup_page, show_user_error
 from app.ui_helpers import show_page_loading
 from app.navigation import show_right_nav
@@ -46,7 +46,7 @@ with content_col:
         {
             "id": "stock_zh_a_hist",
             "label": "A股个股历史（日线）",
-            "fn": fetch_stock_hist,
+            "fn": get_stock_hist,
             "has_adjust": True,
             "help": "返回日频 K 线数据；symbol 为 6 位股票代码（支持 akshare/baostock/efinance 自动降级）。",
             "default_symbol": "300364",
@@ -192,9 +192,10 @@ with content_col:
                     if source["id"] == "stock_zh_a_hist":
                         df = source["fn"](
                             symbol=symbol,
-                            start=start_date,
-                            end=end_date,
+                            start_date=start_date,
+                            end_date=end_date,
                             adjust=adjust,
+                            context="web",
                         )
                     elif source["id"] == "index_zh_a_hist":
                         df = source["fn"](
@@ -222,26 +223,17 @@ with content_col:
                 "preview_rows": preview_df.to_dict(orient="records"),
                 "preview_count": int(len(preview_df)),
                 "symbol": symbol,
+                "query_meta": {
+                    "source_id": source["id"],
+                    "symbol": symbol,
+                    "start_date": str(start_date),
+                    "end_date": str(end_date),
+                    "adjust": adjust,
+                },
             }
             st.session_state.custom_export_source_id = source["id"]
             st.session_state.custom_export_selected_signature = ""
             st.session_state.custom_export_selected_path = ""
-
-            # === 自动记录查询历史 ===
-            # 生成一个唯一的 query_key 来防止重复记录
-            current_query_key = f"{source['id']}_{symbol}_{start_date}_{end_date}"
-            last_query_key = st.session_state.get("last_custom_export_query")
-
-            if current_query_key != last_query_key:
-                add_download_history(
-                    page="CustomExport",
-                    source=source["id"],
-                    title=f"{symbol} ({start_date}~{end_date})",
-                    file_name=f"{symbol}_{start_date}_{end_date}.csv",
-                    mime="text/csv",
-                    data=None,
-                )
-                st.session_state["last_custom_export_query"] = current_query_key
 
         except Exception as e:
             msg = str(e)
@@ -333,18 +325,49 @@ with content_col:
         file_prefix = f"{source_key}_{payload.get('symbol') or symbol}"
 
     st.markdown("### 📥 导出")
-    st.download_button(
+    selected_bytes = file_loader(selected_path)
+    all_bytes = file_loader(csv_path)
+    selected_clicked = st.download_button(
         label="下载所选字段 CSV",
-        data=file_loader(selected_path),
+        data=selected_bytes,
         file_name=f"{file_prefix}_selected.csv",
         mime="text/csv",
         type="primary",
         width="stretch",
     )
-    st.download_button(
+    all_clicked = st.download_button(
         label="下载全部字段 CSV",
-        data=file_loader(csv_path),
+        data=all_bytes,
         file_name=f"{file_prefix}_all.csv",
         mime="text/csv",
         width="stretch",
     )
+
+    query_meta = payload.get("query_meta") if isinstance(payload, dict) else {}
+    if selected_clicked:
+        add_download_history(
+            page="CustomExport",
+            source=source_key,
+            title=f"{payload.get('symbol') or ''} 所选字段导出",
+            file_name=f"{file_prefix}_selected.csv",
+            mime="text/csv",
+            data=selected_bytes,
+            request_payload={
+                "kind": "custom_export_selected",
+                "query": query_meta or {},
+                "columns": selected_cols,
+            },
+        )
+    if all_clicked:
+        add_download_history(
+            page="CustomExport",
+            source=source_key,
+            title=f"{payload.get('symbol') or ''} 全字段导出",
+            file_name=f"{file_prefix}_all.csv",
+            mime="text/csv",
+            data=all_bytes,
+            request_payload={
+                "kind": "custom_export_all",
+                "query": query_meta or {},
+            },
+        )

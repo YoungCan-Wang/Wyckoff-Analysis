@@ -351,12 +351,26 @@ def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
 
 def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame:
     """个股日线：tushare 优先（qfq），失败再回退其它数据源"""
-    from integrations.data_source import fetch_stock_hist
-    return fetch_stock_hist(
+    from integrations.stock_hist_repository import get_stock_hist
+
+    context = "auto"
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx() is None:
+            context = "background"
+        else:
+            context = "web"
+    except Exception:
+        # 非 Streamlit 运行环境（CLI/GitHub Actions）默认按后台模式处理
+        context = "background"
+
+    return get_stock_hist(
         symbol=symbol,
-        start=window.start_trade_date,
-        end=window.end_trade_date,
+        start_date=window.start_trade_date,
+        end_date=window.end_trade_date,
         adjust=adjust or "",
+        context=context,
     )
 
 

@@ -14,10 +14,8 @@ from tenacity import (
     retry_if_exception,
 )
 from dotenv import load_dotenv
-import pandas as pd
 from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
-    _fetch_hist,
     _build_export,
     get_all_stocks,
     get_stocks_by_board,
@@ -36,15 +34,7 @@ from core.export_artifacts import (
     write_dataframe_csv,
     write_zip_from_files,
 )
-from core.stock_cache import (
-    cleanup_cache,
-    denormalize_hist_df,
-    get_cache_meta,
-    load_cached_history,
-    normalize_hist_df,
-    upsert_cache_data,
-    upsert_cache_meta,
-)
+from integrations.stock_hist_repository import get_stock_hist
 
 # Load environment variables from .env file
 load_dotenv()
@@ -68,17 +58,7 @@ def load_stock_list():
     return get_all_stocks()
 
 
-CACHE_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
 EXPORT_CLEANUP_INTERVAL_SECONDS = 3 * 60 * 60
-
-
-def _maybe_cleanup_cache() -> None:
-    now_ts = time.time()
-    last_ts = float(st.session_state.get("cache_cleanup_last_ts", 0))
-    if now_ts - last_ts < CACHE_CLEANUP_INTERVAL_SECONDS:
-        return
-    cleanup_cache(ttl_days=30)
-    st.session_state.cache_cleanup_last_ts = now_ts
 
 
 def _maybe_cleanup_export_artifacts() -> None:
@@ -105,52 +85,13 @@ def _should_retry_fetch(e: Exception) -> bool:
     reraise=True,
 )
 def _fetch_hist_with_retry(symbol, window, adjust):
-    cache_adjust = adjust or "none"
-    start_date = window.start_trade_date
-    end_date = window.end_trade_date
-
-    meta = get_cache_meta(symbol, cache_adjust)
-    cached_df = None
-    cached_source = None
-    if meta:
-        cached_source = meta.source
-        cached_df = load_cached_history(
-            symbol, cache_adjust, meta.source, meta.start_date, meta.end_date
-        )
-
-    if meta and cached_df is not None and not cached_df.empty:
-        if meta.start_date <= start_date and meta.end_date >= end_date:
-            return denormalize_hist_df(
-                cached_df[
-                    (cached_df["date"] >= start_date.isoformat())
-                    & (cached_df["date"] <= end_date.isoformat())
-                ]
-            )
-
-    df = _fetch_hist(symbol, window, adjust)
-    source = str(df.attrs.get("source", "") or "").strip().lower()
-    if source not in {"akshare", "baostock", "efinance", "tushare"}:
-        source = cached_source or "unknown"
-    normalized = normalize_hist_df(df)
-
-    if cached_df is not None and not cached_df.empty:
-        combined = pd.concat([cached_df, normalized], ignore_index=True)
-        combined = combined.drop_duplicates(subset=["date"], keep="last").sort_values(
-            "date"
-        )
-    else:
-        combined = normalized
-
-    upsert_cache_data(symbol, cache_adjust, source, combined)
-    upsert_cache_meta(
-        symbol,
-        cache_adjust,
-        source,
-        start_date=min(start_date, meta.start_date) if meta else start_date,
-        end_date=max(end_date, meta.end_date) if meta else end_date,
+    return get_stock_hist(
+        symbol=symbol,
+        start_date=window.start_trade_date,
+        end_date=window.end_trade_date,
+        adjust=adjust or "",
+        context="web",
     )
-    _maybe_cleanup_cache()
-    return df
 
 
 def add_to_history(symbol, name):
@@ -519,13 +460,21 @@ with content_col:
                     last_batch_key = st.session_state.get("last_home_batch_key")
 
                     if current_batch_key != last_batch_key:
+                        zip_bytes_for_history = file_loader(zip_path)
                         add_download_history(
                             page="Home",
                             source="批量生成",
                             title=f"批量 ({len(symbols)} 只)",
                             file_name=file_name_zip,
                             mime="application/zip",
-                            data=None,
+                            data=zip_bytes_for_history,
+                            request_payload={
+                                "kind": "home_batch_zip",
+                                "symbols": symbols,
+                                "start_trade_date": str(window.start_trade_date),
+                                "end_trade_date": str(window.end_trade_date),
+                                "adjust": adjust,
+                            },
                         )
                         st.session_state["last_home_batch_key"] = current_batch_key
                     # 通知：飞书 + 企微 + 钉钉（任一配置则发送）
@@ -656,13 +605,22 @@ with content_col:
                 last_single_key = st.session_state.get("last_home_single_key")
 
                 if current_single_key != last_single_key:
+                    zip_bytes_for_history = file_loader(zip_path)
                     add_download_history(
                         page="Home",
                         source="单只导出",
                         title=f"{st.session_state.current_symbol} {name}",
                         file_name=file_name_zip,
                         mime="application/zip",
-                        data=None,
+                        data=zip_bytes_for_history,
+                        request_payload={
+                            "kind": "home_single_zip",
+                            "symbol": st.session_state.current_symbol,
+                            "name": name,
+                            "start_trade_date": str(window.start_trade_date),
+                            "end_trade_date": str(window.end_trade_date),
+                            "adjust": adjust,
+                        },
                     )
                     st.session_state["last_home_single_key"] = current_single_key
 
