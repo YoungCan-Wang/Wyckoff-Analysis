@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/visible]
+    branches: [main, feature/visible, feature/refactor]
     paths:
       - "**.py"
       - "requirements.txt"
       - ".github/workflows/ci.yml"
   pull_request:
-    branches: [main, feature/visible]
+    branches: [main, feature/visible, feature/refactor]
     paths:
       - "**.py"
       - "requirements.txt"
@@ -36,6 +36,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .
+          pip install pytest
 
       - name: Sanity check (import)
         run: |
@@ -44,6 +45,9 @@ jobs:
       - name: Py compile all modules
         run: |
           python -m py_compile $(find app core integrations pages scripts utils -name "*.py")
+
+      - name: Run tests
+        run: python -m pytest tests/ -x -q
 
       - name: Daily job dry-run
         run: python scripts/daily_job.py --dry-run
