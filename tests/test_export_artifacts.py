@@ -11,10 +11,12 @@ from core.export_artifacts import file_loader, write_dataframe_csv
 class TestWriteDataframeCsv:
     def test_roundtrip(self, tmp_path, monkeypatch):
         """写出 CSV 后应能重新读回相同数据。"""
-        monkeypatch.setenv("EXPORT_ARTIFACTS_DIR", str(tmp_path))
+        import core.export_artifacts as _mod
+        monkeypatch.setattr(_mod, "_EXPORT_ROOT", tmp_path)
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         path = write_dataframe_csv(df, prefix="test")
         assert path.exists()
+        assert path.parent == tmp_path  # 确认写入了隔离目录
         loaded = pd.read_csv(path)
         assert list(loaded.columns) == ["a", "b"]
         assert len(loaded) == 3
