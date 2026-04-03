@@ -271,7 +271,7 @@ def diagnose_one_stock(
     positive = []
     if ma_pattern == "多头排列":
         positive.append("多头排列")
-    if l2_channel in _TREND_CHANNELS:
+    if any(t in l2_channel for t in _TREND_CHANNELS):
         positive.append(f"L2通道:{l2_channel}")
     if l4_triggers:
         positive.append(f"L4信号:{'+'.join(l4_triggers)}")

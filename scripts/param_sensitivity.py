@@ -25,6 +25,10 @@ from pathlib import Path
 
 import pandas as pd
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.backtester import run_backtest, parse_date
 
 # ── 默认参数空间（可通过环境变量 JSON 覆盖） ──

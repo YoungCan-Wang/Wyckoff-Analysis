@@ -19,6 +19,10 @@ import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import date
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import _normalize_symbols, _resolve_trading_window, get_stocks_by_board
 from core.wyckoff_engine import normalize_hist_from_fetch
 from utils.trading_clock import resolve_end_calendar_day

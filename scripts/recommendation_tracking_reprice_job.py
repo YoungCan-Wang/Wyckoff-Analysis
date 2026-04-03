@@ -15,6 +15,10 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.supabase_recommendation import refresh_tracking_prices_with_tushare_unadjusted
 
 TZ = ZoneInfo("Asia/Shanghai")

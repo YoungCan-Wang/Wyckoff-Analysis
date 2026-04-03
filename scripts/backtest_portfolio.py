@@ -26,6 +26,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.backtester import (
     calc_max_drawdown_pct,
     calc_sharpe_ratio,

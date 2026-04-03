@@ -16,6 +16,10 @@ import sys
 
 import pandas as pd
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.wyckoff_engine import FunnelConfig, _latest_trade_date, _sorted_if_needed
 from core.funnel_pipeline import TRIGGER_LABELS, run_funnel_job
 from utils.feishu import send_feishu_notification

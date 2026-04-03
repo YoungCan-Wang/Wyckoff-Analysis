@@ -6,8 +6,8 @@
     # 命令行传入代码与成本
     python3 scripts/diagnose_holdings.py --codes 300813,600703,300014 --costs 30.695,13.68,67.12
 
-    # 从 Supabase 读取实盘持仓
-    python3 scripts/diagnose_holdings.py --from-portfolio USER_LIVE
+    # 从 Supabase 读取实盘持仓（格式为 USER_LIVE:<user_id>）
+    python3 scripts/diagnose_holdings.py --from-portfolio USER_LIVE:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
     # 输出 JSON 格式
     python3 scripts/diagnose_holdings.py --codes 300813 --costs 30.695 --format json
@@ -24,6 +24,10 @@ import os
 from dataclasses import asdict
 from datetime import date, datetime
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from integrations.data_source import fetch_index_hist
 from core.wyckoff_engine import normalize_hist_from_fetch, FunnelConfig
@@ -171,7 +175,7 @@ def main():
     )
     parser.add_argument(
         "--from-portfolio", type=str, default="",
-        help="从 Supabase 读取持仓，如 USER_LIVE",
+        help="从 Supabase 读取持仓，格式 USER_LIVE:<user_id>",
     )
     parser.add_argument(
         "--format", type=str, choices=["text", "markdown", "json"], default="text",

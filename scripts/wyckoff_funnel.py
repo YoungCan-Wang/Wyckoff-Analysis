@@ -27,6 +27,10 @@ from pathlib import Path
 
 import pandas as pd
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
     get_stocks_by_board,
