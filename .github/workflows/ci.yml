@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/visible, feature/refactor]
+    branches: [main, feature/visible]
     paths:
       - "**.py"
       - "requirements.txt"
       - ".github/workflows/ci.yml"
   pull_request:
-    branches: [main, feature/visible, feature/refactor]
+    branches: [main, feature/visible]
     paths:
       - "**.py"
       - "requirements.txt"
