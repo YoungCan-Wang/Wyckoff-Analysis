@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 stock_hist_cache 维护任务：
-- 按 updated_at 清理过期缓存记录
+- 按交易日期 date 清理滑动窗口外的历史记录
 """
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ def main() -> int:
     parser.add_argument(
         "--ttl-days",
         type=int,
-        default=365,
-        help="按 updated_at 清理早于该天数的缓存记录（默认 365）",
+        default=730,
+        help="按 date 清理早于该天数的缓存记录（默认 730）",
     )
     args = parser.parse_args()
 

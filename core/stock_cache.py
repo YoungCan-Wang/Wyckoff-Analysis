@@ -13,6 +13,7 @@ from core.constants import TABLE_STOCK_HIST_CACHE
 from integrations.supabase_base import create_admin_client as _create_admin_client
 
 _ADMIN_CLIENT: Client | None = None
+_STOCK_HIST_RETENTION_DAYS = 730
 
 
 def _parse_iso_datetime(value: str) -> datetime:
@@ -199,11 +200,38 @@ def upsert_cache_data(
 
     try:
         supabase.table(TABLE_STOCK_HIST_CACHE).upsert(records).execute()
+        _trim_symbol_history_window(
+            supabase=supabase,
+            symbol=symbol,
+            adjust=adjust,
+            retention_days=_STOCK_HIST_RETENTION_DAYS,
+        )
         return
     except APIError:
         return
     except Exception:
         return
+
+
+def _trim_symbol_history_window(
+    *,
+    supabase: Client,
+    symbol: str,
+    adjust: str,
+    retention_days: int,
+) -> None:
+    cutoff_date = (datetime.utcnow().date() - timedelta(days=max(retention_days, 1))).isoformat()
+    try:
+        (
+            supabase.table(TABLE_STOCK_HIST_CACHE)
+            .delete()
+            .eq("symbol", symbol)
+            .eq("adjust", adjust)
+            .lt("date", cutoff_date)
+            .execute()
+        )
+    except Exception:
+        pass
 
 def upsert_cache_meta(
     symbol: str,
@@ -219,7 +247,7 @@ def upsert_cache_meta(
     return
 
 
-def cleanup_cache(ttl_days: int = 30, *, context: str = "auto") -> None:
+def cleanup_cache(ttl_days: int = _STOCK_HIST_RETENTION_DAYS, *, context: str = "auto") -> None:
     supabase = _get_stock_cache_client(context=context)
     if supabase is None:
         return
@@ -227,7 +255,7 @@ def cleanup_cache(ttl_days: int = 30, *, context: str = "auto") -> None:
     cutoff_iso = cutoff.isoformat()
     try:
         supabase.table(TABLE_STOCK_HIST_CACHE).delete().lt(
-            "updated_at", cutoff_iso
+            "date", cutoff_date
         ).execute()
     except Exception:
         pass
