@@ -297,19 +297,22 @@ jobs:
           retention-days: 3
 
   # ────────────────────────────────────────────────
-  # Phase 2: 16 个并行 job 读快照做回测（无需网络拉取）
+  # Phase 2: 36 个并行 job 读快照做回测（无需网络拉取）
+  # 维度: hold_days × stop_loss × take_profit × trailing_stop
   # ────────────────────────────────────────────────
   grid:
     runs-on: ubuntu-latest
     needs: fetch
     strategy:
       fail-fast: false
+      max-parallel: 20
       matrix:
-        hold_days: [5, 6, 7, 8]
-        stop_loss: [-6, -7, -8, -9]
+        hold_days: [5, 10, 15]
+        stop_loss: [-6, -7, -8]
+        take_profit: [0, 18]
+        trailing_stop: [0, -5]
     env:
       PYTHONUNBUFFERED: "1"
-      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       TZ: Asia/Shanghai
 
     steps:
@@ -339,8 +342,11 @@ jobs:
           set -euo pipefail
           HOLD="${{ matrix.hold_days }}"
           STOP="${{ matrix.stop_loss }}"
+          TP="${{ matrix.take_profit }}"
+          TRAIL="${{ matrix.trailing_stop }}"
           STOP_TAG="${STOP#-}"
-          OUT_DIR="analysis/backtest_grid_actions/h${HOLD}_sl${STOP_TAG}_tp0"
+          TRAIL_TAG="${TRAIL#-}"
+          OUT_DIR="analysis/backtest_grid_actions/h${HOLD}_sl${STOP_TAG}_tp${TP}_tr${TRAIL_TAG}"
           echo "OUT_DIR=${OUT_DIR}" >> "${GITHUB_ENV}"
           mkdir -p "${OUT_DIR}"
 
@@ -354,10 +360,10 @@ jobs:
             --trading-days "${BT_TRADING_DAYS}" \
             --exit-mode sltp \
             --stop-loss "${STOP}" \
-            --take-profit 0 \
+            --take-profit "${TP}" \
             --sltp-priority stop_first \
             --regime-filter \
-            --trailing-stop "${BT_TRAILING_STOP}" \
+            --trailing-stop "${TRAIL}" \
             --snapshot-dir snapshot_data \
             --output-dir "${OUT_DIR}" \
             | tee "${OUT_DIR}/run.log"
@@ -366,7 +372,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-grid-h${{ matrix.hold_days }}-sl${{ matrix.stop_loss }}-${{ github.run_number }}
+          name: backtest-grid-h${{ matrix.hold_days }}-sl${{ matrix.stop_loss }}-tp${{ matrix.take_profit }}-tr${{ matrix.trailing_stop }}-${{ github.run_number }}
           path: ${{ env.OUT_DIR }}/*
           retention-days: 7
           if-no-files-found: warn
@@ -418,13 +424,15 @@ jobs:
                           return None
               return None
 
-          # ---- 解析所有单元 ----
-          cells = []  # [{hold, sl, win, avg, sharpe, mdd, trades}, ...]
+          # ---- 解析所有单元（支持 hold×sl×tp×trailing 多维） ----
+          cells = []
           for sf in summaries:
               dirname = os.path.basename(os.path.dirname(sf))
-              # 从目录名提取参数，如 h5_sl6_tp0
+              # 目录名如: h5_sl6_tp18_tr5  or  h5_sl6_tp0_tr0
               m_hold = re.search(r'h(\d+)', dirname)
               m_sl = re.search(r'sl(\d+)', dirname)
+              m_tp = re.search(r'tp(\d+)', dirname)
+              m_tr = re.search(r'tr(\d+)', dirname)
               if not m_hold or not m_sl:
                   continue
               with open(sf, 'r') as f:
@@ -432,6 +440,8 @@ jobs:
               cells.append({
                   'hold': int(m_hold.group(1)),
                   'sl': int(m_sl.group(1)),
+                  'tp': int(m_tp.group(1)) if m_tp else 0,
+                  'tr': int(m_tr.group(1)) if m_tr else 0,
                   'win': extract(content, '胜率'),
                   'avg': extract(content, '平均收益'),
                   'sharpe': extract(content, '夏普比'),
@@ -444,10 +454,6 @@ jobs:
           if not cells:
               lines = ['⚠️ 未找到回测结果文件']
           else:
-              holds = sorted(set(c['hold'] for c in cells))
-              sls = sorted(set(c['sl'] for c in cells))
-              cell_map = {(c['hold'], c['sl']): c for c in cells}
-
               # 找出最优参数（按夏普排序）
               valid = [c for c in cells if c['sharpe'] is not None]
               best = max(valid, key=lambda c: c['sharpe']) if valid else None
@@ -460,9 +466,13 @@ jobs:
               if best:
                   bh = best.get('hold', '?')
                   bs = best.get('sl', '?')
+                  btp = best.get('tp', 0)
+                  btr = best.get('tr', 0)
                   bsharpe = best.get('sharpe', 0) or 0
                   tag = '🏆' if bsharpe > 0 else '📌'
-                  lines.append(f'{tag} **最优参数**: 持有{bh}天 / 止损-{bs}%')
+                  tp_str = f'TP{btp}%' if btp else '无止盈'
+                  tr_str = f'移动止盈-{btr}%' if btr else '无移动止盈'
+                  lines.append(f'{tag} **最优参数**: 持有{bh}天 / SL-{bs}% / {tp_str} / {tr_str}')
                   parts = []
                   if best.get('sharpe') is not None: parts.append(f'夏普 **{bsharpe:.3f}**')
                   bwin = best.get('win')
@@ -474,51 +484,48 @@ jobs:
                   lines.append('  '.join(parts))
                   lines.append('')
 
-              # ---- 构建矩阵辅助函数 ----
+              # ---- 按 (tp, tr) 分组输出夏普排行榜 ----
               def fmt(val, spec):
                   if val is None:
                       return '-'
                   return format(val, spec)
 
+              # 按夏普排序输出 Top-10 参数组合
+              lines.append('**夏普 Top-10 参数组合**')
+              lines.append('| 持有 | SL | TP | Trail | 夏普 | 胜率 | 均收 | 回撤 | 样本 |')
+              lines.append('|---|---|---|---|---:|---:|---:|---:|---:|')
+              ranked = sorted(valid, key=lambda c: c['sharpe'], reverse=True)[:10]
+              for c in ranked:
+                  is_best = best and c['hold'] == best['hold'] and c['sl'] == best['sl'] and c['tp'] == best['tp'] and c['tr'] == best['tr']
+                  mark = ' 🏆' if is_best else ''
+                  tp_s = f'{c["tp"]}%' if c['tp'] else '关'
+                  tr_s = f'-{c["tr"]}%' if c['tr'] else '关'
+                  lines.append(f'| {c["hold"]}天 | -{c["sl"]}% | {tp_s} | {tr_s} | {fmt(c.get("sharpe"), ".3f")}{mark} | {fmt(c.get("win"), ".1f")} | {fmt(c.get("avg"), "+.2f")} | {fmt(c.get("mdd"), ".1f")} | {int(c.get("trades") or 0)} |')
+              lines.append('')
+
+              # ---- 按 hold×sl 聚合的夏普矩阵（取各 tp/tr 组合的最优） ----
+              holds = sorted(set(c['hold'] for c in cells))
+              sls = sorted(set(c['sl'] for c in cells))
+              agg_map = {}
+              for c in cells:
+                  key = (c['hold'], c['sl'])
+                  if c.get('sharpe') is not None:
+                      if key not in agg_map or c['sharpe'] > agg_map[key]['sharpe']:
+                          agg_map[key] = c
+
               header = '| | ' + ' | '.join(f'-{s}%' for s in sls) + ' |'
               sep = '|---|' + '|'.join(['---:'] * len(sls)) + '|'
-
-              # ---- 夏普矩阵表 ----
-              lines.append('**夏普比矩阵** (行=持有天数, 列=止损线)')
+              lines.append('**最优夏普矩阵** (每格取 TP/Trail 最优)')
               lines.append(header)
               lines.append(sep)
               for h in holds:
                   row_vals = []
                   for s in sls:
-                      c = cell_map.get((h, s))
+                      c = agg_map.get((h, s))
                       v = fmt(c.get('sharpe') if c else None, '.3f')
-                      if best and c and c.get('hold') == best.get('hold') and c.get('sl') == best.get('sl') and v != '-':
+                      if best and c and c.get('hold') == best.get('hold') and c.get('sl') == best.get('sl') and c.get('tp') == best.get('tp') and c.get('tr') == best.get('tr') and v != '-':
                           v = f'**{v}** 🏆'
                       row_vals.append(v)
-                  lines.append(f'| {h}天 | ' + ' | '.join(row_vals) + ' |')
-              lines.append('')
-
-              # ---- 胜率矩阵表 ----
-              lines.append('**胜率矩阵** (%)')
-              lines.append(header)
-              lines.append(sep)
-              for h in holds:
-                  row_vals = []
-                  for s in sls:
-                      c = cell_map.get((h, s))
-                      row_vals.append(fmt(c.get('win') if c else None, '.1f'))
-                  lines.append(f'| {h}天 | ' + ' | '.join(row_vals) + ' |')
-              lines.append('')
-
-              # ---- 均收矩阵表 ----
-              lines.append('**平均收益矩阵** (%)')
-              lines.append(header)
-              lines.append(sep)
-              for h in holds:
-                  row_vals = []
-                  for s in sls:
-                      c = cell_map.get((h, s))
-                      row_vals.append(fmt(c.get('avg') if c else None, '+.2f'))
                   lines.append(f'| {h}天 | ' + ' | '.join(row_vals) + ' |')
 
           content = '\n'.join(lines)[:2800]

@@ -92,8 +92,8 @@ class FunnelConfig:
     bench_drop_threshold: float = -2.0
     rs_window_long: int = 10
     rs_window_short: int = 3
-    rs_min_long: float = 0.0
-    rs_min_short: float = 0.0
+    rs_min_long: float = 2.0   # 10 日 RS 至少跑赢大盘 2%（原 0.0 形同虚设）
+    rs_min_short: float = 1.0  # 3 日 RS 至少跑赢大盘 1%
     enable_rs_filter: bool = True
     enable_rps_filter: bool = True
     rps_window_fast: int = 50
@@ -152,7 +152,7 @@ class FunnelConfig:
 
     # Layer 4 - Spring
     spring_support_window: int = 60
-    spring_vol_ratio: float = 1.0
+    spring_vol_ratio: float = 1.3  # 弹簧信号要求成交量 >= 均量 1.3 倍（原 1.0 太松）
     spring_tr_max_range_pct: float = 30.0
     spring_tr_max_drift_pct: float = 12.0
     # Spring 动态振幅
@@ -164,7 +164,7 @@ class FunnelConfig:
     lps_lookback: int = 3
     lps_ma: int = 20
     lps_ma_tolerance: float = 0.02
-    lps_vol_dry_ratio: float = 0.48  # A/B 验证：0.48 夏普 2.325 >> 0.55 夏普 0.831
+    lps_vol_dry_ratio: float = 0.48  # A/B 验证：0.48 夏普 2.325 >> 0.55 夏普 0.831 ⚠️ 样内优化，需 OOS 验证
     lps_vol_ref_window: int = 60
 
     # Layer 4 - Effort vs Result
@@ -650,10 +650,11 @@ def layer2_strength_detailed(
                     and pd.notna(last_ma_long)
                     and float(last_ma_long) > 0
                 ):
-                    # MA50 与 MA200 的差距百分比：允许在 -5% 到 +5% 之间
-                    # 即 MA50 可以在 MA200 下方 5% 以内（即将穿），或在上方 5% 以内（刚穿）
+                    # MA50 与 MA200 的差距百分比：允许在 ±accum_ma_gap_max 之间
+                    # 即 MA50 可以在 MA200 下方 N% 以内（即将穿），或在上方 N% 以内（刚穿）
                     ma_gap_pct = (float(last_ma_short) - float(last_ma_long)) / float(last_ma_long) * 100.0
-                    accum_ma_ok = -5.0 <= ma_gap_pct <= 5.0
+                    ma_gap_limit = cfg.accum_ma_gap_max * 100.0  # 配置值为小数（如 0.06 → 6%）
+                    accum_ma_ok = -ma_gap_limit <= ma_gap_pct <= ma_gap_limit
 
             accum_ok = accum_low_ok and accum_range_ok and accum_vol_ok and accum_ma_ok
 
@@ -1412,7 +1413,8 @@ def _analyze_accum_stage(df: pd.DataFrame, cfg: FunnelConfig) -> str | None:
         return None
 
     ma_gap_pct = (float(last_ma_short) - float(last_ma_long)) / float(last_ma_long) * 100.0
-    if not (-5.0 <= ma_gap_pct <= 5.0):
+    ma_gap_limit = cfg.accum_ma_gap_max * 100.0  # 配置值为小数（如 0.06 → 6%）
+    if not (-ma_gap_limit <= ma_gap_pct <= ma_gap_limit):
         return None
 
     # 条件 3: 量能萎缩
@@ -1747,11 +1749,11 @@ def allocate_ai_candidates(
         if code in result.markup_symbols:
             score += 100.0
         if stage_name == "Accum_C":
-            score += 35.0 if not is_trend_side else 10.0
+            score += 15.0 if not is_trend_side else 5.0   # 回测显示 Accum 胜率仅 31.8%，降权
         elif stage_name == "Accum_B":
-            score += 18.0 if not is_trend_side else 5.0
+            score += 8.0 if not is_trend_side else 3.0
         elif stage_name == "Accum_A":
-            score += 8.0 if not is_trend_side else 0.0
+            score += 3.0 if not is_trend_side else 0.0
 
         if code in sos_hit_set:
             score += 50.0

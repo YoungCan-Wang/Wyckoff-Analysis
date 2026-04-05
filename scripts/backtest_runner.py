@@ -59,10 +59,10 @@ DEFAULT_SELL_FRICTION_PCT = float(os.getenv("BACKTEST_SELL_FRICTION_PCT", "0.5")
 # 回测数据显示 NEUTRAL 下策略盈利（+1.17%），CRASH/RISK_ON 下亏损严重。
 # 通过 regime 动态调节每日候选上限（相当于仓位控制），减少逆势开仓。
 REGIME_POSITION_RATIO: dict[str, float] = {
-    "NEUTRAL": 1.0,        # 震荡市 → 全仓
-    "RISK_ON": 0.5,        # 热点追涨期反转率高 → 半仓
+    "NEUTRAL": 1.0,        # 震荡市 → 全仓（回测显示唯一盈利环境）
+    "RISK_ON": 0.2,        # 热点追涨期反转率高 → 轻仓试探（回测 Sharpe -0.88，大幅缩仓）
     "PANIC_REPAIR": 0.5,   # 恐慌修复 → 半仓试探
-    "RISK_OFF": 0.3,       # 避险 → 仅少量试探
+    "RISK_OFF": 0.2,       # 避险 → 轻仓（回测 Sharpe -0.48）
     "CRASH": 0.0,          # 崩盘 → 不开仓
 }
 FUNNEL_AI_SELECTION_MODE = (
