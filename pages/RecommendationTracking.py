@@ -83,14 +83,35 @@ with content_col:
 
     today = date.today()
     df["recommend_date_dt"] = df["recommend_date"].apply(_parse_date)
-    df["days_since_recommend"] = df["recommend_date_dt"].apply(
-        lambda d: (today - d).days if d is not None else pd.NA
-    )
     df['recommend_date_str'] = df['recommend_date'].apply(_format_date)
-    
+
     # 格式化代码 (INT -> 000001 str)
     df["code"] = pd.to_numeric(df.get("code"), errors="coerce").fillna(0).astype(int)
     df['display_code'] = df['code'].apply(lambda x: f"{int(x):06d}")
+
+    # ── 同一只股票去重：按 code 聚合，只保留最新一条，推荐次数取最大值 ──
+    df = df.sort_values("recommend_date", ascending=False)
+    agg_map = {
+        "name": "first",
+        "recommend_date": "first",
+        "recommend_date_dt": "first",
+        "recommend_date_str": "first",
+        "initial_price": "first",
+        "current_price": "first",
+        "change_pct": "first",
+        "is_ai_recommended": "any",       # 任意一次被 AI 推荐过就标 True
+        "recommend_count": "max",          # 取最大推荐次数
+        "recommend_reason": "first",
+        "funnel_score": "first",
+        "display_code": "first",
+    }
+    # 只聚合存在的列
+    agg_map = {k: v for k, v in agg_map.items() if k in df.columns}
+    df = df.groupby("code", as_index=False).agg(agg_map)
+
+    df["days_since_recommend"] = df["recommend_date_dt"].apply(
+        lambda d: (today - d).days if d is not None else pd.NA
+    )
 
     # 3. 统计指标 (KPIs)
     st.markdown("### 📊 表现摘要")
