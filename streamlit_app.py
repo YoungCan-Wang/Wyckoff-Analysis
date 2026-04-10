@@ -332,7 +332,7 @@ with content_col:
 
         # ── 用户输入（新对话在发送按钮左侧） ──
         st.markdown('<div class="compose-row">', unsafe_allow_html=True)
-        with st.form("chat_compose_form", clear_on_submit=False):
+        with st.form("chat_compose_form", clear_on_submit=True):
             compose_left, compose_mid, compose_right = st.columns([1.25, 7.2, 1.2])
             # 将发送按钮定义在最前，保证按 Enter 时优先触发发送而不是新对话
             with compose_right:
@@ -360,12 +360,11 @@ with content_col:
             if mgr:
                 mgr.new_session()
             st.session_state["chat_messages"] = []
-            st.session_state["_chat_draft"] = ""
             st.rerun()
 
         prompt = str(st.session_state.get("_chat_draft", "") or "").strip() if send_clicked else ""
         if prompt:
-            st.session_state["_chat_draft"] = ""
+
             # 显示用户消息
             st.session_state["chat_messages"].append({"role": "user", "content": prompt})
 
