@@ -105,6 +105,10 @@ STEP3_RESPECT_UPSTREAM_PRIORITY = os.getenv(
 STEP3_SEND_COMPLIANCE_COPY = os.getenv(
     "STEP3_SEND_COMPLIANCE_COPY", "1"
 ).strip().lower() in {"1", "true", "yes", "on"}
+STEP3_COMPLIANCE_WATCHLIST_MAX = max(
+    int(os.getenv("STEP3_COMPLIANCE_WATCHLIST_MAX", "8")),
+    1,
+)
 
 
 RECENT_DAYS = 15
@@ -539,39 +543,158 @@ def _strip_report_title(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _extract_markdown_section(content: str, header_contains: str) -> list[str]:
+    """抽取 markdown 二级标题下的文本，遇到下一个二级标题或分隔线即停止。"""
+    lines = str(content or "").splitlines()
+    picked: list[str] = []
+    in_section = False
+    for raw in lines:
+        line = raw.rstrip("\n")
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_section:
+                break
+            in_section = header_contains in stripped
+            continue
+        if in_section:
+            if stripped == "---":
+                break
+            picked.append(line)
+    return picked
+
+
+def _extract_market_temperature(content: str) -> str:
+    for raw in str(content or "").splitlines():
+        if "大盘水温与资金偏好" not in raw:
+            continue
+        _, _, tail = raw.partition("：")
+        val = (tail or raw).strip()
+        if val:
+            return val
+    return ""
+
+
+def _extract_rag_digest(content: str) -> list[str]:
+    """提取 RAG 防雷摘要中的关键数字，控制 B 版篇幅。"""
+    lines = _extract_markdown_section(content, "RAG 防雷执行摘要")
+    if not lines:
+        return []
+    allow_prefixes = (
+        "- 扫描股票:",
+        "- 外部检索成功:",
+        "- 有效相关新闻:",
+        "- veto 剔除:",
+        "- 执行状态:",
+        "- 原因:",
+    )
+    picked: list[str] = []
+    for raw in lines:
+        s = raw.strip()
+        if not s:
+            continue
+        if s.startswith(allow_prefixes):
+            picked.append(s[2:].strip() if s.startswith("- ") else s)
+    return picked[:4]
+
+
+def _extract_watchlist_preview(content: str, limit: int) -> list[str]:
+    lines = _extract_markdown_section(content, "处于起跳板速览")
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        s = raw.strip()
+        if not s.startswith("- "):
+            continue
+        payload = s[2:].strip()
+        if not payload or payload == "无" or payload in seen:
+            continue
+        seen.add(payload)
+        items.append(payload)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _collect_camp_counts(content: str) -> tuple[int, int, int]:
+    """按三阵营统计去重后的股票代码数量。"""
+    buckets: dict[str, set[str]] = {
+        "invalidated": set(),
+        "building": set(),
+        "springboard": set(),
+    }
+    active_bucket: str | None = None
+    for raw in str(content or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if "逻辑破产" in line:
+            active_bucket = "invalidated"
+            continue
+        if "储备营地" in line:
+            active_bucket = "building"
+            continue
+        if "处于起跳板" in line:
+            active_bucket = "springboard"
+            continue
+        if line.startswith("## "):
+            active_bucket = None
+            continue
+        if not active_bucket:
+            continue
+        for code in re.findall(r"\b\d{6}\b", line):
+            buckets[active_bucket].add(code)
+    return (
+        len(buckets["invalidated"]),
+        len(buckets["building"]),
+        len(buckets["springboard"]),
+    )
+
+
 def _to_compliance_copy(content: str) -> str:
     """
-    在不改变原研报内容的前提下，生成一份可对外传播的合规版：
-    - 保留研究信息；
-    - 弱化具体交易执行语句（Plan A / Plan B）。
+    生成一份可对外传播的 B 版合规简报：
+    - 不复刻完整长文；
+    - 仅保留关键统计 + 少量观察名单 + 合规声明。
     """
-    src_lines = str(content or "").splitlines()
-    out_lines: list[str] = []
-    replaced_plan_a = False
-    replaced_plan_b = False
+    text = str(content or "")
+    invalidated_n, building_n, springboard_n = _collect_camp_counts(text)
+    market_note = _extract_market_temperature(text)
+    rag_digest = _extract_rag_digest(text)
+    watchlist = _extract_watchlist_preview(text, STEP3_COMPLIANCE_WATCHLIST_MAX)
 
-    for line in src_lines:
-        if re.match(r"^\s*\*?\s*Plan\s*A\b", line, flags=re.IGNORECASE):
-            out_lines.append("- 观察要点（合规版）：关注量价结构是否延续，不构成交易指令。")
-            replaced_plan_a = True
-            continue
-        if re.match(r"^\s*\*?\s*Plan\s*B\b", line, flags=re.IGNORECASE):
-            out_lines.append("- 风险边界（合规版）：若结构出现破坏信号，应重新评估。")
-            replaced_plan_b = True
-            continue
-        out_lines.append(line)
+    out_lines: list[str] = [
+        "## 📌 B版合规简报（精简）",
+        f"- 日期: {date.today().strftime('%Y-%m-%d')}",
+        "- 定位: 仅用于市场研究与投资者教育，不构成个股推荐或交易指令。",
+        "- 详细技术细节与完整论证请参考 A 版内部报告。",
+        (
+            f"- 三阵营统计: 逻辑破产 {invalidated_n} | "
+            f"储备营地 {building_n} | 起跳板观察 {springboard_n}"
+        ),
+    ]
+    if market_note:
+        out_lines.append(f"- 市场观察: {market_note}")
+    if rag_digest:
+        out_lines.append(f"- 防雷摘要: {'；'.join(rag_digest)}")
 
-    if not replaced_plan_a and not replaced_plan_b:
-        out_lines.append("")
-        out_lines.append("> 注：本合规版未检测到 Plan A / Plan B 执行语句。")
+    out_lines.append("")
+    out_lines.append(f"## 👀 起跳板观察名单（最多{STEP3_COMPLIANCE_WATCHLIST_MAX}只）")
+    if watchlist:
+        for item in watchlist:
+            out_lines.append(f"- {item}")
+    else:
+        out_lines.append("- 无")
 
     out_lines.extend(
         [
             "",
-            "---",
+            "## 🧾 A/B/C 判定口径（简）",
+            "- A：出现缩量测试/拒绝下跌，说明抛压在收敛。",
+            "- B：出现放量突破并站稳关键位，说明需求占优。",
+            "- C：关键支撑位多次测试有效，说明结构未破坏。",
             "",
             "## ⚖️ 合规声明",
-            "- 本内容仅用于市场研究与投资者教育，不构成个股推荐、买卖指令或收益承诺。",
+            "- 本文不含买卖点、仓位建议、收益承诺及代客操作安排。",
             "- 不提供代客理财、代客下单、收益分成等服务。",
             "- 市场有风险，投资决策请独立判断并自行承担风险。",
         ]
@@ -1020,7 +1143,7 @@ def run(
                 return (False, "feishu_failed", report)
             if STEP3_SEND_COMPLIANCE_COPY:
                 compliance_title = f"📄 批量研报 B版（合规版） {date.today().strftime('%Y-%m-%d')}"
-                compliance_content = "【B版完整报告】\n\n" + _to_compliance_copy(content)
+                compliance_content = "【B版简版报告】\n\n" + _to_compliance_copy(content)
                 if not _notify_all(compliance_title, compliance_content):
                     print("[step3] 合规版飞书推送失败（原文已发送）")
         return (True, "ok", report)
@@ -1267,7 +1390,7 @@ def run(
             return (False, "feishu_failed", report)
         if STEP3_SEND_COMPLIANCE_COPY:
             compliance_title = f"📄 批量研报 B版（合规版） {date.today().strftime('%Y-%m-%d')}"
-            compliance_content = "【B版完整报告】\n\n" + _to_compliance_copy(content)
+            compliance_content = "【B版简版报告】\n\n" + _to_compliance_copy(content)
             if not _notify_all(compliance_title, compliance_content):
                 print("[step3] 合规版飞书推送失败（原文已发送）")
     print(
