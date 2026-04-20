@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -14,19 +16,50 @@ SESSION_FILE = SESSION_DIR / "session.json"
 
 from core.constants import SUPABASE_ANON_URL as _SUPABASE_URL, SUPABASE_ANON_KEY as _SUPABASE_KEY
 
+_DIR_MODE = 0o700   # rwx------
+_FILE_MODE = 0o600  # rw-------
+
+
+def _ensure_dir() -> None:
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        SESSION_DIR.chmod(_DIR_MODE)
+    except OSError:
+        pass
+
+
+def _write_secret(path: Path, content: str) -> None:
+    """写入敏感文件并设置 600 权限。"""
+    _ensure_dir()
+    # 先写入再设权限；使用 os.open 避免窗口期
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _FILE_MODE)
+    try:
+        os.write(fd, content.encode("utf-8"))
+    finally:
+        os.close(fd)
+
 
 # ---------------------------------------------------------------------------
 # Session 文件读写
 # ---------------------------------------------------------------------------
 
 def _save_session(data: dict[str, Any]) -> None:
-    SESSION_DIR.mkdir(parents=True, exist_ok=True)
-    SESSION_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    _write_secret(SESSION_FILE, json.dumps(data, ensure_ascii=False))
+
+
+def _fix_perms(path: Path) -> None:
+    """修正已有文件的权限（兼容旧版本生成的 644 文件）。"""
+    try:
+        if path.exists() and stat.S_IMODE(path.stat().st_mode) != _FILE_MODE:
+            path.chmod(_FILE_MODE)
+    except OSError:
+        pass
 
 
 def _load_session() -> dict[str, Any] | None:
     if not SESSION_FILE.exists():
         return None
+    _fix_perms(SESSION_FILE)
     try:
         return json.loads(SESSION_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
@@ -125,6 +158,7 @@ def _load_config() -> dict[str, Any]:
             pass
     if not CONFIG_FILE.exists():
         return {}
+    _fix_perms(CONFIG_FILE)
     try:
         return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
@@ -132,10 +166,7 @@ def _load_config() -> dict[str, Any]:
 
 
 def _save_config(data: dict[str, Any]) -> None:
-    SESSION_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8",
-    )
+    _write_secret(CONFIG_FILE, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def save_model_config(config: dict[str, Any]) -> None:
