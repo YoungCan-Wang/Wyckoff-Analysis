@@ -1,6 +1,6 @@
 [project]
 name = "youngcan-wyckoff-analysis"
-version = "0.1.17"
+version = "0.1.18"
 requires-python = ">=3.11"
 description = "Wyckoff method quantitative analysis system for A-shares"
 readme = "README.md"
@@ -30,6 +30,7 @@ dependencies = [
     "pillow>=10.0.0",
     "rich>=13.0.0",
     "prompt-toolkit>=3.0.0",
+    "textual>=0.50.0",
     "anthropic>=0.30.0",
     "openai>=1.30.0",
 ]

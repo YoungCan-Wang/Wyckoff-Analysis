@@ -3,7 +3,7 @@
 威科夫终端读盘室 — 入口。
 
 用法:
-    wyckoff                # 直接启动，在 TUI 内配置模型
+    wyckoff                # 启动 TUI
     wyckoff update         # 升级到最新版
 """
 from __future__ import annotations
@@ -105,16 +105,11 @@ def main():
         description="威科夫终端读盘室 — Wyckoff 量价分析 Agent",
     )
     parser.add_argument("-v", "--version", action="version", version=f"wyckoff {_get_version()}")
-    parser.add_argument("-q", "--quiet", action="store_true", help="静默模式，不显示 banner")
-    parser.add_argument("--no-color", action="store_true", help="禁用颜色输出")
     parser.add_argument(
         "command", nargs="?", default=None,
         help="子命令: update（升级到最新版）",
     )
     args = parser.parse_args()
-
-    if args.no_color:
-        os.environ["NO_COLOR"] = "1"
 
     if args.command == "update":
         _do_update()
@@ -123,10 +118,7 @@ def main():
         print("可用命令: wyckoff update")
         sys.exit(1)
 
-    # UI
-    from cli import ui
-
-    # --- Auth + Tools：统一 session state ---
+    # --- 初始化：Auth + Tools + Provider ---
     from cli.tools import ToolRegistry
     tools = ToolRegistry()
 
@@ -143,11 +135,9 @@ def main():
     except Exception:
         pass
 
-    # 加载系统提示词
     from core.prompts import CHAT_AGENT_SYSTEM_PROMPT
     system_prompt = CHAT_AGENT_SYSTEM_PROMPT
 
-    # Provider 状态
     state = {
         "provider": None,
         "provider_name": "",
@@ -156,7 +146,6 @@ def main():
         "base_url": "",
     }
 
-    # --- 恢复模型配置 ---
     try:
         from cli.auth import load_model_config
         saved_config = load_model_config()
@@ -174,159 +163,15 @@ def main():
     except Exception:
         pass
 
-    def _ensure_provider() -> bool:
-        if state["provider"] is not None:
-            return True
-        ui.print_info("尚未配置模型，请先运行 /model 设置。")
-        return False
-
-    def _do_login():
-        """执行登录流程，失败后引导重新输入。"""
-        from cli.auth import login
-        while True:
-            creds = ui.login_prompt()
-            if not creds:
-                return
-            email, password = creds
-            try:
-                session = login(email, password)
-                tools.state.update({
-                    "user_id": session["user_id"],
-                    "email": session["email"],
-                    "access_token": session.get("access_token", ""),
-                    "refresh_token": session.get("refresh_token", ""),
-                })
-                ui.print_info(f"✓ 登录成功 ({session['email']})")
-                return
-            except Exception as e:
-                err_msg = str(e)
-                if "Invalid login" in err_msg or "invalid" in err_msg.lower():
-                    ui.print_error("邮箱或密码错误，请重新输入。")
-                else:
-                    ui.print_error(f"登录失败: {err_msg}")
-                    return
-
-    def _do_logout():
-        """执行登出。"""
-        from cli.auth import logout
-        logout()
-        tools.state.update({
-            "user_id": "",
-            "email": "",
-            "access_token": "",
-            "refresh_token": "",
-        })
-        ui.print_info("已退出登录。")
-
-    # Banner
-    if not args.quiet:
-        model_hint = f"{state['provider_name']}:{state['model']}" if state["provider"] else ""
-        ui.print_banner(email=tools.state.get("email", ""), model=model_hint)
-
-    # 对话历史 & 累计 token 统计
-    messages: list[dict] = []
-    session_tokens = {"input": 0, "output": 0, "rounds": 0}
-
-    # REPL
-    while True:
-        user_input = ui.get_input()
-
-        if not user_input:
-            continue
-
-        if user_input.startswith("/"):
-            cmd = user_input.lower().split()[0]
-            if cmd in ("/quit", "/exit", "/q"):
-                ui.print_info("再见。")
-                break
-            elif cmd == "/clear":
-                os.system("clear" if os.name != "nt" else "cls")
-                model_hint = f"{state['provider_name']}:{state['model']}" if state["provider"] else ""
-                ui.print_banner(email=tools.state.get("email", ""), model=model_hint)
-            elif cmd == "/new":
-                messages.clear()
-                ui.print_info("新对话已开始。")
-                continue
-            elif cmd == "/help":
-                ui.print_help()
-                continue
-            elif cmd == "/login":
-                _do_login()
-                continue
-            elif cmd == "/logout":
-                _do_logout()
-                continue
-            elif cmd == "/token":
-                ui.print_token_summary(session_tokens, state.get("model", ""))
-                continue
-            elif cmd == "/model":
-                result = ui.configure_model(state)
-                if result:
-                    provider, err = _create_provider(
-                        result["provider_name"], result["api_key"],
-                        result["model"], result["base_url"],
-                    )
-                    if err:
-                        ui.print_error(err)
-                    else:
-                        state.update(result)
-                        state["provider"] = provider
-                        ui.print_info(f"已切换到: {provider.name}")
-                        # 持久化模型配置
-                        from cli.auth import save_model_config
-                        save_model_config({
-                            "provider_name": result["provider_name"],
-                            "api_key": result["api_key"],
-                            "model": result["model"],
-                            "base_url": result["base_url"],
-                        })
-                continue
-            else:
-                ui.print_error(f"未知命令: {user_input}，输入 /help 查看可用命令。")
-                continue
-
-        if not _ensure_provider():
-            continue
-
-        messages.append({"role": "user", "content": user_input})
-
-        def on_tool_call(name, call_args):
-            ui.print_tool_call(name, tools.display_name(name), call_args)
-
-        def on_tool_result(name, result):
-            ui.print_tool_result(name, tools.display_name(name), result)
-
-        try:
-            from cli.agent import run
-            result = run(
-                provider=state["provider"],
-                tools=tools,
-                messages=messages,
-                system_prompt=system_prompt,
-                on_tool_call=on_tool_call,
-                on_tool_result=on_tool_result,
-                console=ui.console,
-            )
-            if not result.get("streamed"):
-                ui.print_response(result["text"])
-            else:
-                ui.console.print()  # 流式后补一个空行
-            usage = result.get("usage", {})
-            inp, out = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
-            session_tokens["input"] += inp
-            session_tokens["output"] += out
-            session_tokens["rounds"] += 1
-            ui.print_usage(inp, out, result.get("elapsed", 0), state.get("model", ""))
-        except KeyboardInterrupt:
-            ui.print_info("\n已中断。")
-            if messages and messages[-1]["role"] == "user":
-                messages.pop()
-        except Exception as e:
-            ui.print_error(f"Agent 错误: {e}")
-            # 回滚本轮消息（包括 user + assistant/tool）
-            while messages and messages[-1].get("role") != "user":
-                messages.pop()
-            messages.pop() if messages else None
+    # --- 启动 TUI ---
+    from cli.tui import WyckoffTUI
+    app = WyckoffTUI(
+        provider=state["provider"],
+        tools=tools,
+        state=state,
+        system_prompt=system_prompt,
+    )
+    app.run()
 
 
 if __name__ == "__main__":
