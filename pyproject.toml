@@ -1,6 +1,6 @@
 [project]
 name = "youngcan-wyckoff-analysis"
-version = "0.1.43"
+version = "0.2.0"
 requires-python = ">=3.11"
 description = "Wyckoff method quantitative analysis system for A-shares"
 readme = "README.md"
