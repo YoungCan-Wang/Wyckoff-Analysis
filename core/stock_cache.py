@@ -15,7 +15,7 @@ from integrations.supabase_base import create_admin_client as _create_admin_clie
 _ADMIN_CLIENT: Client | None = None
 _CLI_CLIENT: Client | None = None
 _CLI_TOKENS: tuple[str, str] = ("", "")
-_STOCK_HIST_RETENTION_DAYS = 400
+_STOCK_HIST_RETENTION_DAYS = 320
 
 
 def _parse_iso_datetime(value: str) -> datetime:

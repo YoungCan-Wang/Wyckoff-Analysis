@@ -15,12 +15,11 @@ from integrations.supabase_portfolio import (
     compute_portfolio_state_signature,
     extract_state_signature_from_run_id,
 )
+from core.constants import TABLE_PORTFOLIOS, TABLE_PORTFOLIO_POSITIONS, TABLE_TRADE_ORDERS
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 PORTFOLIO_SCOPE = "USER_LIVE"
-TABLE_PORTFOLIOS = "portfolios"
-TABLE_POSITIONS = "portfolio_positions"
-TABLE_TRADE_ORDERS = "trade_orders"
+TABLE_POSITIONS = TABLE_PORTFOLIO_POSITIONS
 EDIT_BLACKOUT_WINDOWS = (
     ((7, 50), (8, 0), "盘前风控窗口"),
     ((18, 20), (18, 30), "晚间再平衡窗口"),

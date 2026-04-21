@@ -1,4 +1,4 @@
-name: Stock Hist Cache Maintenance
+name: DB Maintenance
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: stock-hist-cache-maintenance-${{ github.ref }}
+  group: db-maintenance-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,6 +34,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Run maintenance
+      - name: Run DB maintenance
         run: |
-          python -u scripts/stock_hist_cache_maintenance.py --ttl-days 400
+          python -u scripts/db_maintenance.py
