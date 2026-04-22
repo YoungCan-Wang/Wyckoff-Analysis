@@ -136,7 +136,7 @@ def _scan_one_symbol(
     try:
         df_1m = client.get_intraday(symbol, period="1m", count=5000)
     except Exception as e:
-        candidate.fetch_error = f"TickFlow拉取失败: {e}"
+        candidate.fetch_error = f"TickFlow分钟数据拉取失败: {e}（购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4）"
         candidate.rule_reasons = [candidate.fetch_error]
         return candidate
     if df_1m is None or df_1m.empty:
@@ -461,7 +461,7 @@ def main() -> int:
     )
 
     if not tickflow_api_key:
-        _log("缺少 TICKFLOW_API_KEY，任务失败", logs_path)
+        _log("缺少 TICKFLOW_API_KEY，尾盘买入扫描需要分钟级数据，请购买 TickFlow: https://tickflow.org/auth/register?ref=5N4NKTCPL4", logs_path)
         return 1
     if not feishu_webhook or not tg_bot_token or not tg_chat_id:
         _log("双通道推送未完整配置（需 FEISHU_WEBHOOK_URL + TG_BOT_TOKEN + TG_CHAT_ID）", logs_path)

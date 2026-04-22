@@ -300,12 +300,77 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
             except Exception as e:
                 results.append({"code": code, "name": name, "error": str(e)})
 
-        return {
+        # ── 盘中信号增强（需要 TickFlow） ──
+        intraday_signals: list[dict] = []
+        tickflow_hint = ""
+        tickflow_key = _get_credential(tool_context, "tickflow_api_key", "TICKFLOW_API_KEY")
+        if tickflow_key:
+            try:
+                from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
+                from core.intraday_sell_signals import PositionSnapshot, scan_position
+
+                tf = TickFlowClient(api_key=tickflow_key)
+                codes = [p["code"] for p in state["positions"]]
+                quotes = tf.get_quotes(codes)
+                for pos in state["positions"]:
+                    sym = normalize_cn_symbol(pos["code"])
+                    q = quotes.get(sym)
+                    if not q:
+                        continue
+                    snap = PositionSnapshot(
+                        code=pos["code"],
+                        name=pos.get("name", pos["code"]),
+                        cost=float(pos.get("cost", 0)),
+                        shares=int(pos.get("shares", 0)),
+                        stop_loss=pos.get("stop_loss"),
+                        current_price=float(q.get("close", 0) or q.get("last", 0) or 0),
+                        open_price=float(q.get("open", 0) or 0),
+                        prev_close=float(q.get("prev_close", 0) or q.get("preClose", 0) or 0),
+                    )
+                    # 获取分钟K线
+                    df_1m = df_5m = None
+                    yday_vol = 0.0
+                    try:
+                        df_d = tf.get_klines(sym, period="1d", count=2, intraday=False)
+                        if df_d is not None and len(df_d) >= 2:
+                            yday_vol = float(df_d.iloc[-2]["volume"])
+                    except Exception:
+                        pass
+                    try:
+                        df_1m = tf.get_intraday(sym, period="1m", count=500)
+                    except Exception:
+                        pass
+                    try:
+                        df_5m = tf.get_intraday(sym, period="5m", count=500)
+                    except Exception:
+                        pass
+                    from datetime import datetime as _dt
+                    from zoneinfo import ZoneInfo as _ZI
+                    check_gap = _dt.now(_ZI("Asia/Shanghai")).hour < 12
+                    sigs = scan_position(snap, df_1m, df_5m, yday_vol, check_gap=check_gap)
+                    for s in sigs:
+                        intraday_signals.append({
+                            "code": s.code, "name": s.name,
+                            "signal_type": s.signal_type,
+                            "severity": s.severity,
+                            "detail": s.detail,
+                        })
+            except Exception as e:
+                logger.warning("盘中信号增强失败: %s", e)
+        else:
+            tickflow_hint = "盘中实时信号（止损穿破/跳空低开/放量滞涨/VWAP破位）需要 TickFlow 数据源，购买链接: https://tickflow.org/auth/register?ref=5N4NKTCPL4"
+
+        result = {
             "portfolio_id": portfolio_id,
             "free_cash": state.get("free_cash", 0),
             "position_count": len(state["positions"]),
             "diagnostics": results,
         }
+        if intraday_signals:
+            result["intraday_signals"] = intraday_signals
+        if tickflow_hint:
+            result["tickflow_hint"] = tickflow_hint
+        return result
     except Exception as e:
         logger.exception("diagnose_portfolio error")
         return {"error": str(e)}

@@ -806,7 +806,7 @@ def fetch_stock_hist(
         failed_details.append("tickflow=disabled_by_env")
     elif not os.getenv("TICKFLOW_API_KEY", "").strip():
         failed_sources.append("tickflow(unconfigured)")
-        failed_details.append("tickflow=api_key_missing")
+        failed_details.append("tickflow=api_key_missing(购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4)")
     else:
         try:
             return _tag_source(
