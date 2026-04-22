@@ -88,6 +88,16 @@ wyckoff
 
 升级：`wyckoff update`
 
+### CLI 效果
+
+| 启动界面 | 持仓查询 |
+|:---:|:---:|
+| <img src="attach/cli-home.png" width="450" /> | <img src="attach/cli-running.png" width="450" /> |
+
+| 诊断报告 | 操作指令 |
+|:---:|:---:|
+| <img src="attach/cli-analysis.png" width="450" /> | <img src="attach/cli-result.png" width="450" /> |
+
 ### Web
 
 ```bash
@@ -100,7 +110,9 @@ streamlit run streamlit_app.py
 
 在线体验：**[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
 
-项目主页：**[youngcan-wang.github.io/wyckoff-homepage](https://youngcan-wang.github.io/wyckoff-homepage/)**
+| 读盘室 | 数据导出 |
+|:---:|:---:|
+| <img src="attach/web-chat.png" width="450" /> | <img src="attach/web-export.png" width="450" /> |
 
 ## 10 个工具
 
