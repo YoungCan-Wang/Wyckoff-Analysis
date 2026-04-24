@@ -109,9 +109,13 @@ wyckoff
 wyckoff dashboard
 ```
 
-一条命令启动本地 HTTP 面板（默认端口 8765），自动打开浏览器。无需额外依赖。
+一条命令启动本地 HTTP 面板（默认端口 8765），自动打开浏览器。全部数据存储在本地 SQLite，无需联网，安全可信。
 
 功能页面：AI 推荐、信号池、持仓、Agent 记忆、配置、对话日志、Agent 日志、同步状态。支持暗色/亮色主题切换，中英双语。
+
+| 数据总览 | 对话日志 |
+|:---:|:---:|
+| <img src="attach/dashboard-overview.png" width="450" /> | <img src="attach/dashboard-chatlog.png" width="450" /> |
 
 ### Web
 
