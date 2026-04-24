@@ -2,12 +2,12 @@ name: Tail Buy
 
 on:
   schedule:
-    # UTC 06:00 Mon-Fri = 北京时间 14:00
-    - cron: "0 6 * * 1-5"
+    # UTC 05:50 Mon-Fri = 北京时间 13:50
+    - cron: "50 5 * * 1-5"
   workflow_dispatch:
 
 concurrency:
-  group: tail-buy-1400-${{ github.ref }}
+  group: tail-buy-1350-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -64,14 +64,14 @@ jobs:
           python -u scripts/tail_buy_intraday_job.py \
             --max-llm-symbols "${TAIL_BUY_LLM_TOP_N}" \
             --deadline-minute "${TAIL_BUY_TASK_TIMEOUT_MIN}" \
-            --logs "${{ github.workspace }}/logs/tail_buy_1400.log" \
-            2>&1 | tee -a "${{ github.workspace }}/logs/tail_buy_1400.console.log"
+            --logs "${{ github.workspace }}/logs/tail_buy_1350.log" \
+            2>&1 | tee -a "${{ github.workspace }}/logs/tail_buy_1350.console.log"
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tail-buy-1400-logs-${{ github.run_number }}
+          name: tail-buy-1350-logs-${{ github.run_number }}
           path: logs/*
           retention-days: 7
           if-no-files-found: warn
