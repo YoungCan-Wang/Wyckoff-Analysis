@@ -206,7 +206,10 @@ def run(
                 expectation.reason if expectation else "",
             )
             if text_buf:
-                messages.append({"role": "assistant", "content": text_buf})
+                _retry_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
+                if thinking_buf:
+                    _retry_msg["reasoning_content"] = thinking_buf
+                messages.append(_retry_msg)
             messages.append({"role": "user", "content": retry_prompt})
             if console:
                 console.print("  [yellow]⚠ 检测到模型未执行必需工具，已自动要求继续执行[/yellow]")
@@ -216,7 +219,10 @@ def run(
         if missing_required_tool(expectation, used_tools_this_turn):
             warning = build_retry_exhausted_warning(expectation, incomplete_tool_retries)
             text_buf = f"{warning}\n\n{text_buf}".strip()
-        messages.append({"role": "assistant", "content": text_buf})
+        _final_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
+        if thinking_buf:
+            _final_msg["reasoning_content"] = thinking_buf
+        messages.append(_final_msg)
         elapsed = time.monotonic() - t_start
         return {
             "text": text_buf,

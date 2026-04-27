@@ -1199,7 +1199,10 @@ class WyckoffTUI(App):
                     ))
                     _scroll()
                     if text_buf:
-                        self._messages.append({"role": "assistant", "content": text_buf})
+                        _retry_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
+                        if thinking_buf:
+                            _retry_msg["reasoning_content"] = thinking_buf
+                        self._messages.append(_retry_msg)
                     self._messages.append({"role": "user", "content": retry_prompt})
                     continue
 
@@ -1207,7 +1210,10 @@ class WyckoffTUI(App):
                 if missing_required_tool(expectation, used_tools_this_turn):
                     warning = build_retry_exhausted_warning(expectation, incomplete_tool_retries)
                     text_buf = f"{warning}\n\n{text_buf}".strip()
-                self._messages.append({"role": "assistant", "content": text_buf})
+                _final_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
+                if thinking_buf:
+                    _final_msg["reasoning_content"] = thinking_buf
+                self._messages.append(_final_msg)
                 if text_buf:
                     if not _streaming_started:
                         _write(Text.from_markup("  [dim]───[/dim]"))
