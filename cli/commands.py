@@ -11,6 +11,7 @@ class WyckoffCommands(Provider):
     async def search(self, query: str) -> Hits:
         commands = [
             ("切换模型", "switch_model", "选择当前使用的模型"),
+            ("恢复对话", "resume_session", "恢复历史会话"),
             ("新对话", "new_chat", "清空消息开始新对话"),
             ("清屏", "clear_chat", "清空聊天记录"),
             ("模型列表", "list_models", "查看已配置的模型"),
@@ -36,6 +37,7 @@ class WyckoffCommands(Provider):
         """未输入时显示全部命令。"""
         commands = [
             ("切换模型", "switch_model", "/model"),
+            ("恢复对话", "resume_session", "/resume"),
             ("新对话", "new_chat", "Ctrl+N"),
             ("清屏", "clear_chat", "Ctrl+L"),
             ("模型列表", "list_models", "/model list"),

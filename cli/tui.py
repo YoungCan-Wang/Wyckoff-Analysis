@@ -574,6 +574,7 @@ class WyckoffTUI(App):
                 "  /login   — 登录\n"
                 "  /logout  — 退出登录\n"
                 "  /token   — Token 用量\n"
+                "  /resume  — 恢复历史对话\n"
                 "  /new     — 新对话 (Ctrl+N)\n"
                 "  /clear   — 清屏 (Ctrl+L)\n"
                 "  /quit    — 退出 (Ctrl+Q)\n"
@@ -624,6 +625,12 @@ class WyckoffTUI(App):
                 log.write(Text.from_markup(
                     "[dim]/model 用法: /model (切换) | /model list | /model add | /model rm <id> | /model default <id>[/dim]"
                 ))
+        elif cmd == "/resume":
+            parts = raw.strip().split(maxsplit=1)
+            if len(parts) > 1:
+                self._resume_session(parts[1].strip())
+            else:
+                self._resume_session_selector()
         else:
             log.write(Text.from_markup(f"[red]未知命令: {raw}[/red]，/help 查看"))
 
@@ -770,6 +777,9 @@ class WyckoffTUI(App):
 
         if callback_id == "model_switch":
             self._set_default_model(value)
+
+        elif callback_id == "session_resume":
+            self._resume_session(value)
 
         elif callback_id == "model_provider":
             self._input_buf["provider"] = value
@@ -1331,6 +1341,102 @@ class WyckoffTUI(App):
 
     def action_clear_chat(self) -> None:
         self.query_one("#chat-log", ChatLog).clear()
+
+    def action_resume_session(self) -> None:
+        self._resume_session_selector()
+
+    def _resume_session_selector(self) -> None:
+        """弹出选择器，选择要恢复的历史会话。"""
+        from integrations.local_db import list_chat_sessions, get_session_preview
+        log = self.query_one("#chat-log", ChatLog)
+        sessions = list_chat_sessions(limit=20)
+        sessions = [s for s in sessions if s["session_id"] != self._session_id]
+        if not sessions:
+            log.write(Text.from_markup("[dim]没有可恢复的历史会话[/dim]"))
+            return
+        options = []
+        for s in sessions:
+            preview = get_session_preview(s["session_id"])
+            started = (s["started_at"] or "?")[:16]
+            n = s["msg_count"]
+            label = f"{started}  ({n}条)  {preview}"
+            options.append((s["session_id"], label))
+        self._show_selector(options, "session_resume")
+
+    def _resume_session(self, session_id: str) -> None:
+        """恢复指定会话，加载历史消息到 self._messages。"""
+        from integrations.local_db import load_chat_logs, list_chat_sessions
+        log = self.query_one("#chat-log", ChatLog)
+
+        if session_id.isdigit():
+            idx = int(session_id)
+            sessions = list_chat_sessions(limit=20)
+            sessions = [s for s in sessions if s["session_id"] != self._session_id]
+            if idx < 1 or idx > len(sessions):
+                log.write(Text.from_markup(f"[red]无效序号: {idx} (共 {len(sessions)} 个历史会话)[/red]"))
+                return
+            session_id = sessions[idx - 1]["session_id"]
+
+        rows = load_chat_logs(session_id=session_id)
+        if not rows:
+            log.write(Text.from_markup(f"[red]未找到会话: {session_id}[/red]"))
+            return
+
+        # 保存当前会话记忆
+        if self._messages and self._provider:
+            try:
+                from cli.memory import save_session_summary
+                import threading
+                threading.Thread(
+                    target=save_session_summary,
+                    args=(list(self._messages), self._provider),
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
+
+        # 重置状态
+        self._messages.clear()
+        self._queue.clear()
+        self._session_tokens = {"input": 0, "output": 0, "rounds": 0}
+        self._session_id = session_id
+        log.clear()
+
+        log.write(Text.from_markup(
+            f"[green]已恢复会话[/green] [dim]{session_id} · {len(rows)} 条记录[/dim]\n"
+        ))
+
+        for row in rows:
+            role = row["role"]
+            content = row["content"] or ""
+
+            if role == "error":
+                if row.get("error"):
+                    log.write(Text.from_markup(f"  [dim red]✗ {str(row['error'])[:80]}[/dim red]"))
+                continue
+
+            if role == "user":
+                self._messages.append({"role": "user", "content": content})
+                preview = content if len(content) <= 120 else content[:120] + "…"
+                log.write(Text.from_markup(f"[bold cyan]❯[/bold cyan] {preview}"))
+
+            elif role == "assistant":
+                self._messages.append({"role": "assistant", "content": content})
+                tc = row.get("tool_calls", "")
+                if tc:
+                    try:
+                        calls = json.loads(tc)
+                        names = ", ".join(c.get("name", "?") for c in calls)
+                        log.write(Text.from_markup(f"  [dim green]✓ {names}[/dim green]"))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if content:
+                    preview = content if len(content) <= 200 else content[:200] + "…"
+                    log.write(Text.from_markup(f"  [dim]{preview}[/dim]"))
+
+        log.write(Text.from_markup("\n[dim]───── 历史消息结束，继续对话 ─────[/dim]\n"))
+        log.scroll_end(animate=False)
+        self._update_status()
 
     def action_new_chat(self) -> None:
         # 保存会话记忆

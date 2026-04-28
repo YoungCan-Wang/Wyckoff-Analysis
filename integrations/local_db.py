@@ -517,6 +517,21 @@ def load_chat_logs(*, session_id: str | None = None, limit: int = 200) -> list[d
     return [dict(r) for r in cur.fetchall()]
 
 
+def get_session_preview(session_id: str) -> str:
+    """取会话首条用户消息作为摘要预览。"""
+    conn = get_db()
+    cur = conn.execute(
+        "SELECT content FROM chat_log WHERE session_id=? AND role='user' "
+        "ORDER BY created_at ASC LIMIT 1",
+        (session_id,),
+    )
+    row = cur.fetchone()
+    if row:
+        t = (row["content"] or "").strip().replace("\n", " ")
+        return t[:60] + ("…" if len(t) > 60 else "")
+    return "(空会话)"
+
+
 # ---------------------------------------------------------------------------
 # Tail-buy history
 # ---------------------------------------------------------------------------
