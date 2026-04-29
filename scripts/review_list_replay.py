@@ -212,7 +212,6 @@ def main() -> int:
 
     # 2. 回放前一日漏斗（使用前一日数据）
     print(f"[review] 回放前一日 ({yesterday}) 漏斗...")
-    import os
     original_end_day = os.getenv("END_CALENDAR_DAY", "")
     os.environ["END_CALENDAR_DAY"] = yesterday.strftime("%Y-%m-%d")
     

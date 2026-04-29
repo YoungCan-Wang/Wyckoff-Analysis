@@ -638,6 +638,13 @@ def run(
         )
         selected_for_ai = trend_selected + accum_selected
 
+    if score_map and cfg.min_funnel_score > 0:
+        before = len(selected_for_ai)
+        selected_for_ai = [c for c in selected_for_ai if score_map.get(c, 0.0) >= cfg.min_funnel_score]
+        dropped = before - len(selected_for_ai)
+        if dropped:
+            print(f"[funnel] min_funnel_score={cfg.min_funnel_score} 过滤掉 {dropped} 只低质量候选")
+
     if use_legacy_card and use_legacy_selection:
         bench_line = "未知"
         pv_line = "暂无大盘量价推演"

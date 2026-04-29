@@ -149,19 +149,24 @@ class FunnelConfig:
     lps_lookback: int = 3
     lps_ma: int = 20
     lps_ma_tolerance: float = 0.02
-    lps_vol_dry_ratio: float = 0.65  # 放宽缩量阈值激活 Accum 轨（原 0.48 样内过拟合，几乎无 LPS 触发）
+    lps_vol_dry_ratio: float = 0.50
     lps_vol_ref_window: int = 60
+    lps_ma_rising_window: int = 5
 
     # Layer 4 - Effort vs Result
     enable_evr_trigger: bool = True
     evr_lookback: int = 3
-    evr_vol_ratio: float = 1.3
-    evr_min_turnover: float = 1.0  # 保守过滤：剔除死水微量放大，不对大票一刀切
+    evr_vol_ratio: float = 1.5
+    evr_min_turnover: float = 1.5
     evr_vol_window: int = 20
     evr_max_drop: float = 2.0
+    evr_max_rise: float = 2.0
     evr_max_bias_200: float = 40.0
     evr_confirm_days: int = 1
     evr_confirm_allow_break_pct: float = 0.0
+
+    # Funnel score
+    min_funnel_score: float = 0.15
 
     # Layer 4 - SOS / JAC (Sign of Strength / Jump Across the Creek)
     sos_pct_min: float = 6.0  # 提高门槛过滤弱突破（原 4.5 追高触发止损率极高）
@@ -1043,6 +1048,12 @@ def _detect_lps(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     if last_close < last_ma:
         return None
 
+    rising_offset = cfg.lps_lookback + cfg.lps_ma_rising_window
+    if len(ma) > rising_offset:
+        ma_prev = ma.iloc[-rising_offset]
+        if pd.isna(ma_prev) or last_ma <= float(ma_prev):
+            return None
+
     low_near_ma = recent["low"].min()
     if abs(low_near_ma - last_ma) / last_ma > cfg.lps_ma_tolerance:
         return None
@@ -1105,7 +1116,7 @@ def _detect_evr(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
             continue
 
         # 结果约束：剔除大阴线/大阳线，保留“努力无结果”的滞涨/抗跌
-        if float(day_pct) < -cfg.evr_max_drop or float(day_pct) > 3.0:
+        if float(day_pct) < -cfg.evr_max_drop or float(day_pct) > cfg.evr_max_rise:
             continue
 
         # 换手率过滤：剔除全天死水里的相对放量假象，但阈值保持保守。
