@@ -610,6 +610,9 @@ def run(
     markup_symbols = metrics.get("markup_symbols", []) or []
     accum_stage_map = metrics.get("accum_stage_map", {}) or {}
     exit_signals = metrics.get("exit_signals", {}) or {}
+    # L2 旁路观察池（由 run_funnel_job 汇总进 metrics）
+    l2_bypass_pool = metrics.get("l2_bypass_pool", []) or []
+    bypass_triggers = metrics.get("l2_bypass_triggers", {}) or {}
     sector_rotation = metrics.get("sector_rotation", {}) or {}
     sector_rotation_map = sector_rotation.get("state_map", {}) or {}
     # 策略：大盘水温驱动的双轨制（Top-Down 择时顺势策略）
