@@ -637,8 +637,11 @@ def screen_stocks(board: str = "all", tool_context: ToolContext = None) -> dict:
         # 保存并设置环境变量（调用后恢复）
         prev_mode = os.environ.get("FUNNEL_POOL_MODE")
         prev_board = os.environ.get("FUNNEL_POOL_BOARD")
+        prev_exec = os.environ.get("FUNNEL_EXECUTOR_MODE")
         os.environ["FUNNEL_POOL_MODE"] = "board"
         os.environ["FUNNEL_POOL_BOARD"] = board
+        # CLI 后台线程中 fork 子进程会触发 Python 3.13+ fds_to_keep 错误，强制用 thread
+        os.environ["FUNNEL_EXECUTOR_MODE"] = "thread"
 
         from core.funnel_pipeline import run_funnel
 
@@ -656,6 +659,10 @@ def screen_stocks(board: str = "all", tool_context: ToolContext = None) -> dict:
                 os.environ.pop("FUNNEL_POOL_BOARD", None)
             else:
                 os.environ["FUNNEL_POOL_BOARD"] = prev_board
+            if prev_exec is None:
+                os.environ.pop("FUNNEL_EXECUTOR_MODE", None)
+            else:
+                os.environ["FUNNEL_EXECUTOR_MODE"] = prev_exec
 
         metrics = details.get("metrics") or {}
         triggers = details.get("triggers") or {}
