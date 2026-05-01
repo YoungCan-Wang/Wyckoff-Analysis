@@ -2,7 +2,7 @@
 """Shared guardrails and constants for the agent loop."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 MAX_TOOL_ROUNDS = 15
@@ -17,6 +17,7 @@ class TurnExpectation:
 
     required_tool: str
     reason: str
+    required_args: dict[str, str] = field(default_factory=dict)
 
 
 _PORTFOLIO_VIEW_PHRASES = (
@@ -99,8 +100,8 @@ _PORTFOLIO_CONTEXT_MARKERS = (
 )
 
 _TOOL_CN_NAMES = {
-    "diagnose_portfolio": "持仓审判",
-    "get_portfolio": "查看持仓",
+    "portfolio": "持仓数据",
+    "analyze_stock": "个股分析",
 }
 
 
@@ -143,14 +144,16 @@ def resolve_turn_expectation(messages: list[dict[str, Any]]) -> TurnExpectation 
 
     if any(phrase in last_user for phrase in _PORTFOLIO_VIEW_PHRASES):
         return TurnExpectation(
-            required_tool="get_portfolio",
+            required_tool="portfolio",
             reason="持仓列表查询必须先拉真实持仓数据。",
+            required_args={"mode": "view"},
         )
 
     if any(phrase in last_user for phrase in _PORTFOLIO_DIAGNOSE_PHRASES):
         return TurnExpectation(
-            required_tool="diagnose_portfolio",
+            required_tool="portfolio",
             reason="持仓体检必须先调用持仓诊断工具。",
+            required_args={"mode": "diagnose"},
         )
 
     previous_context = _recent_context_text(messages[:-1], limit=4)
@@ -165,8 +168,9 @@ def resolve_turn_expectation(messages: list[dict[str, Any]]) -> TurnExpectation 
         and any(marker in previous_context for marker in _PORTFOLIO_CONTEXT_MARKERS)
     ):
         return TurnExpectation(
-            required_tool="diagnose_portfolio",
+            required_tool="portfolio",
             reason="上一轮上下文已经明确在讨论持仓，这一轮体检需要继续做持仓诊断。",
+            required_args={"mode": "diagnose"},
         )
 
     if (
@@ -178,17 +182,33 @@ def resolve_turn_expectation(messages: list[dict[str, Any]]) -> TurnExpectation 
         and any(marker in previous_context for marker in _PORTFOLIO_CONTEXT_MARKERS)
     ):
         return TurnExpectation(
-            required_tool="diagnose_portfolio",
+            required_tool="portfolio",
             reason="用户承接上一轮持仓体检/分析邀请，必须继续调用持仓诊断工具。",
+            required_args={"mode": "diagnose"},
         )
 
     return None
 
 
-def missing_required_tool(expectation: TurnExpectation | None, used_tools: Iterable[str]) -> bool:
+def missing_required_tool(
+    expectation: TurnExpectation | None,
+    used_tools: Iterable[str | tuple[str, dict]],
+) -> bool:
     if expectation is None:
         return False
-    return expectation.required_tool not in set(used_tools)
+    req_args = expectation.required_args
+    for entry in used_tools:
+        if isinstance(entry, tuple):
+            name, args = entry
+        else:
+            name, args = entry, {}
+        if name != expectation.required_tool:
+            continue
+        if not req_args:
+            return False
+        if all(args.get(k) == v for k, v in req_args.items()):
+            return False
+    return True
 
 
 def build_retry_user_message(expectation: TurnExpectation, assistant_text: str = "") -> str:
@@ -203,9 +223,14 @@ def build_retry_user_message(expectation: TurnExpectation, assistant_text: str =
             lead = "你刚才直接给了文本回答，但没有先拿真实数据。"
     else:
         lead = "这一轮没有返回有效工具调用。"
+    if expectation.required_args:
+        pairs = ", ".join(f'{k}="{v}"' for k, v in expectation.required_args.items())
+        call_hint = f"`{expectation.required_tool}({pairs})`"
+    else:
+        call_hint = f"`{expectation.required_tool}`"
     return (
         f"{lead}{expectation.reason}"
-        f" 现在必须先调用 `{expectation.required_tool}`（{tool_name}）拿到真实数据，"
+        f" 现在必须先调用 {call_hint}（{tool_name}）拿到真实数据，"
         "再继续回答。不要重复计划，直接执行第一步。"
     )
 

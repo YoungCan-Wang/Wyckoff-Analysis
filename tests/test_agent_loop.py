@@ -19,7 +19,7 @@ def test_resolve_turn_expectation_uses_portfolio_context_for_followup_checkup():
     expectation = resolve_turn_expectation(messages)
 
     assert expectation is not None
-    assert expectation.required_tool == "diagnose_portfolio"
+    assert expectation.required_tool == "portfolio"
 
 
 def test_resolve_turn_expectation_handles_affirmative_followup_after_portfolio_invite():
@@ -35,7 +35,7 @@ def test_resolve_turn_expectation_handles_affirmative_followup_after_portfolio_i
     expectation = resolve_turn_expectation(messages)
 
     assert expectation is not None
-    assert expectation.required_tool == "diagnose_portfolio"
+    assert expectation.required_tool == "portfolio"
 
 
 def test_resolve_turn_expectation_handles_portfolio_daily_trend_followup():
@@ -51,7 +51,7 @@ def test_resolve_turn_expectation_handles_portfolio_daily_trend_followup():
     expectation = resolve_turn_expectation(messages)
 
     assert expectation is not None
-    assert expectation.required_tool == "diagnose_portfolio"
+    assert expectation.required_tool == "portfolio"
 
 
 def test_resolve_turn_expectation_does_not_hijack_explicit_stock_after_portfolio_context():
@@ -72,19 +72,19 @@ def test_resolve_turn_expectation_does_not_hijack_explicit_stock_after_portfolio
 def test_agent_loop_retries_planning_only_portfolio_turn_until_tool_executes():
     def second_round(messages, tools, system_prompt):
         assert messages[-1]["role"] == "user"
-        assert "diagnose_portfolio" in messages[-1]["content"]
+        assert "portfolio" in messages[-1]["content"]
         assert "不要重复计划" in messages[-1]["content"]
         return [
             {
                 "type": "tool_calls",
-                "tool_calls": [{"id": "tc_diag", "name": "diagnose_portfolio", "args": {}}],
+                "tool_calls": [{"id": "tc_diag", "name": "portfolio", "args": {"mode": "diagnose"}}],
                 "text": "",
             },
             {"type": "usage", "input_tokens": 30, "output_tokens": 5},
         ]
 
     def third_round(messages, tools, system_prompt):
-        assert any(m.get("role") == "tool" and m.get("name") == "diagnose_portfolio" for m in messages)
+        assert any(m.get("role") == "tool" and m.get("name") == "portfolio" for m in messages)
         return [
             {"type": "text_delta", "text": "持仓体检已完成：金螳螂偏弱，苏州银行可继续观察。"},
             {"type": "usage", "input_tokens": 40, "output_tokens": 18},
@@ -100,7 +100,7 @@ def test_agent_loop_retries_planning_only_portfolio_turn_until_tool_executes():
             third_round,
         ],
         tool_results={
-            "diagnose_portfolio": {
+            "portfolio": {
                 "message": "mock portfolio diagnosis",
                 "positions": [{"code": "002081", "health": "WEAK"}],
             }
@@ -116,20 +116,20 @@ def test_agent_loop_retries_planning_only_portfolio_turn_until_tool_executes():
     )
 
     assert outcome["result"]["text"] == "持仓体检已完成：金螳螂偏弱，苏州银行可继续观察。"
-    assert [call["name"] for call in outcome["tool_calls"]] == ["diagnose_portfolio"]
+    assert [call["name"] for call in outcome["tool_calls"]] == ["portfolio"]
     assert len(outcome["provider_calls"]) == 3
     assert outcome["messages"][-1]["role"] == "assistant"
     assert "持仓体检已完成" in outcome["messages"][-1]["content"]
 
 
-def test_agent_loop_retries_hallucinated_portfolio_list_until_get_portfolio_runs():
+def test_agent_loop_retries_hallucinated_portfolio_list_until_portfolio_runs():
     def second_round(messages, tools, system_prompt):
         assert messages[-1]["role"] == "user"
-        assert "get_portfolio" in messages[-1]["content"]
+        assert "portfolio" in messages[-1]["content"]
         return [
             {
                 "type": "tool_calls",
-                "tool_calls": [{"id": "tc_pf", "name": "get_portfolio", "args": {}}],
+                "tool_calls": [{"id": "tc_pf", "name": "portfolio", "args": {"mode": "view"}}],
                 "text": "",
             },
             {"type": "usage", "input_tokens": 18, "output_tokens": 4},
@@ -147,13 +147,13 @@ def test_agent_loop_retries_hallucinated_portfolio_list_until_get_portfolio_runs
                 {"type": "usage", "input_tokens": 24, "output_tokens": 9},
             ],
         ],
-        tool_results={"get_portfolio": {"positions": [1, 2, 3, 4], "free_cash": 11600}},
+        tool_results={"portfolio": {"positions": [1, 2, 3, 4], "free_cash": 11600}},
     )
 
     outcome = harness.run_turn([{"role": "user", "content": "我的持仓有什么"}])
 
     assert outcome["result"]["text"] == "你当前有 4 只持仓，现金 1.16 万。"
-    assert [call["name"] for call in outcome["tool_calls"]] == ["get_portfolio"]
+    assert [call["name"] for call in outcome["tool_calls"]] == ["portfolio"]
 
 
 def test_agent_loop_does_not_retry_non_mandatory_plain_text_turn():
@@ -211,29 +211,29 @@ def test_agent_loop_warns_after_retry_budget_is_exhausted():
 class TestCheckDoomLoop:
     def test_no_trigger_below_threshold(self):
         recent: list[tuple[str, int]] = []
-        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
-        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        assert not check_doom_loop(recent, "analyze_stock", {"code": "000001"})
+        assert not check_doom_loop(recent, "analyze_stock", {"code": "000001"})
         assert len(recent) == 2
 
     def test_triggers_at_threshold(self):
         recent: list[tuple[str, int]] = []
-        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
-        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
-        assert check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        check_doom_loop(recent, "analyze_stock", {"code": "000001"})
+        check_doom_loop(recent, "analyze_stock", {"code": "000001"})
+        assert check_doom_loop(recent, "analyze_stock", {"code": "000001"})
 
     def test_different_args_no_trigger(self):
         recent: list[tuple[str, int]] = []
-        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
-        check_doom_loop(recent, "get_stock_price", {"code": "000002"})
-        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        check_doom_loop(recent, "analyze_stock", {"code": "000001"})
+        check_doom_loop(recent, "analyze_stock", {"code": "000002"})
+        assert not check_doom_loop(recent, "analyze_stock", {"code": "000001"})
 
     def test_window_eviction(self):
         recent: list[tuple[str, int]] = []
-        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
-        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        check_doom_loop(recent, "analyze_stock", {"code": "000001"})
+        check_doom_loop(recent, "analyze_stock", {"code": "000001"})
         for i in range(5):
             check_doom_loop(recent, "screen_stocks", {"idx": i})
-        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        assert not check_doom_loop(recent, "analyze_stock", {"code": "000001"})
 
     def test_agent_loop_breaks_on_doom_loop(self):
         harness = AgentLoopHarness(
@@ -241,7 +241,7 @@ class TestCheckDoomLoop:
                 [
                     {
                         "type": "tool_calls",
-                        "tool_calls": [{"id": "tc1", "name": "get_stock_price", "args": {"code": "000001"}}],
+                        "tool_calls": [{"id": "tc1", "name": "analyze_stock", "args": {"code": "000001"}}],
                         "text": "",
                     },
                     {"type": "usage", "input_tokens": 10, "output_tokens": 3},
@@ -249,7 +249,7 @@ class TestCheckDoomLoop:
                 [
                     {
                         "type": "tool_calls",
-                        "tool_calls": [{"id": "tc2", "name": "get_stock_price", "args": {"code": "000001"}}],
+                        "tool_calls": [{"id": "tc2", "name": "analyze_stock", "args": {"code": "000001"}}],
                         "text": "",
                     },
                     {"type": "usage", "input_tokens": 10, "output_tokens": 3},
@@ -257,7 +257,7 @@ class TestCheckDoomLoop:
                 [
                     {
                         "type": "tool_calls",
-                        "tool_calls": [{"id": "tc3", "name": "get_stock_price", "args": {"code": "000001"}}],
+                        "tool_calls": [{"id": "tc3", "name": "analyze_stock", "args": {"code": "000001"}}],
                         "text": "",
                     },
                     {"type": "usage", "input_tokens": 10, "output_tokens": 3},
@@ -267,7 +267,7 @@ class TestCheckDoomLoop:
                     {"type": "usage", "input_tokens": 10, "output_tokens": 2},
                 ],
             ],
-            tool_results={"get_stock_price": {"price": 10.5}},
+            tool_results={"analyze_stock": {"price": 10.5}},
         )
 
         outcome = harness.run_turn([{"role": "user", "content": "查一下 000001 价格"}])
@@ -285,7 +285,7 @@ class TestToolConfirm:
         assert "exec_command" in CONFIRM_TOOLS
         assert "write_file" in CONFIRM_TOOLS
         assert "update_portfolio" in CONFIRM_TOOLS
-        assert "get_stock_price" not in CONFIRM_TOOLS
+        assert "portfolio" not in CONFIRM_TOOLS
 
     def test_deny_blocks_execution(self):
         registry = ToolRegistry()

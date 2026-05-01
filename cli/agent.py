@@ -56,7 +56,7 @@ def run(
     t_start = time.monotonic()
     expectation = resolve_turn_expectation(messages)
     incomplete_tool_retries = 0
-    used_tools_this_turn: list[str] = []
+    used_tools_this_turn: list[tuple[str, dict]] = []
     _recent_calls: list[tuple[str, int]] = []
 
     _model_name = getattr(provider, "name", "")
@@ -165,7 +165,7 @@ def run(
                 name = call["name"]
                 args = call["args"]
                 call_id = call["id"]
-                used_tools_this_turn.append(name)
+                used_tools_this_turn.append((name, args))
 
                 if check_doom_loop(_recent_calls, name, args):
                     logger.warning("doom-loop detected: %s", name)

@@ -44,7 +44,7 @@ class TestEstimateTokens:
         msg = {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"name": "get_stock_price", "args": {"code": "000001"}}],
+            "tool_calls": [{"name": "analyze_stock", "args": {"code": "000001"}}],
         }
         assert estimate_tokens([msg]) > 0
 
@@ -57,7 +57,7 @@ class TestSummarizeToolResult:
     def test_short_content_unchanged(self):
         assert _summarize_tool_result("any_tool", "short") == "short"
 
-    def test_diagnose_stock_keeps_key_fields(self):
+    def test_analyze_stock_keeps_key_fields(self):
         data = {
             "code": "000001",
             "name": "平安银行",
@@ -66,15 +66,15 @@ class TestSummarizeToolResult:
             "health": "STRONG",
             "extra_large_data": "x" * 2000,
         }
-        result = _summarize_tool_result("diagnose_stock", json.dumps(data, ensure_ascii=False))
+        result = _summarize_tool_result("analyze_stock", json.dumps(data, ensure_ascii=False))
         parsed = json.loads(result)
         assert parsed["code"] == "000001"
         assert parsed["health"] == "STRONG"
         assert "extra_large_data" not in parsed
 
-    def test_get_stock_price_keeps_tail(self):
+    def test_analyze_stock_keeps_tail(self):
         prices = [{"date": f"2024-01-{i:02d}", "close": 10 + i} for i in range(1, 21)]
-        result = _summarize_tool_result("get_stock_price", json.dumps(prices))
+        result = _summarize_tool_result("analyze_stock", json.dumps(prices))
         parsed = json.loads(result)
         assert len(parsed) == 5
         assert parsed[0]["date"] == "2024-01-16"
@@ -96,16 +96,16 @@ class TestSummarizeToolResult:
 
 class TestSerializeMessages:
     def test_tool_message(self):
-        msgs = [{"role": "tool", "name": "get_stock_price", "content": '{"price":10}'}]
+        msgs = [{"role": "tool", "name": "analyze_stock", "content": '{"price":10}'}]
         text = serialize_messages_for_compaction(msgs)
-        assert "[tool:get_stock_price]" in text
+        assert "[tool:analyze_stock]" in text
 
     def test_assistant_tool_call(self):
         msgs = [
             {
                 "role": "assistant",
                 "content": "查一下",
-                "tool_calls": [{"name": "get_stock_price", "args": {"code": "000001"}}],
+                "tool_calls": [{"name": "analyze_stock", "args": {"code": "000001"}}],
             }
         ]
         text = serialize_messages_for_compaction(msgs)

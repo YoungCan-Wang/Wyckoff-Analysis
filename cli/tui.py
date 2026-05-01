@@ -567,6 +567,11 @@ class WyckoffTUI(App):
         elif cmd == "/new":
             self.action_new_chat()
         elif cmd == "/help":
+            from cli.skills import load_skills
+            skills = load_skills()
+            skill_lines = "".join(
+                f"  /{s.name:<11s}— {s.description}\n" for s in skills.values()
+            )
             log.write(Text.from_markup(
                 "\n[bold]可用命令[/bold]\n"
                 "  /model   — 切换模型（list/add/rm/default）\n"
@@ -578,6 +583,7 @@ class WyckoffTUI(App):
                 "  /new     — 新对话 (Ctrl+N)\n"
                 "  /clear   — 清屏 (Ctrl+L)\n"
                 "  /quit    — 退出 (Ctrl+Q)\n"
+                f"\n[bold]Skills[/bold]\n{skill_lines}"
                 "\n[bold]快捷键[/bold]\n"
                 "  Ctrl+P   — 命令面板\n"
                 "  Ctrl+C   — 复制选中文本 / 退出\n"
@@ -632,7 +638,38 @@ class WyckoffTUI(App):
             else:
                 self._resume_session_selector()
         else:
+            self._try_skill(raw, log)
+
+    # ----- Skills -----
+
+    def _try_skill(self, raw: str, log) -> None:
+        from cli.skills import load_skills
+        skills = load_skills()
+        parts = raw.strip().split(maxsplit=1)
+        cmd_name = parts[0].lstrip("/").lower()
+        user_input = parts[1] if len(parts) > 1 else ""
+        if cmd_name in skills:
+            self._execute_skill(cmd_name, user_input)
+        else:
             log.write(Text.from_markup(f"[red]未知命令: {raw}[/red]，/help 查看"))
+
+    def _execute_skill(self, name: str, user_input: str = "") -> None:
+        from cli.skills import load_skills
+        log = self.query_one("#chat-log", ChatLog)
+        skills = load_skills()
+        skill = skills.get(name)
+        if not skill:
+            log.write(Text.from_markup(f"[red]未知 skill: {name}[/red]"))
+            return
+        if not self._provider:
+            log.write(Text.from_markup("[yellow]⚠ 未配置模型，请先输入 /model add[/yellow]"))
+            return
+        prompt = skill.prompt.replace("{user_input}", user_input).strip()
+        self._send_message(prompt)
+
+    def action_run_skill(self, name: str) -> None:
+        """命令面板调用 skill 入口。"""
+        self._execute_skill(name)
 
     # ----- /config 交互 -----
 
@@ -1004,7 +1041,7 @@ class WyckoffTUI(App):
         _provider_name = self._state.get("provider_name", "") if self._state else ""
         expectation = resolve_turn_expectation(self._messages)
         incomplete_tool_retries = 0
-        used_tools_this_turn: list[str] = []
+        used_tools_this_turn: list[tuple[str, dict]] = []
         executed_tool_summaries: list[dict[str, object]] = []
         self._agent_log.info("session=%s user: %s", self._session_id, _user_text[:200])
         _chatlog_save = self._chatlog_save  # bound method ref
@@ -1152,7 +1189,7 @@ class WyckoffTUI(App):
                         args = call["args"]
                         call_id = call["id"]
                         display = self._tools.display_name(name)
-                        used_tools_this_turn.append(name)
+                        used_tools_this_turn.append((name, args))
 
                         # ── Doom-loop 检测 ──
                         if check_doom_loop(_recent_calls, name, args):

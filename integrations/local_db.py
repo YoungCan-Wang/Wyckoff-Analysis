@@ -18,7 +18,7 @@ from core.constants import LOCAL_DB_PATH
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS portfolio_position (
     name TEXT DEFAULT '',
     shares INTEGER DEFAULT 0,
     cost_price REAL DEFAULT 0,
+    buy_dt TEXT DEFAULT '',
     stop_loss REAL,
     synced_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (portfolio_id, code)
@@ -155,7 +156,11 @@ def init_db() -> None:
     cur = conn.execute("SELECT MAX(version) FROM schema_version")
     row = cur.fetchone()
     current = row[0] if row and row[0] else 0
-    # v1 → v2: add chat_log table (DDL handles IF NOT EXISTS, just bump version)
+    if current < 4:
+        try:
+            conn.execute("ALTER TABLE portfolio_position ADD COLUMN buy_dt TEXT DEFAULT ''")
+        except Exception:
+            pass
     if current < _SCHEMA_VERSION:
         conn.execute(
             "INSERT OR REPLACE INTO schema_version(version) VALUES(?)",
@@ -324,8 +329,8 @@ def save_portfolio(portfolio_id: str, free_cash: float, positions: list[dict]) -
         if positions:
             conn.executemany(
                 """INSERT INTO portfolio_position
-                   (portfolio_id, code, name, shares, cost_price, stop_loss, synced_at)
-                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                   (portfolio_id, code, name, shares, cost_price, buy_dt, stop_loss, synced_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
                 [
                     (
                         portfolio_id,
@@ -333,6 +338,7 @@ def save_portfolio(portfolio_id: str, free_cash: float, positions: list[dict]) -
                         str(p.get("name", "")).strip(),
                         int(p.get("shares", 0) or 0),
                         float(p.get("cost_price", 0) or 0),
+                        str(p.get("buy_dt", "") or ""),
                         float(p["stop_loss"]) if p.get("stop_loss") is not None else None,
                     )
                     for p in positions
@@ -356,6 +362,49 @@ def load_portfolio(portfolio_id: str) -> dict | None:
         "free_cash": row["free_cash"],
         "positions": [dict(p) for p in pos_cur.fetchall()],
     }
+
+
+def _ensure_local_portfolio(portfolio_id: str) -> None:
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO portfolio (portfolio_id, free_cash) VALUES (?, 0)",
+        (portfolio_id,),
+    )
+    conn.commit()
+
+
+def upsert_local_position(
+    portfolio_id: str, code: str, name: str,
+    shares: int, cost_price: float, buy_dt: str = "",
+) -> None:
+    _ensure_local_portfolio(portfolio_id)
+    conn = get_db()
+    with conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO portfolio_position
+               (portfolio_id, code, name, shares, cost_price, buy_dt, synced_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (portfolio_id, code, name, shares, cost_price, buy_dt),
+        )
+
+
+def delete_local_position(portfolio_id: str, code: str) -> None:
+    conn = get_db()
+    with conn:
+        conn.execute(
+            "DELETE FROM portfolio_position WHERE portfolio_id=? AND code=?",
+            (portfolio_id, code),
+        )
+
+
+def update_local_free_cash(portfolio_id: str, free_cash: float) -> None:
+    _ensure_local_portfolio(portfolio_id)
+    conn = get_db()
+    with conn:
+        conn.execute(
+            "UPDATE portfolio SET free_cash=?, synced_at=datetime('now') WHERE portfolio_id=?",
+            (free_cash, portfolio_id),
+        )
 
 
 # ---------------------------------------------------------------------------

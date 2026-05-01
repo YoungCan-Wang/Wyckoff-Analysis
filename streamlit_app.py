@@ -61,15 +61,15 @@ content_col = show_right_nav()
 # ── 工具函数名 → 中文描述 ──
 TOOL_DISPLAY_NAMES = {
     "search_stock_by_name": "搜索股票",
-    "diagnose_stock": "个股诊断",
-    "diagnose_portfolio": "持仓诊断",
-    "get_portfolio": "查看持仓",
-    "get_stock_price": "查询行情",
+    "analyze_stock": "个股分析",
+    "portfolio": "持仓",
     "get_market_overview": "大盘概览",
     "screen_stocks": "漏斗筛选",
     "generate_ai_report": "AI 研报生成",
     "generate_strategy_decision": "策略决策",
-    "get_recommendation_tracking": "推荐跟踪",
+    "query_history": "历史查询",
+    "update_portfolio": "调仓操作",
+    "run_backtest": "回测",
 }
 
 # ── 欢迎语 ──

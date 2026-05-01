@@ -5,6 +5,11 @@ from __future__ import annotations
 from textual.command import Hit, Hits, Provider
 
 
+def _skill_commands() -> list[tuple[str, str, str]]:
+    from cli.skills import load_skills
+    return [(f"/{s.name}", f"run_skill('{s.name}')", s.description) for s in load_skills().values()]
+
+
 class WyckoffCommands(Provider):
     """Wyckoff CLI 命令面板。"""
 
@@ -21,7 +26,7 @@ class WyckoffCommands(Provider):
             ("Token 用量", "show_token", "查看本次会话 Token 用量"),
             ("切换主题", "switch_theme", "切换终端配色主题"),
             ("退出", "quit", "退出程序"),
-        ]
+        ] + _skill_commands()
         matcher = self.matcher(query)
         for name, action, help_text in commands:
             score = matcher.match(name)
@@ -45,6 +50,6 @@ class WyckoffCommands(Provider):
             ("切换主题", "switch_theme", ""),
             ("Token 用量", "show_token", "/token"),
             ("退出", "quit", "Ctrl+Q"),
-        ]
+        ] + _skill_commands()
         for name, action, help_text in commands:
             yield Hit(1.0, name, partial=action, help=help_text)

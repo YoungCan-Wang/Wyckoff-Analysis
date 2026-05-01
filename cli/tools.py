@@ -48,35 +48,27 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "diagnose_stock",
-        "description": "对单只 A 股股票做 Wyckoff 结构化健康诊断。包括均线结构、通道分类、吸筹阶段、触发信号（SOS/Spring/LPS/EVR）、退出信号、止损状态等。",
+        "name": "analyze_stock",
+        "description": "分析单只 A 股股票：Wyckoff 健康诊断或近期行情查询。",
         "parameters": {
             "type": "object",
             "properties": {
                 "code": {"type": "string", "description": "6 位股票代码，如 '000001' 或 '600519'"},
-                "cost": {"type": "number", "description": "持仓成本价，默认 0 表示未持仓"},
+                "mode": {"type": "string", "enum": ["diagnose", "price"], "description": "'diagnose' 做 Wyckoff 结构化诊断；'price' 仅返回近期 OHLCV 行情"},
+                "cost": {"type": "number", "description": "持仓成本价（仅 diagnose 模式），默认 0"},
+                "days": {"type": "integer", "description": "获取天数（仅 price 模式），默认 30，最大 250"},
             },
             "required": ["code"],
         },
     },
     {
-        "name": "diagnose_portfolio",
-        "description": "诊断当前用户所有持仓的健康状况。从 Supabase 加载用户持仓，对每只股票运行 Wyckoff 健康诊断。",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-        },
-    },
-    {
-        "name": "get_stock_price",
-        "description": "获取指定股票的近期行情数据（OHLCV + 涨跌幅）。",
+        "name": "portfolio",
+        "description": "查看或诊断用户持仓。mode='view' 返回持仓列表和资金；mode='diagnose' 对每只持仓做 Wyckoff 健康诊断。",
         "parameters": {
             "type": "object",
             "properties": {
-                "code": {"type": "string", "description": "6 位股票代码"},
-                "days": {"type": "integer", "description": "获取天数，默认 30，最大 250"},
+                "mode": {"type": "string", "enum": ["view", "diagnose"], "description": "'view' 仅查看持仓数据；'diagnose' 做持仓诊断"},
             },
-            "required": ["code"],
         },
     },
     {
@@ -124,47 +116,30 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "get_recommendation_tracking",
-        "description": "查询最近的 AI 推荐记录及其后续涨跌幅表现。",
+        "name": "query_history",
+        "description": "查询历史记录：AI 推荐追踪、信号确认池或尾盘买入记录。",
         "parameters": {
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "返回记录数，默认 20，最大 50"},
+                "source": {"type": "string", "enum": ["recommendation", "signal", "tail_buy"], "description": "'recommendation' 推荐追踪；'signal' 信号确认池；'tail_buy' 尾盘买入"},
+                "status": {"type": "string", "description": "仅 signal：'all'/'pending'/'confirmed'/'expired'"},
+                "run_date": {"type": "string", "description": "仅 tail_buy：按日期过滤 YYYY-MM-DD"},
+                "decision": {"type": "string", "description": "仅 tail_buy：按决策过滤 BUY/WATCH"},
+                "limit": {"type": "integer", "description": "返回记录数上限，默认 20"},
             },
-        },
-    },
-    {
-        "name": "get_signal_pending",
-        "description": "查询信号确认池（signal_pending）。L4 触发信号经 1-3 天价格确认后变为 confirmed（可操作）或 expired（失效）。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "description": "筛选状态：'all'（全部）、'pending'（待确认）、'confirmed'（已确认）、'expired'（已过期），默认 'all'",
-                },
-                "limit": {"type": "integer", "description": "返回记录数，默认 30，最大 100"},
-            },
-        },
-    },
-    {
-        "name": "get_portfolio",
-        "description": "查看用户当前持仓列表和可用资金。仅返回原始数据，不做诊断分析。用户问'我有什么持仓''持仓列表'时调用此工具。",
-        "parameters": {
-            "type": "object",
-            "properties": {},
+            "required": ["source"],
         },
     },
     {
         "name": "update_portfolio",
-        "description": "管理用户持仓：新增、修改、删除持仓，或设置可用资金。操作后返回最新持仓状态。",
+        "description": "管理用户持仓或删除追踪记录。操作后返回最新状态。",
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["add", "update", "remove", "set_cash"],
-                    "description": "操作类型：add（新增/加仓）、update（修改持仓信息）、remove（删除持仓）、set_cash（设置可用资金）",
+                    "enum": ["add", "update", "remove", "set_cash", "delete_records"],
+                    "description": "操作类型：add/update/remove/set_cash 管理持仓；delete_records 删除推荐或信号记录",
                 },
                 "code": {"type": "string", "description": "6 位股票代码（add/update/remove 时必填）"},
                 "name": {"type": "string", "description": "股票名称（可选）"},
@@ -172,6 +147,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "cost_price": {"type": "number", "description": "成本价"},
                 "buy_dt": {"type": "string", "description": "买入日期（YYYYMMDD 格式）"},
                 "free_cash": {"type": "number", "description": "可用资金（set_cash 时使用）"},
+                "table": {"type": "string", "description": "仅 delete_records：'recommendation' 或 'signal'"},
+                "codes": {"type": "array", "items": {"type": "string"}, "description": "仅 delete_records：股票代码列表"},
             },
             "required": ["action"],
         },
@@ -182,18 +159,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {},
-        },
-    },
-    {
-        "name": "get_tail_buy_history",
-        "description": "查询尾盘买入策略的历史结果。尾盘策略每个交易日 14:00 执行，用户问'昨天尾盘推了什么''最近尾盘买入'时调用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "run_date": {"type": "string", "description": "指定日期（YYYY-MM-DD），空则返回最近记录"},
-                "decision": {"type": "string", "description": "筛选决策：'BUY'/'WATCH'/空（全部）"},
-                "limit": {"type": "integer", "description": "返回记录数，默认 20"},
-            },
         },
     },
     {
@@ -210,18 +175,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "stop_loss_pct": {"type": "number", "description": "止损百分比（负数），默认 -7.0"},
                 "take_profit_pct": {"type": "number", "description": "止盈百分比，默认 18.0"},
             },
-        },
-    },
-    {
-        "name": "delete_tracking_records",
-        "description": "删除推荐跟踪或信号确认池中指定股票的记录。用户说'删掉XX的推荐''移除XX信号'时调用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "table": {"type": "string", "description": "目标表：'recommendation' 或 'signal'"},
-                "codes": {"type": "array", "items": {"type": "string"}, "description": "股票代码列表"},
-            },
-            "required": ["table", "codes"],
         },
     },
     # ── 委派工具 ──
@@ -321,19 +274,14 @@ CONFIRM_TOOLS = {"exec_command", "write_file", "update_portfolio"}
 # 工具中文显示名，用于终端展示
 TOOL_DISPLAY_NAMES: dict[str, str] = {
     "search_stock_by_name": "搜索股票",
-    "diagnose_stock": "读盘诊断",
-    "diagnose_portfolio": "持仓审判",
-    "get_stock_price": "调取行情",
+    "analyze_stock": "个股分析",
+    "portfolio": "持仓",
     "get_market_overview": "大盘水温",
     "screen_stocks": "全市场扫描",
     "generate_ai_report": "深度审讯",
     "generate_strategy_decision": "攻防决策",
-    "get_recommendation_tracking": "战绩追踪",
-    "get_signal_pending": "信号确认池",
-    "get_portfolio": "查看持仓",
+    "query_history": "历史查询",
     "update_portfolio": "调仓操作",
-    "get_tail_buy_history": "尾盘记录",
-    "delete_tracking_records": "删除记录",
     "run_backtest": "回测",
     "check_background_tasks": "任务状态",
     "exec_command": "执行命令",
@@ -388,19 +336,14 @@ class ToolRegistry:
         """注册所有工具函数。"""
         from agents.chat_tools import (
             search_stock_by_name,
-            diagnose_stock,
-            diagnose_portfolio,
-            get_portfolio,
-            get_stock_price,
+            analyze_stock,
+            portfolio,
             get_market_overview,
             screen_stocks,
             generate_ai_report,
             generate_strategy_decision,
-            get_recommendation_tracking,
-            get_signal_pending,
+            query_history,
             update_portfolio,
-            get_tail_buy_history,
-            delete_tracking_records,
             run_backtest,
             exec_command,
             read_file,
@@ -414,19 +357,14 @@ class ToolRegistry:
         )
         return {
             "search_stock_by_name": search_stock_by_name,
-            "diagnose_stock": diagnose_stock,
-            "diagnose_portfolio": diagnose_portfolio,
-            "get_portfolio": get_portfolio,
-            "get_stock_price": get_stock_price,
+            "analyze_stock": analyze_stock,
+            "portfolio": portfolio,
             "get_market_overview": get_market_overview,
             "screen_stocks": screen_stocks,
             "generate_ai_report": generate_ai_report,
             "generate_strategy_decision": generate_strategy_decision,
-            "get_recommendation_tracking": get_recommendation_tracking,
-            "get_signal_pending": get_signal_pending,
+            "query_history": query_history,
             "update_portfolio": update_portfolio,
-            "get_tail_buy_history": get_tail_buy_history,
-            "delete_tracking_records": delete_tracking_records,
             "run_backtest": run_backtest,
             "delegate_to_research": delegate_to_research,
             "delegate_to_analysis": delegate_to_analysis,

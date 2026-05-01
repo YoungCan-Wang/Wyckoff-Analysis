@@ -127,13 +127,23 @@ def _load_user_credentials(user_id: str) -> dict[str, Any]:
     return row
 
 
+_LOCAL_USER_ID = "local"
+
+
 def _get_user_id(tool_context: ToolContext | None = None) -> str:
-    """从 ADK tool_context 的 session state 获取 user_id。"""
+    """从 tool_context 获取 user_id，未登录时降级为本地用户。"""
     if tool_context is not None:
         uid = tool_context.state.get("user_id", "")
         if uid:
             return str(uid)
-    return ""
+    return _LOCAL_USER_ID
+
+
+def _has_cloud(tool_context: ToolContext | None) -> bool:
+    """判断是否有 Supabase 云端写入能力。"""
+    if not tool_context:
+        return False
+    return bool(tool_context.state.get("access_token", ""))
 
 
 def _get_credential(tool_context: ToolContext | None, key: str, env_fallback: str = "") -> str:
@@ -213,43 +223,75 @@ def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Tool 2: 个股诊断
+# Tool 2: 个股分析（合并原 diagnose_stock + get_stock_price）
 # ---------------------------------------------------------------------------
 
-def diagnose_stock(code: str, cost: float = 0.0, tool_context: ToolContext = None) -> dict:
-    """对单只 A 股股票做 Wyckoff 结构化健康诊断。
-
-    诊断内容包括：均线结构、L2 通道分类、吸筹阶段、L4 触发信号（SOS/Spring/LPS/EVR）、
-    退出信号、止损状态、量能与振幅等。
+def analyze_stock(code: str, mode: str = "diagnose", cost: float = 0.0, days: int = 30, tool_context: ToolContext = None) -> dict:
+    """分析单只 A 股股票：Wyckoff 健康诊断或近期行情查询。
 
     Args:
         code: 6 位股票代码，如 "000001" 或 "600519"
-        cost: 持仓成本价，默认 0 表示未持仓，仅做技术面诊断
+        mode: "diagnose" 做 Wyckoff 结构化健康诊断；"price" 仅返回近期 OHLCV 行情数据
+        cost: 持仓成本价，仅 diagnose 模式使用，默认 0 表示未持仓
+        days: 获取天数，仅 price 模式使用，默认 30，最大 250
 
     Returns:
-        结构化诊断结果 dict。
+        诊断结果或行情数据 dict。
     """
     try:
         _ensure_tushare_token(tool_context)
         from integrations.stock_hist_repository import get_stock_hist
-        from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_text
+        from core.stock_cache import _COL_MAP
 
-        # 拉取 320 个交易日数据（Supabase 缓存优先）
+        mode = (mode or "diagnose").strip().lower()
+        if mode not in ("diagnose", "price"):
+            return {"error": f"mode 参数无效: '{mode}'，可选值: diagnose, price"}
         end_date = date.today()
+
+        if mode == "price":
+            days = min(max(days, 1), 250)
+            start_date = end_date - timedelta(days=int(days * 1.6))
+            df = get_stock_hist(code, start_date, end_date)
+            if df is None or df.empty:
+                return {"error": f"无法获取 {code} 的行情数据"}
+            hist_hints = _collect_tickflow_limit_hints_from_df(df)
+            hist_meta = _hist_metadata(df)
+            df = df.rename(columns=_COL_MAP)
+            df = df.tail(days)
+            latest = df.iloc[-1] if len(df) > 0 else {}
+            records = []
+            for _, row in df.iterrows():
+                records.append({
+                    "date": str(row.get("date", "")),
+                    "open": round(float(row.get("open", 0)), 2),
+                    "high": round(float(row.get("high", 0)), 2),
+                    "low": round(float(row.get("low", 0)), 2),
+                    "close": round(float(row.get("close", 0)), 2),
+                    "volume": int(row.get("volume", 0)),
+                    "pct_chg": round(float(row.get("pct_chg", 0)), 2),
+                })
+            return {
+                "code": code,
+                "days": len(records),
+                "latest_close": round(float(latest.get("close", 0)), 2),
+                "latest_date": str(latest.get("date", "")),
+                "data_status": "ok",
+                **hist_meta,
+                "data": records,
+                **({"tickflow_limit_hint": hist_hints[0]} if hist_hints else {}),
+            }
+
+        # mode == "diagnose"
+        from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_text
         start_date = end_date - timedelta(days=500)
         df = get_stock_hist(code, start_date, end_date)
-
         if df is None or df.empty:
             return {"error": f"无法获取 {code} 的行情数据"}
         hist_hints = _collect_tickflow_limit_hints_from_df(df)
         hist_meta = _hist_metadata(df)
         latest_date = _latest_hist_date(df, "日期")
-
-        from core.stock_cache import _COL_MAP
         df = df.rename(columns=_COL_MAP)
-
         name = _code_to_name(code)
-
         d = diagnose_one_stock(code, name, cost, df)
         text = format_diagnostic_text(d)
         return {
@@ -279,45 +321,90 @@ def diagnose_stock(code: str, cost: float = 0.0, tool_context: ToolContext = Non
             **({"tickflow_limit_hint": hist_hints[0]} if hist_hints else {}),
         }
     except Exception as e:
-        logger.exception("diagnose_stock error")
+        logger.exception("analyze_stock error")
         return {"error": str(e)}
 
 
 # ---------------------------------------------------------------------------
-# Tool 3: 持仓诊断
+# Tool 3: 持仓（合并原 get_portfolio + diagnose_portfolio）
 # ---------------------------------------------------------------------------
 
-def diagnose_portfolio(tool_context: ToolContext) -> dict:
-    """诊断当前用户所有持仓的健康状况。
+def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
+    """查看或诊断用户当前持仓。
 
-    从 Supabase 加载用户持仓，对每只股票运行 Wyckoff 健康诊断。
+    Args:
+        mode: "view" 仅返回持仓列表和可用资金；"diagnose" 对每只持仓做 Wyckoff 健康诊断
 
     Returns:
-        包含所有持仓诊断结果的 dict。
+        持仓数据或诊断结果。
     """
     try:
-        _ensure_tushare_token(tool_context)
-        from integrations.stock_hist_repository import get_stock_hist
-        from integrations.supabase_portfolio import (
-            load_portfolio_state,
-            build_user_live_portfolio_id,
-        )
-        from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_text
+        from integrations.supabase_portfolio import build_user_live_portfolio_id
 
         user_id = _get_user_id(tool_context)
-        if not user_id:
-            return {"error": "未登录，请先执行 /login"}
-
         portfolio_id = build_user_live_portfolio_id(user_id)
-        logger.info("diagnose_portfolio: user_id=%s, portfolio_id=%s", user_id, portfolio_id)
+        state = None
 
-        _user_client = _get_user_client(tool_context)
-        state = _with_auth_retry(tool_context, load_portfolio_state, portfolio_id, client=_user_client)
+        # local-first
+        try:
+            from integrations.local_db import load_portfolio
+            state = load_portfolio(portfolio_id)
+        except Exception:
+            pass
+
+        if state is None and _has_cloud(tool_context):
+            from integrations.supabase_portfolio import load_portfolio_state
+            _client = _get_user_client(tool_context)
+            state = _with_auth_retry(tool_context, load_portfolio_state, portfolio_id, client=_client)
+            if state:
+                try:
+                    from integrations.local_db import save_portfolio
+                    save_portfolio(
+                        portfolio_id,
+                        float(state.get("free_cash", 0) or 0),
+                        [
+                            {
+                                "code": p.get("code", ""),
+                                "name": p.get("name", ""),
+                                "shares": p.get("shares", 0),
+                                "cost_price": p.get("cost", p.get("cost_price", 0)),
+                                "stop_loss": p.get("stop_loss"),
+                            }
+                            for p in state.get("positions", [])
+                        ],
+                    )
+                except Exception:
+                    pass
+
         if state is None:
-            from integrations.supabase_portfolio import is_supabase_configured
-            if not is_supabase_configured():
-                return {"error": "Supabase 未配置（缺少 SUPABASE_URL/KEY 环境变量）"}
-            return {"error": f"未找到持仓记录 (portfolio_id={portfolio_id})，请确认 Web 端已录入持仓"}
+            return {"message": "未找到持仓记录，可通过 update_portfolio 添加", "positions": [], "free_cash": 0}
+
+        mode = (mode or "view").strip().lower()
+        if mode not in ("view", "diagnose"):
+            return {"error": f"mode 参数无效: '{mode}'，可选值: view, diagnose"}
+
+        if mode == "view":
+            positions = []
+            for p in state.get("positions", []):
+                positions.append({
+                    "code": p.get("code", ""),
+                    "name": p.get("name", ""),
+                    "shares": p.get("shares", 0),
+                    "cost_price": p.get("cost", p.get("cost_price", 0)),
+                    "buy_dt": p.get("buy_dt", ""),
+                })
+            return {
+                "portfolio_id": portfolio_id,
+                "free_cash": state.get("free_cash", 0),
+                "position_count": len(positions),
+                "positions": positions,
+            }
+
+        # mode == "diagnose"
+        _ensure_tushare_token(tool_context)
+        from integrations.stock_hist_repository import get_stock_hist
+        from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_text
+
         if not state.get("positions"):
             return {
                 "message": "持仓记录存在但无头寸",
@@ -333,14 +420,14 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
         successful_count = 0
         failed_count = 0
         for pos in state["positions"]:
-            code = pos["code"]
-            name = pos.get("name", code)
-            cost = float(pos.get("cost", 0))
+            pos_code = pos.get("code", "") or pos.get("code", "")
+            pos_name = pos.get("name", pos_code)
+            pos_cost = float(pos.get("cost", pos.get("cost_price", 0)) or 0)
             try:
-                df = get_stock_hist(code, start_date, end_date)
+                df = get_stock_hist(pos_code, start_date, end_date)
                 if df is None or df.empty:
                     failed_count += 1
-                    results.append({"code": code, "name": name, "error": "无行情数据"})
+                    results.append({"code": pos_code, "name": pos_name, "error": "无行情数据"})
                     continue
                 hist_meta = _hist_metadata(df)
                 latest_date = _latest_hist_date(df, "日期")
@@ -349,7 +436,7 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
                         hist_tickflow_hints.append(hint)
                 from core.stock_cache import _COL_MAP
                 df = df.rename(columns=_COL_MAP)
-                d = diagnose_one_stock(code, name, cost, df)
+                d = diagnose_one_stock(pos_code, pos_name, pos_cost, df)
                 successful_count += 1
                 results.append({
                     "code": d.code,
@@ -367,7 +454,7 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
                 })
             except Exception as e:
                 failed_count += 1
-                results.append({"code": code, "name": name, "error": str(e)})
+                results.append({"code": pos_code, "name": pos_name, "error": str(e)})
 
         result = {
             "portfolio_id": portfolio_id,
@@ -381,67 +468,7 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
             result["tickflow_limit_hint"] = hist_tickflow_hints[0]
         return result
     except Exception as e:
-        logger.exception("diagnose_portfolio error")
-        return {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Tool 4: 行情查询
-# ---------------------------------------------------------------------------
-
-def get_stock_price(code: str, days: int = 30, tool_context: ToolContext = None) -> dict:
-    """获取指定股票的近期行情数据（OHLCV）。
-
-    Args:
-        code: 6 位股票代码，如 "000001"
-        days: 获取天数，默认 30，最大 250
-
-    Returns:
-        包含最近 N 天 OHLCV 数据的 dict。
-    """
-    try:
-        _ensure_tushare_token(tool_context)
-        from integrations.stock_hist_repository import get_stock_hist
-
-        days = min(max(days, 1), 250)
-        end_date = date.today()
-        start_date = end_date - timedelta(days=int(days * 1.6))
-        df = get_stock_hist(code, start_date, end_date)
-
-        if df is None or df.empty:
-            return {"error": f"无法获取 {code} 的行情数据"}
-        hist_hints = _collect_tickflow_limit_hints_from_df(df)
-        hist_meta = _hist_metadata(df)
-
-        from core.stock_cache import _COL_MAP
-        df = df.rename(columns=_COL_MAP)
-        df = df.tail(days)
-
-        latest = df.iloc[-1] if len(df) > 0 else {}
-        records = []
-        for _, row in df.iterrows():
-            records.append({
-                "date": str(row.get("date", "")),
-                "open": round(float(row.get("open", 0)), 2),
-                "high": round(float(row.get("high", 0)), 2),
-                "low": round(float(row.get("low", 0)), 2),
-                "close": round(float(row.get("close", 0)), 2),
-                "volume": int(row.get("volume", 0)),
-                "pct_chg": round(float(row.get("pct_chg", 0)), 2),
-            })
-
-        return {
-            "code": code,
-            "days": len(records),
-            "latest_close": round(float(latest.get("close", 0)), 2),
-            "latest_date": str(latest.get("date", "")),
-            "data_status": "ok",
-            **hist_meta,
-            "data": records,
-            **({"tickflow_limit_hint": hist_hints[0]} if hist_hints else {}),
-        }
-    except Exception as e:
-        logger.exception("get_stock_price error")
+        logger.exception("portfolio error")
         return {"error": str(e)}
 
 
@@ -755,9 +782,6 @@ def generate_strategy_decision(tool_context: ToolContext) -> dict:
             return {"error": "未配置 Gemini API Key，无法生成策略决策。请在设置页面配置。"}
 
         user_id = _get_user_id(tool_context)
-        if not user_id:
-            return {"error": "未找到用户 ID，无法加载持仓进行策略分析"}
-
         from integrations.supabase_portfolio import build_user_live_portfolio_id
 
         portfolio_id = build_user_live_portfolio_id(user_id)
@@ -819,31 +843,42 @@ def generate_strategy_decision(tool_context: ToolContext) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Tool 9: 推荐跟踪查询
+# Tool 5: 历史记录查询（合并原 recommendation / signal / tail_buy）
 # ---------------------------------------------------------------------------
 
-def get_recommendation_tracking(limit: int = 20) -> dict:
-    """查询最近的 AI 推荐记录及其跟踪表现。
-
-    返回历史推荐的股票及其后续涨跌幅表现。
+def query_history(source: str, status: str = "all", run_date: str = "", decision: str = "", limit: int = 20) -> dict:
+    """查询历史记录：AI 推荐追踪、信号确认池或尾盘买入记录。
 
     Args:
-        limit: 返回记录数，默认 20，最大 50
+        source: "recommendation" 查推荐追踪；"signal" 查信号确认池；"tail_buy" 查尾盘买入记录
+        status: 仅 signal 源使用，"all"/"pending"/"confirmed"/"expired"
+        run_date: 仅 tail_buy 源使用，按日期过滤（YYYY-MM-DD）
+        decision: 仅 tail_buy 源使用，按决策过滤（BUY/WATCH 等）
+        limit: 返回记录数上限，默认 20
 
     Returns:
-        推荐跟踪记录列表。
+        对应来源的历史记录列表。
     """
+    source = (source or "").strip().lower()
+    if source == "recommendation":
+        return _query_recommendation(limit)
+    elif source == "signal":
+        return _query_signal(status, limit)
+    elif source == "tail_buy":
+        return _query_tail_buy(run_date, decision, limit)
+    else:
+        return {"error": f"不支持的 source：{source}，请用 'recommendation'、'signal' 或 'tail_buy'"}
+
+
+def _query_recommendation(limit: int) -> dict:
     try:
         limit = min(max(limit, 1), 50)
         records = []
-
-        # local-first
         try:
             from integrations.local_db import load_recommendations
             records = load_recommendations(limit=limit)
         except Exception:
             pass
-
         if not records:
             from integrations.supabase_recommendation import load_recommendation_tracking
             records = load_recommendation_tracking(limit=limit)
@@ -853,10 +888,8 @@ def get_recommendation_tracking(limit: int = 20) -> dict:
                     save_recommendations(records)
                 except Exception:
                     pass
-
         if not records:
             return {"message": "暂无推荐跟踪记录", "records": []}
-
         simplified = [
             {
                 "code": str(r.get("code", "")),
@@ -871,45 +904,22 @@ def get_recommendation_tracking(limit: int = 20) -> dict:
             }
             for r in records
         ]
-
-        return {
-            "total": len(simplified),
-            "records": simplified,
-        }
+        return {"total": len(simplified), "records": simplified}
     except Exception as e:
-        logger.exception("get_recommendation_tracking error")
+        logger.exception("query_history(recommendation) error")
         return {"error": str(e)}
 
 
-# ---------------------------------------------------------------------------
-# Tool 10: 信号确认池查询
-# ---------------------------------------------------------------------------
-
-def get_signal_pending(status: str = "all", limit: int = 30) -> dict:
-    """查询信号确认池（signal_pending）中的信号状态。
-
-    信号确认系统：L4 触发信号（SOS/Spring/LPS/EVR）先进入 pending 池，
-    经 1-3 天价格行为确认后变为 confirmed（可操作）或 expired（失效）。
-
-    Args:
-        status: 筛选状态，可选 "all"、"pending"、"confirmed"、"expired"，默认 "all"
-        limit: 返回记录数，默认 30，最大 100
-
-    Returns:
-        信号确认池记录列表。
-    """
+def _query_signal(status: str, limit: int) -> dict:
     try:
         limit = min(max(limit, 1), 100)
         rows: list[dict] = []
-
-        # local-first
         try:
             from integrations.local_db import load_signals
             st = status if status in ("pending", "confirmed", "expired") else None
             rows = load_signals(status=st, limit=limit)
         except Exception:
             pass
-
         if not rows:
             from integrations.supabase_base import create_admin_client, is_admin_configured
             from core.constants import TABLE_SIGNAL_PENDING
@@ -926,11 +936,9 @@ def get_signal_pending(status: str = "all", limit: int = 30) -> dict:
                     save_signals(rows)
                 except Exception:
                     pass
-
         if not rows:
             status_label = {"pending": "待确认", "confirmed": "已确认", "expired": "已过期"}.get(status, "")
             return {"message": f"暂无{status_label}信号记录", "records": []}
-
         records = [
             {
                 "code": f"{int(r.get('code', 0)):06d}",
@@ -950,19 +958,13 @@ def get_signal_pending(status: str = "all", limit: int = 30) -> dict:
             }
             for r in rows
         ]
-
         status_counts: dict[str, int] = {}
         for rec in records:
             s = rec["status"]
             status_counts[s] = status_counts.get(s, 0) + 1
-
-        return {
-            "total": len(records),
-            "status_counts": status_counts,
-            "records": records,
-        }
+        return {"total": len(records), "status_counts": status_counts, "records": records}
     except Exception as e:
-        logger.exception("get_signal_pending error")
+        logger.exception("query_history(signal) error")
         return {"error": str(e)}
 
 
@@ -1062,38 +1064,121 @@ def _to_ts_code(code: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool 11: 查看持仓（原子数据）
+# Tool 6: 持仓管理（合并原 update_portfolio + delete_tracking_records）
 # ---------------------------------------------------------------------------
 
-def get_portfolio(tool_context: ToolContext) -> dict:
-    """查看用户当前持仓列表和可用资金。仅返回原始数据，不做诊断分析。
+def update_portfolio(
+    action: str,
+    code: str = "",
+    name: str = "",
+    shares: int = 0,
+    cost_price: float = 0,
+    buy_dt: str = "",
+    free_cash: float = 0,
+    table: str = "",
+    codes: list[str] = None,
+    tool_context: ToolContext = None,
+) -> dict:
+    """管理用户持仓或删除追踪记录。
+
+    Args:
+        action: 操作类型，"add"（新增/加仓）、"update"（修改）、"remove"（删除）、"set_cash"（设置可用资金）、"delete_records"（删除推荐/信号记录）
+        code: 6 位股票代码（add/update/remove 时必填）
+        name: 股票名称（可选）
+        shares: 持仓股数
+        cost_price: 成本价
+        buy_dt: 买入日期（YYYYMMDD 格式）
+        free_cash: 可用资金（set_cash 时使用）
+        table: 仅 delete_records 使用，'recommendation' 或 'signal'
+        codes: 仅 delete_records 使用，要删除的股票代码列表
 
     Returns:
-        持仓列表和可用资金。
+        操作结果。
     """
     try:
+        action = action.strip().lower()
+
+        if action == "delete_records":
+            if not codes:
+                return {"error": "请指定要删除的股票代码 codes"}
+            codes = [str(c).strip() for c in codes if str(c).strip()]
+            if table == "recommendation":
+                from integrations.local_db import delete_recommendations
+                n = delete_recommendations(codes)
+                return {"deleted": n, "table": "recommendation_tracking", "codes": codes}
+            elif table == "signal":
+                from integrations.local_db import delete_signals
+                n = delete_signals(codes)
+                return {"deleted": n, "table": "signal_pending", "codes": codes}
+            else:
+                return {"error": f"不支持的表：{table}，请用 'recommendation' 或 'signal'"}
+
         from integrations.supabase_portfolio import build_user_live_portfolio_id
 
         user_id = _get_user_id(tool_context)
-        if not user_id:
-            return {"error": "未登录，请先执行 /login"}
-
         portfolio_id = build_user_live_portfolio_id(user_id)
-        state = None
+        cloud = _has_cloud(tool_context)
+        msg = ""
 
-        # local-first
-        try:
-            from integrations.local_db import load_portfolio
-            state = load_portfolio(portfolio_id)
-        except Exception:
-            pass
+        if action in ("add", "update"):
+            if not code:
+                return {"error": "add/update 操作需要提供股票代码 code"}
+            code = code.strip()
+            real_name = _code_to_name(code)
+            if real_name and name and real_name != name:
+                return {"error": f"代码 {code} 对应的股票是「{real_name}」，而非「{name}」，请确认代码或名称是否正确"}
+            if real_name and not name:
+                name = real_name
+            if not real_name and not name:
+                return {"error": f"代码 {code} 在股票列表中未找到，请确认代码是否正确"}
+            if cloud:
+                from integrations.supabase_portfolio import upsert_position
+                client = _get_user_client(tool_context)
+                ok, msg = _with_auth_retry(tool_context, upsert_position, portfolio_id, {
+                    "code": code, "name": name, "shares": shares,
+                    "cost_price": cost_price, "buy_dt": buy_dt,
+                }, client=client)
+                if not ok:
+                    return {"error": msg}
+            from integrations.local_db import upsert_local_position
+            upsert_local_position(portfolio_id, code, name, shares, cost_price, buy_dt)
+            msg = msg or f"{code} 已更新"
 
-        if state is None:
-            from integrations.supabase_portfolio import load_portfolio_state
-            _client = _get_user_client(tool_context)
-            state = _with_auth_retry(tool_context, load_portfolio_state, portfolio_id, client=_client)
-            if state:
-                try:
+        elif action == "remove":
+            if not code:
+                return {"error": "remove 操作需要提供股票代码 code"}
+            code = code.strip()
+            if cloud:
+                from integrations.supabase_portfolio import delete_position
+                client = _get_user_client(tool_context)
+                ok, msg = _with_auth_retry(tool_context, delete_position, portfolio_id, code, client=client)
+                if not ok:
+                    return {"error": msg}
+            from integrations.local_db import delete_local_position
+            delete_local_position(portfolio_id, code)
+            msg = msg or f"{code} 已删除"
+
+        elif action == "set_cash":
+            if cloud:
+                from integrations.supabase_portfolio import update_free_cash
+                client = _get_user_client(tool_context)
+                ok, msg = _with_auth_retry(tool_context, update_free_cash, portfolio_id, free_cash, client=client)
+                if not ok:
+                    return {"error": msg}
+            from integrations.local_db import update_local_free_cash
+            update_local_free_cash(portfolio_id, free_cash)
+            msg = msg or f"可用资金已更新为 {free_cash:,.2f}"
+
+        else:
+            return {"error": f"未知操作: {action}，支持 add/update/remove/set_cash/delete_records"}
+
+        # Supabase write-through: 读回最新状态同步到本地
+        if cloud:
+            try:
+                from integrations.supabase_portfolio import load_portfolio_state
+                client = _get_user_client(tool_context)
+                state = _with_auth_retry(tool_context, load_portfolio_state, portfolio_id, client=client)
+                if state:
                     from integrations.local_db import save_portfolio
                     save_portfolio(
                         portfolio_id,
@@ -1109,175 +1194,34 @@ def get_portfolio(tool_context: ToolContext) -> dict:
                             for p in state.get("positions", [])
                         ],
                     )
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
-        if state is None:
-            return {"message": "未找到持仓记录", "positions": [], "free_cash": 0}
-
-        positions = []
-        for p in state.get("positions", []):
-            positions.append({
-                "code": p.get("code", ""),
-                "name": p.get("name", ""),
-                "shares": p.get("shares", 0),
-                "cost_price": p.get("cost", p.get("cost_price", 0)),
-                "buy_dt": p.get("buy_dt", ""),
-            })
-
-        return {
-            "portfolio_id": portfolio_id,
-            "free_cash": state.get("free_cash", 0),
-            "position_count": len(positions),
-            "positions": positions,
-        }
-    except Exception as e:
-        logger.exception("get_portfolio error")
-        return {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Tool 12: 持仓管理
-# ---------------------------------------------------------------------------
-
-def update_portfolio(
-    action: str,
-    code: str = "",
-    name: str = "",
-    shares: int = 0,
-    cost_price: float = 0,
-    buy_dt: str = "",
-    free_cash: float = 0,
-    tool_context: ToolContext = None,
-) -> dict:
-    """管理用户持仓：新增、修改、删除持仓，或设置可用资金。
-
-    Args:
-        action: 操作类型，"add"（新增/加仓）、"update"（修改）、"remove"（删除）、"set_cash"（设置可用资金）
-        code: 6 位股票代码（add/update/remove 时必填）
-        name: 股票名称（可选）
-        shares: 持仓股数
-        cost_price: 成本价
-        buy_dt: 买入日期（YYYYMMDD 格式）
-        free_cash: 可用资金（set_cash 时使用）
-
-    Returns:
-        操作结果和最新持仓摘要。
-    """
-    try:
-        from integrations.supabase_portfolio import (
-            build_user_live_portfolio_id,
-            load_portfolio_state,
-            upsert_position,
-            delete_position,
-            update_free_cash,
-        )
-        user_id = _get_user_id(tool_context)
-        if not user_id:
-            return {"error": "未登录，请先执行 /login"}
-
-        client = _get_user_client(tool_context)
-        if client is None:
-            return {"error": "缺少 access_token，请重新登录"}
-
-        portfolio_id = build_user_live_portfolio_id(user_id)
-        action = action.strip().lower()
-
-        if action in ("add", "update"):
-            if not code:
-                return {"error": "add/update 操作需要提供股票代码 code"}
-            code = code.strip()
-            # 校验 code-name 匹配
-            real_name = _code_to_name(code)
-            if real_name and name and real_name != name:
-                return {"error": f"代码 {code} 对应的股票是「{real_name}」，而非「{name}」，请确认代码或名称是否正确"}
-            if real_name and not name:
-                name = real_name
-            if not real_name and not name:
-                return {"error": f"代码 {code} 在股票列表中未找到，请确认代码是否正确"}
-            ok, msg = _with_auth_retry(tool_context, upsert_position, portfolio_id, {
-                "code": code,
-                "name": name,
-                "shares": shares,
-                "cost_price": cost_price,
-                "buy_dt": buy_dt,
-            }, client=client)
-            if not ok:
-                return {"error": msg}
-
-        elif action == "remove":
-            if not code:
-                return {"error": "remove 操作需要提供股票代码 code"}
-            ok, msg = _with_auth_retry(tool_context, delete_position, portfolio_id, code.strip(), client=client)
-            if not ok:
-                return {"error": msg}
-
-        elif action == "set_cash":
-            ok, msg = _with_auth_retry(tool_context, update_free_cash, portfolio_id, free_cash, client=client)
-            if not ok:
-                return {"error": msg}
-
-        else:
-            return {"error": f"未知操作: {action}，支持 add/update/remove/set_cash"}
-
-        # 返回最新持仓状态
-        state = _with_auth_retry(tool_context, load_portfolio_state, portfolio_id, client=client)
+        # 读本地最新状态返回
+        from integrations.local_db import load_portfolio
+        state = load_portfolio(portfolio_id)
         if not state:
             return {"success": True, "message": msg, "positions": []}
 
-        # write-through to local SQLite
-        try:
-            from integrations.local_db import save_portfolio
-            save_portfolio(
-                portfolio_id,
-                float(state.get("free_cash", 0) or 0),
-                [
-                    {
-                        "code": p.get("code", ""),
-                        "name": p.get("name", ""),
-                        "shares": p.get("shares", 0),
-                        "cost_price": p.get("cost", p.get("cost_price", 0)),
-                        "stop_loss": p.get("stop_loss"),
-                    }
-                    for p in state.get("positions", [])
-                ],
-            )
-        except Exception:
-            pass
-
         summary = []
         for p in state.get("positions", []):
-            summary.append(f"{p['code']} {p.get('name','')} {p.get('shares',0)}股 成本{p.get('cost',0)}")
-        return {
+            summary.append(f"{p['code']} {p.get('name','')} {p.get('shares',0)}股 成本{p.get('cost_price',0)}")
+        result = {
             "success": True,
             "message": msg,
             "free_cash": state.get("free_cash", 0),
             "position_count": len(state.get("positions", [])),
             "positions_summary": summary,
         }
+        if not cloud:
+            result["storage"] = "local"
+        return result
     except Exception as e:
         logger.exception("update_portfolio error")
         return {"error": str(e)}
 
 
-# ---------------------------------------------------------------------------
-# Tool 13: 尾盘买入历史查询
-# ---------------------------------------------------------------------------
-
-def get_tail_buy_history(run_date: str = "", decision: str = "", limit: int = 20) -> dict:
-    """查询尾盘买入策略的历史结果。
-
-    尾盘策略每个交易日 14:00 执行，对信号确认池中的候选做盘中分时评估，
-    输出 BUY / WATCH / SKIP 决策。本工具查询历史执行结果。
-
-    Args:
-        run_date: 指定日期（YYYY-MM-DD），空则返回最近记录
-        decision: 筛选决策类型：'BUY'/'WATCH'/空（全部）
-        limit: 返回记录数，默认 20，最大 200
-
-    Returns:
-        尾盘策略历史结果列表。
-    """
+def _query_tail_buy(run_date: str, decision: str, limit: int) -> dict:
     try:
         limit = min(max(int(limit), 1), 200)
         from integrations.local_db import load_tail_buy_history
@@ -1331,42 +1275,7 @@ def get_tail_buy_history(run_date: str = "", decision: str = "", limit: int = 20
         ]
         return {"total": len(simplified), "records": simplified}
     except Exception as e:
-        logger.exception("get_tail_buy_history error")
-        return {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Tool 14: 删除推荐/信号记录
-# ---------------------------------------------------------------------------
-
-def delete_tracking_records(table: str, codes: list[str]) -> dict:
-    """删除推荐跟踪或信号确认池中指定股票的记录。
-
-    用户说"删掉平安银行的推荐记录""移除 600036 的信号"时调用。
-
-    Args:
-        table: 目标表，'recommendation' 或 'signal'
-        codes: 要删除的股票代码列表，如 ['000001', '600036']
-
-    Returns:
-        删除结果。
-    """
-    try:
-        if not codes:
-            return {"error": "请指定要删除的股票代码"}
-        codes = [str(c).strip() for c in codes if str(c).strip()]
-        if table == "recommendation":
-            from integrations.local_db import delete_recommendations
-            n = delete_recommendations(codes)
-            return {"deleted": n, "table": "recommendation_tracking", "codes": codes}
-        elif table == "signal":
-            from integrations.local_db import delete_signals
-            n = delete_signals(codes)
-            return {"deleted": n, "table": "signal_pending", "codes": codes}
-        else:
-            return {"error": f"不支持的表：{table}，请用 'recommendation' 或 'signal'"}
-    except Exception as e:
-        logger.exception("delete_tracking_records error")
+        logger.exception("query_history(tail_buy) error")
         return {"error": str(e)}
 
 
@@ -1600,18 +1509,13 @@ def web_fetch(url: str, tool_context: ToolContext = None) -> dict:
 
 WYCKOFF_TOOLS = [
     search_stock_by_name,
-    diagnose_stock,
-    diagnose_portfolio,
-    get_portfolio,
-    get_stock_price,
+    analyze_stock,
+    portfolio,
     get_market_overview,
     screen_stocks,
     generate_ai_report,
     generate_strategy_decision,
-    get_recommendation_tracking,
-    get_signal_pending,
+    query_history,
     update_portfolio,
-    get_tail_buy_history,
-    delete_tracking_records,
     run_backtest,
 ]

@@ -200,14 +200,13 @@ class AgentTestHarness:
 
         mock_map = {
             "search_stock_by_name": MOCK_SEARCH_RESULT,
-            "diagnose_stock": MOCK_DIAGNOSE_RESULT,
-            "diagnose_portfolio": {"message": "当前没有持仓数据", "positions": []},
-            "get_stock_price": MOCK_PRICE_RESULT,
+            "analyze_stock": MOCK_DIAGNOSE_RESULT,
+            "portfolio": {"message": "当前没有持仓数据", "positions": []},
             "get_market_overview": MOCK_MARKET_OVERVIEW,
             "screen_stocks": {"ok": True, "summary": {"total_scanned": 4500, "layer1_passed": 800, "layer2_passed": 200, "layer3_passed": 50}, "trigger_groups": {}, "symbols_for_report": []},
             "generate_ai_report": {"ok": True, "report_text": "测试报告", "stock_count": 1},
             "generate_strategy_decision": {"message": "策略分析完成"},
-            "get_recommendation_tracking": {"message": "暂无推荐跟踪记录", "records": []},
+            "query_history": {"message": "暂无推荐跟踪记录", "records": []},
         }
 
         mock_tools = []
@@ -277,11 +276,14 @@ class TestChatAgentRouting:
         print(f"[OK] Tool calls: {tool_names}")
         print(f"[Response preview]: {r['response'][:200]}")
 
-    def test_diagnose_routes_to_diagnose_tool(self):
-        """'帮我看看 000001' → 应调 diagnose_stock"""
+    def test_diagnose_routes_to_analyze_stock(self):
+        """'帮我看看 000001' → 应调 analyze_stock(mode=diagnose)"""
         r = self.harness.send("帮我看看 000001")
-        tool_names = [tc["name"] for tc in r["tool_calls"]]
-        assert "diagnose_stock" in tool_names, f"Expected diagnose tool, got: {tool_names}"
+        calls = r["tool_calls"]
+        tool_names = [tc["name"] for tc in calls]
+        assert "analyze_stock" in tool_names, f"Expected analyze_stock tool, got: {tool_names}"
+        diag_call = next(tc for tc in calls if tc["name"] == "analyze_stock")
+        assert diag_call["args"].get("mode", "diagnose") == "diagnose", f"Expected diagnose mode, got: {diag_call['args']}"
         print(f"[OK] Tool calls: {tool_names}")
 
     def test_market_routes_to_market_overview(self):
@@ -291,11 +293,14 @@ class TestChatAgentRouting:
         assert "get_market_overview" in tool_names, f"Expected market tool, got: {tool_names}"
         print(f"[OK] Tool calls: {tool_names}")
 
-    def test_price_routes_to_price_tool(self):
-        """'600519 最近走势' → 应调 get_stock_price"""
+    def test_price_routes_to_analyze_stock(self):
+        """'600519 最近走势' → 应调 analyze_stock(mode=price)"""
         r = self.harness.send("600519 最近走势怎么样")
-        tool_names = [tc["name"] for tc in r["tool_calls"]]
-        assert "get_stock_price" in tool_names, f"Expected price tool, got: {tool_names}"
+        calls = r["tool_calls"]
+        tool_names = [tc["name"] for tc in calls]
+        assert "analyze_stock" in tool_names, f"Expected analyze_stock tool, got: {tool_names}"
+        price_call = next(tc for tc in calls if tc["name"] == "analyze_stock")
+        assert price_call["args"].get("mode") == "price", f"Expected price mode, got: {price_call['args']}"
         print(f"[OK] Tool calls: {tool_names}")
 
 

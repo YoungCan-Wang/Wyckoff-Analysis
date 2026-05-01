@@ -432,8 +432,8 @@ def _cmd_portfolio(args):
 def _cmd_signal(args):
     status = args.status or "all"
     limit = args.limit or 30
-    from agents.chat_tools import get_signal_pending
-    result = get_signal_pending(status=status, limit=limit)
+    from agents.chat_tools import query_history
+    result = query_history(source="signal", status=status, limit=limit)
     if result.get("error"):
         print(f"✗ {result['error']}")
         sys.exit(1)
@@ -457,8 +457,8 @@ def _cmd_signal(args):
 
 def _cmd_recommend(args):
     limit = args.limit or 20
-    from agents.chat_tools import get_recommendation_tracking
-    result = get_recommendation_tracking(limit=limit)
+    from agents.chat_tools import query_history
+    result = query_history(source="recommendation", limit=limit)
     if result.get("error"):
         print(f"✗ {result['error']}")
         sys.exit(1)

@@ -21,23 +21,23 @@ from tests.helpers.agent_loop_harness import ScriptedProvider, StubToolRegistry
 class TestSubAgentToolProxy:
     def test_schemas_only_returns_allowed(self):
         registry = StubToolRegistry(schemas=deepcopy(TOOL_SCHEMAS))
-        allowed = {"diagnose_stock", "get_stock_price"}
+        allowed = {"analyze_stock", "portfolio"}
         proxy = SubAgentToolProxy(registry, allowed)
 
         names = {s["name"] for s in proxy.schemas()}
         assert names == allowed
 
     def test_execute_allowed_tool(self):
-        registry = StubToolRegistry(tool_results={"diagnose_stock": {"health": "OK"}})
-        proxy = SubAgentToolProxy(registry, {"diagnose_stock"})
+        registry = StubToolRegistry(tool_results={"analyze_stock": {"health": "OK"}})
+        proxy = SubAgentToolProxy(registry, {"analyze_stock"})
 
-        result = proxy.execute("diagnose_stock", {"code": "000001"})
+        result = proxy.execute("analyze_stock", {"code": "000001"})
         assert result == {"health": "OK"}
-        assert registry.calls[0]["name"] == "diagnose_stock"
+        assert registry.calls[0]["name"] == "analyze_stock"
 
     def test_execute_blocked_tool_returns_error(self):
         registry = StubToolRegistry()
-        proxy = SubAgentToolProxy(registry, {"diagnose_stock"})
+        proxy = SubAgentToolProxy(registry, {"analyze_stock"})
 
         result = proxy.execute("update_portfolio", {"action": "add"})
         assert "error" in result

@@ -78,9 +78,16 @@ def _summarize_tool_result(name: str, content: str, max_len: int = 400) -> str:
     except (json.JSONDecodeError, TypeError):
         return content[:max_len] + "…"
 
-    # 诊断类工具 — 保留结论字段
-    if name in ("diagnose_stock", "diagnose_portfolio"):
-        kept: dict[str, Any] = {}
+    # analyze_stock: 按返回结构区分 price/diagnose 模式
+    if name == "analyze_stock" and isinstance(data, dict):
+        if "data" in data and isinstance(data.get("data"), list):
+            kept: dict[str, Any] = {}
+            for key in ("code", "latest_close", "latest_date", "days"):
+                if key in data:
+                    kept[key] = data[key]
+            kept["data"] = data["data"][-5:]
+            return json.dumps(kept, ensure_ascii=False)[:max_len]
+        kept = {}
         for key in ("code", "name", "channel", "phase", "trigger_signals",
                      "exit_signals", "health", "positions", "message"):
             if key in data:
@@ -88,9 +95,27 @@ def _summarize_tool_result(name: str, content: str, max_len: int = 400) -> str:
         if kept:
             return json.dumps(kept, ensure_ascii=False)[:max_len]
 
-    # 行情类 — 保留最近几条
-    if name == "get_stock_price" and isinstance(data, list):
+    if name == "analyze_stock" and isinstance(data, list):
         return json.dumps(data[-5:], ensure_ascii=False)[:max_len]
+
+    # portfolio — 按结构区分 view/diagnose
+    if name == "portfolio" and isinstance(data, dict):
+        if "diagnostics" in data:
+            kept = {}
+            for key in ("portfolio_id", "position_count", "successful_count",
+                         "failed_count", "free_cash", "diagnostics"):
+                if key in data:
+                    kept[key] = data[key]
+            if kept:
+                return json.dumps(kept, ensure_ascii=False)[:max_len]
+        else:
+            kept = {}
+            for key in ("portfolio_id", "free_cash", "position_count",
+                         "positions", "message"):
+                if key in data:
+                    kept[key] = data[key]
+            if kept:
+                return json.dumps(kept, ensure_ascii=False)[:max_len]
 
     # 通用：保留 error/message/status 等顶层键
     if isinstance(data, dict):

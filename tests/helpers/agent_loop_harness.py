@@ -64,13 +64,8 @@ class StubToolRegistry:
     ):
         self._schemas = deepcopy(schemas) if schemas is not None else [
             {
-                "name": "diagnose_portfolio",
-                "description": "Mock diagnose portfolio tool",
-                "parameters": {"type": "object", "properties": {}},
-            },
-            {
-                "name": "get_portfolio",
-                "description": "Mock get portfolio tool",
+                "name": "portfolio",
+                "description": "Mock portfolio tool",
                 "parameters": {"type": "object", "properties": {}},
             },
         ]

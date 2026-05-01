@@ -28,9 +28,8 @@ RESEARCH_AGENT = SubAgent(
     description="数据收集：全市场扫描、信号、推荐、回测",
     system_prompt=RESEARCH_AGENT_PROMPT,
     tool_names=(
-        "search_stock_by_name", "get_stock_price", "get_market_overview",
-        "get_recommendation_tracking", "get_signal_pending", "get_tail_buy_history",
-        "screen_stocks", "run_backtest", "check_background_tasks",
+        "search_stock_by_name", "analyze_stock", "get_market_overview",
+        "query_history", "screen_stocks", "run_backtest", "check_background_tasks",
     ),
 )
 
@@ -39,8 +38,7 @@ ANALYSIS_AGENT = SubAgent(
     description="深度分析：个股诊断、持仓体检、AI 研报",
     system_prompt=ANALYSIS_AGENT_PROMPT,
     tool_names=(
-        "diagnose_stock", "diagnose_portfolio", "get_portfolio",
-        "get_stock_price", "get_market_overview", "generate_ai_report",
+        "analyze_stock", "portfolio", "get_market_overview", "generate_ai_report",
     ),
 )
 
@@ -49,8 +47,8 @@ TRADING_AGENT = SubAgent(
     description="去留决策：攻防指令、调仓执行",
     system_prompt=TRADING_AGENT_PROMPT,
     tool_names=(
-        "get_portfolio", "update_portfolio", "delete_tracking_records",
-        "generate_strategy_decision", "diagnose_stock", "get_market_overview",
+        "portfolio", "update_portfolio",
+        "generate_strategy_decision", "analyze_stock", "get_market_overview",
     ),
 )
 

@@ -16,17 +16,36 @@
 
 ---
 
-用自然语言和一位威科夫大师对话。他能调动 20 个工具，自主串联多步推理，给出"打还是不打"的结论。
+用自然语言和一位威科夫大师对话。他能调动 10 个专业工具 + 5 个通用能力，自主串联多步推理，给出"打还是不打"的结论。
 
 Web + CLI + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Actions 定时全自动。
 
 项目主页：**[youngcan-wang.github.io/wyckoff-homepage](https://youngcan-wang.github.io/wyckoff-homepage/)**
 
+## 启动即用 — 一键配置 Agent
+
+| 启动界面 | 持仓查询 |
+|:---:|:---:|
+| <img src="attach/cli-home.png" width="450" /> | <img src="attach/cli-running.png" width="450" /> |
+
+启动后只需两步：
+1. `/model` — 选择模型（Gemini / Claude / OpenAI），输入 API Key
+2. 开始对话 — 无需注册，持仓数据自动存本地
+
+```
+> 帮我看看 000001 和 600519 哪个更值得买
+> 审判我的持仓
+> 大盘现在什么水温
+```
+
+> 💡 可选：`/login` 登录后持仓同步云端，多设备共享。不登录也能完整使用所有功能。
+
 ## 功能一览
 
 | 能力 | 说明 |
 |------|------|
-| 对话式 Agent | 用自然语言触发诊断、筛选、研报，LLM 自主编排 20 个工具；还能读写文件、执行命令、抓取网页 |
+| 对话式 Agent | 用自然语言触发诊断、筛选、研报，LLM 自主编排工具；还能读写文件、执行命令、抓取网页 |
+| Skills | 内置斜杠命令（`/screen`、`/checkup`、`/report`、`/strategy`、`/backtest`）一键复合工作流；用户可通过 `~/.wyckoff/skills/*.md` 扩展 |
 | 上下文压缩 | 动态阈值（25% model context window）自动压缩，智能摘要保留工具关键数据，支持超长对话 |
 | 工具确认 | `exec_command`、`write_file`、`update_portfolio` 执行前弹窗确认，防止误操作 |
 | 五层漏斗筛选 | 全市场 ~4500 股 → ~30 候选，六通道 + 板块共振 + 微观狙击。基于历史量价结构发现潜力标的，不构成投资建议 |
@@ -41,7 +60,7 @@ Web + CLI + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Ac
 | 本地可视化面板 | `wyckoff dashboard` — 推荐、信号、持仓、Agent 记忆、对话日志，暗色/亮色主题，中英双语 |
 | Agent 记忆 | 跨会话记忆：自动提取对话结论，下次提问时注入相关上下文 |
 | 通用 Agent 能力 | 执行命令、读写文件、抓取网页 — 发一个 CSV 路径即可分析，不只是股票工具 |
-| MCP Server | 15 个工具通过 MCP 协议对外暴露，Claude Code / Cursor / 任何 MCP Client 即插即用 |
+| MCP Server | 10 个工具通过 MCP 协议对外暴露，Claude Code / Cursor / 任何 MCP Client 即插即用 |
 | 多通道推送 | 飞书 / 企微 / 钉钉 / Telegram |
 
 ## 数据源
@@ -82,24 +101,9 @@ uv pip install youngcan-wyckoff-analysis
 wyckoff
 ```
 
-启动后：
-- `/model` — 选择模型（Gemini / Claude / OpenAI），输入 API Key
-- `/login` — 登录账号，打通云端持仓
-- 直接输入问题开始对话
-
-```
-> 帮我看看 000001 和 600519 哪个更值得买
-> 审判我的持仓
-> 大盘现在什么水温
-```
-
 升级：`wyckoff update`
 
 ### CLI 效果
-
-| 启动界面 | 持仓查询 |
-|:---:|:---:|
-| <img src="attach/cli-home.png" width="450" /> | <img src="attach/cli-running.png" width="450" /> |
 
 | 诊断报告 | 操作指令 |
 |:---:|:---:|
@@ -143,27 +147,22 @@ streamlit run streamlit_app.py
 |:---:|:---:|
 | <img src="attach/web-chat.png" width="450" /> | <img src="attach/web-export.png" width="450" /> |
 
-## 20 个工具
+## 工具
 
-Agent 的武器库 — 15 个量价工具 + 5 个通用能力：
+Agent 的武器库 — 10 个量价工具 + 5 个通用能力：
 
 | 工具 | 能力 |
 |------|------|
 | `search_stock_by_name` | 名称 / 代码 / 拼音模糊搜索 |
-| `diagnose_stock` | 单股 Wyckoff 结构化诊断 |
-| `get_portfolio` | 查看持仓列表 + 可用资金 |
-| `diagnose_portfolio` | 批量持仓健康扫描 |
-| `update_portfolio` | 新增 / 修改 / 删除持仓、设置可用资金 |
-| `get_stock_price` | 近期 OHLCV 行情 |
+| `analyze_stock` | 单股 Wyckoff 诊断 / 近期 OHLCV 行情（mode 切换） |
+| `portfolio` | 查看持仓 / 批量持仓健康扫描（mode 切换） |
+| `update_portfolio` | 新增 / 修改 / 删除持仓、设置可用资金、删除追踪记录 |
 | `get_market_overview` | 大盘水温概览 |
 | `screen_stocks` | 五层漏斗全市场筛选（⚡后台） |
 | `generate_ai_report` | 三阵营 AI 深度研报（⚡后台） |
 | `generate_strategy_decision` | 持仓去留 + 新标买入决策（⚡后台） |
-| `get_recommendation_tracking` | 历史推荐及后续表现 |
-| `get_signal_pending` | 信号确认池查询 |
-| `get_tail_buy_history` | 尾盘策略历史结果 |
+| `query_history` | 历史推荐 / 信号池 / 尾盘记录查询 |
 | `run_backtest` | 漏斗策略历史回测（⚡后台） |
-| `delete_tracking_records` | 删除推荐/信号记录 |
 | `check_background_tasks` | 后台任务进度查询 |
 | `exec_command` | 执行本地 shell 命令 |
 | `read_file` | 读取本地文件（CSV/Excel 自动解析） |
@@ -204,14 +203,18 @@ Agent 的武器库 — 15 个量价工具 + 5 个通用能力：
 
 ## 配置
 
-复制 `.env.example` 为 `.env`，最少配置：
+**零配置即可使用** — 启动后 `/model` 添加任意 LLM API Key 即可对话。持仓数据自动存本地。
 
-| 变量 | 说明 |
-|------|------|
-| `SUPABASE_URL` / `SUPABASE_KEY` | 登录与云端同步 |
-| `GEMINI_API_KEY`（或其他厂商 Key） | LLM 驱动 |
+进阶配置（`.env` 文件或 GitHub Actions Secrets）：
 
-可选配置：`TICKFLOW_API_KEY`（TickFlow 实时/分时数据，日线主链路优先）、`TUSHARE_TOKEN`（高级数据次优先回退）、`FEISHU_WEBHOOK_URL`（飞书推送）、`TG_BOT_TOKEN` + `TG_CHAT_ID`（Telegram 私人推送）。
+| 变量 | 说明 | 是否必须 |
+|------|------|---------|
+| LLM API Key | `/model add` 交互式配置即可 | ✅ |
+| `TUSHARE_TOKEN` | 股票行情数据（`/config set tushare_token`） | ✅ |
+| `SUPABASE_URL` / `SUPABASE_KEY` | 云端持仓同步（多设备共享） | 可选 |
+| `TICKFLOW_API_KEY` | TickFlow 实时/分时数据 | 可选 |
+| `FEISHU_WEBHOOK_URL` | 飞书推送 | 可选 |
+| `TG_BOT_TOKEN` + `TG_CHAT_ID` | Telegram 推送 | 可选 |
 
 > Tushare 注册推荐：[此链接注册](https://tushare.pro/weborder/#/login?reg=955650)，双方可提升数据权益。
 
