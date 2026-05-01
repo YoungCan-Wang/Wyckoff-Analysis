@@ -1290,7 +1290,7 @@ def _send_notifications(
             _log(f"Telegram 推送异常: {e}", logs_path)
             tg_ok = False
     else:
-        _log("TG_BOT_TOKEN/TG_CHAT_ID 未配置", logs_path)
+        _log("Telegram 未完整配置，跳过 Telegram 推送", logs_path)
     return feishu_ok, tg_ok
 
 
@@ -1373,9 +1373,11 @@ def main() -> int:
     if not tickflow_api_key:
         _log(f"缺少 TICKFLOW_API_KEY，Tail Buy 需要分钟级数据。{TICKFLOW_UPGRADE_HINT}", logs_path)
         return 1
-    if not feishu_webhook or not tg_bot_token or not tg_chat_id:
-        _log("双通道推送未完整配置（需 FEISHU_WEBHOOK_URL + TG_BOT_TOKEN + TG_CHAT_ID）", logs_path)
+    if not feishu_webhook:
+        _log("缺少 FEISHU_WEBHOOK_URL，Tail Buy 需要至少配置飞书推送；Telegram 为可选通道。", logs_path)
         return 1
+    if not tg_bot_token or not tg_chat_id:
+        _log("Telegram 未完整配置，将仅使用飞书推送。", logs_path)
 
     prev_trade_date, today_trade_date = _resolve_trade_dates(logs_path)
     try:
