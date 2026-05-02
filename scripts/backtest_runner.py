@@ -476,20 +476,40 @@ def _close_on_or_after(df: pd.DataFrame, d: date) -> tuple[float | None, date | 
     return float(v.iloc[0]), hit_date
 
 
+def _is_limit_up_locked(row_s: pd.Series) -> bool:
+    """判断是否为一字涨停（open==high==low 且较前日上涨），无法买入。"""
+    try:
+        o = float(row_s.get("open", 0))
+        h = float(row_s.get("high", 0))
+        lo = float(row_s.get("low", 0))
+        c = float(row_s.get("close", 0))
+        if o <= 0:
+            return False
+        # 一字板：开盘=最高=最低（允许微小浮点误差）
+        tol = o * 1e-6
+        if abs(h - o) <= tol and abs(lo - o) <= tol:
+            return c >= o  # 涨停方向
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
 def _open_on_or_after(df: pd.DataFrame, d: date) -> tuple[float | None, date | None]:
-    """取目标日期（含）之后首个交易日的开盘价，用于模拟次日开盘买入。"""
-    row = df[df["date"] >= d].head(1)
-    if row.empty:
+    """取目标日期（含）之后首个可成交交易日的开盘价，跳过一字涨停日。"""
+    candidates = df[df["date"] >= d].head(5)
+    if candidates.empty:
         return None, None
-    if "open" in row.columns:
-        v = pd.to_numeric(row["open"], errors="coerce").dropna()
+    for _, row_s in candidates.iterrows():
+        if _is_limit_up_locked(row_s):
+            continue
+        if "open" in candidates.columns:
+            v = pd.to_numeric(pd.Series([row_s["open"]]), errors="coerce").dropna()
+            if not v.empty:
+                return float(v.iloc[0]), row_s["date"]
+        v = pd.to_numeric(pd.Series([row_s["close"]]), errors="coerce").dropna()
         if not v.empty:
-            return float(v.iloc[0]), row.iloc[0]["date"]
-    # fallback: 没有 open 列时用 close
-    v = pd.to_numeric(row["close"], errors="coerce").dropna()
-    if v.empty:
-        return None, None
-    return float(v.iloc[0]), row.iloc[0]["date"]
+            return float(v.iloc[0]), row_s["date"]
+    return None, None
 
 
 def _close_on_or_before(
@@ -882,10 +902,10 @@ def run_backtest(
                 exit_close, exit_date = _close_on_or_after(full_df, actual_exit_anchor)
 
             elif exit_mode == "sltp":
-                # sltp 口径：仅在实际入场日到退出锚点日的市场交易日窗口内检查触发。
+                # sltp 口径：T+1 合规，从入场次日起检查止盈止损。
                 exit_close = None
                 exit_date = None
-                market_window = trade_dates[actual_entry_idx : actual_exit_idx + 1]
+                market_window = trade_dates[actual_entry_idx + 1 : actual_exit_idx + 1]
                 day_ohlc = ohlc_lookup_cache.get(code)
                 if day_ohlc is None:
                     day_ohlc = _build_daily_ohlc_lookup(full_df)
@@ -906,11 +926,19 @@ def run_backtest(
                 activate_price = entry_close * (1.0 + trailing_activate_pct / 100.0) if not trailing_activated else 0.0
                 peak_high = entry_close  # 持仓期间最高价，用于移动止盈
 
+                prev_close_sltp = entry_close
                 for mkt_day in market_window:
                     candle = day_ohlc.get(mkt_day)
                     if candle is None:
                         continue
                     open_px, high, low, _ = candle
+
+                    # 一字跌停：无法卖出，跳过（open==high==low 且较前日下跌）
+                    tol = open_px * 1e-6
+                    if open_px > 0 and abs(high - open_px) <= tol and abs(low - open_px) <= tol and open_px < prev_close_sltp:
+                        prev_close_sltp = candle[3]
+                        continue
+                    prev_close_sltp = candle[3]
 
                     # 激活门槛：浮盈达到 trailing_activate_pct 后才启用移动止盈
                     if use_trailing and not trailing_activated and high >= activate_price:
@@ -966,10 +994,10 @@ def run_backtest(
 
             elif exit_mode == "atr":
                 # ATR 模式：对齐实盘 step4_rebalancer 的 ATR 动态止损 + trailing。
-                # 无固定止盈，无固定持有期限制（仅有安全网 DEFAULT_ATR_MAX_HOLD_DAYS）。
+                # T+1 合规，从入场次日起检查。
                 exit_close = None
                 exit_date = None
-                market_window = trade_dates[actual_entry_idx : actual_exit_idx + 1]
+                market_window = trade_dates[actual_entry_idx + 1 : actual_exit_idx + 1]
                 day_ohlc = ohlc_lookup_cache.get(code)
                 if day_ohlc is None:
                     day_ohlc = _build_daily_ohlc_lookup(full_df)
@@ -985,11 +1013,19 @@ def run_backtest(
                 activate_price = entry_close * (1.0 + trailing_activate_pct / 100.0) if not trailing_activated else 0.0
                 peak_high = entry_close
 
+                prev_close_atr = entry_close
                 for mkt_day in market_window:
                     candle = day_ohlc.get(mkt_day)
                     if candle is None:
                         continue
                     open_px, high, low, close_px = candle
+
+                    # 一字跌停：无法卖出，跳过（open==high==low 且较前日下跌）
+                    tol = open_px * 1e-6
+                    if open_px > 0 and abs(high - open_px) <= tol and abs(low - open_px) <= tol and open_px < prev_close_atr:
+                        prev_close_atr = close_px
+                        continue
+                    prev_close_atr = close_px
 
                     # 1. 计算当日 ATR，更新 ATR 止损（ratchet up only）
                     atr_val = _calc_atr_from_ohlc(sorted_ohlc_dates, day_ohlc, mkt_day, atr_period)
@@ -1623,8 +1659,8 @@ def _build_summary_md(summary: dict) -> str:
         else "disabled_current_snapshot_filters (bias-reduced)"
     )
     notes = [
-        "- 该回测仅使用日线数据（qfq），不含盘口逐笔成交与涨跌停成交约束。",
-        "- 入场口径：信号日收盘后出信号，次日开盘价买入（消除前视偏差）。",
+        "- 该回测使用日线数据（qfq），含 T+1 与涨跌停成交约束（一字板不可成交）。",
+        "- 入场口径：信号日收盘后出信号，次日开盘价买入（跳过一字涨停日）。",
         "- 已纳入双边交易摩擦成本（买入/卖出各0.5%），用于近似滑点 + 佣金 + 税费影响。",
         "- ⚠️ 仍存在幸存者偏差：股票池来自当前在市样本，未包含历史退市股票。",
     ]
