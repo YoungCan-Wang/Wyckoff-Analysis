@@ -8,6 +8,7 @@ from app.layout import setup_page
 from app.navigation import show_right_nav
 from app.ui_helpers import show_page_loading
 from integrations.supabase_recommendation import load_recommendation_tracking
+from integrations.supabase_client import get_supabase_client
 
 setup_page(page_title="推荐跟踪", page_icon="🎯")
 
@@ -25,7 +26,7 @@ with content_col:
     # 1. 加载数据
     loading = show_page_loading(title="思考中...", subtitle="从数据库加载推荐历史")
     try:
-        raw_data = load_recommendation_tracking(limit=2000)
+        raw_data = load_recommendation_tracking(limit=2000, client=get_supabase_client())
     finally:
         loading.empty()
 

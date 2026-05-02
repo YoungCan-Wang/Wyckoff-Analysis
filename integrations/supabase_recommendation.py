@@ -457,10 +457,11 @@ def correct_tracking_initial_prices() -> int:
         return 0
 
 
-def load_recommendation_tracking(limit: int = 1000) -> list[dict[str, Any]]:
+def load_recommendation_tracking(limit: int = 1000, client=None) -> list[dict[str, Any]]:
     """加载推荐跟踪数据"""
     try:
-        client = _get_supabase_admin_client()
+        if client is None:
+            client = _get_supabase_admin_client()
         resp = (
             client.table(TABLE_RECOMMENDATION_TRACKING)
             .select("*")
