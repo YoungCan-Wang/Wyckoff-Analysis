@@ -73,8 +73,11 @@ tickflow → tushare → akshare → baostock → efinance
 
 任一源不可用时自动切换，无需干预。
 
-> **推荐接入 TickFlow（高频/分时/实时能力更强）**  
-> 注册链接：[TickFlow注册链接](https://tickflow.org/auth/register?ref=5N4NKTCPL4)
+> **推荐接入 TickFlow（实时/分时/高频能力更强）**  
+> 注册链接：[TickFlow 注册](https://tickflow.org/auth/register?ref=5N4NKTCPL4)
+>
+> **Tushare（日线/财务数据）**  
+> 注册链接：[Tushare 注册](https://tushare.pro/register?reg=671776)
 
 ## 快速开始
 
