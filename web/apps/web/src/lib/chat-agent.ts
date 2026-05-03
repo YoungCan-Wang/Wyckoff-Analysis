@@ -399,7 +399,7 @@ function buildTools(userId: string, config: LLMConfig) {
     query_recommendations: tool({
       description: '查询推荐跟踪记录，显示推荐的股票及其涨跌表现。',
       parameters: z.object({
-        limit: z.number().optional().default(20).describe('返回条数，默认20'),
+        limit: z.number().describe('返回条数，通常20'),
       }),
       execute: async ({ limit }) => {
         const { data } = await supabase
@@ -424,7 +424,7 @@ function buildTools(userId: string, config: LLMConfig) {
     query_tail_buy: tool({
       description: '查询尾盘买入策略的历史记录（BUY/WATCH 决策、评分、LLM 理由）。',
       parameters: z.object({
-        limit: z.number().optional().default(20).describe('返回条数'),
+        limit: z.number().describe('返回条数，通常20'),
       }),
       execute: async ({ limit }) => {
         const { data } = await supabase
@@ -449,11 +449,11 @@ function buildTools(userId: string, config: LLMConfig) {
       parameters: z.object({
         action: z.enum(['add', 'update', 'delete']).describe('操作类型'),
         code: z.string().describe('6位股票代码'),
-        name: z.string().optional().describe('股票名称'),
-        shares: z.number().optional().describe('股数'),
-        cost_price: z.number().optional().describe('成本价'),
-        stop_loss: z.number().optional().describe('止损价'),
-        reason: z.string().optional().describe('调仓理由'),
+        name: z.string().nullable().describe('股票名称'),
+        shares: z.number().nullable().describe('股数'),
+        cost_price: z.number().nullable().describe('成本价'),
+        stop_loss: z.number().nullable().describe('止损价'),
+        reason: z.string().nullable().describe('调仓理由'),
       }),
       execute: async ({ action, code, name, shares, cost_price, stop_loss, reason }) => {
         const actionLabel = { add: '新增', update: '修改', delete: '删除' }[action]
@@ -472,10 +472,10 @@ function buildTools(userId: string, config: LLMConfig) {
       parameters: z.object({
         action: z.enum(['add', 'update', 'delete']).describe('操作类型'),
         code: z.string().describe('6位股票代码'),
-        name: z.string().optional().describe('股票名称'),
-        shares: z.number().optional().describe('股数'),
-        cost_price: z.number().optional().describe('成本价'),
-        stop_loss: z.number().optional().describe('止损价'),
+        name: z.string().nullable().describe('股票名称'),
+        shares: z.number().nullable().describe('股数'),
+        cost_price: z.number().nullable().describe('成本价'),
+        stop_loss: z.number().nullable().describe('止损价'),
       }),
       execute: async ({ action, code, name, shares, cost_price, stop_loss }) => {
         const portfolioId = `USER_LIVE:${userId}`
@@ -516,7 +516,7 @@ function buildTools(userId: string, config: LLMConfig) {
       description: '对单只股票做威科夫深度诊断：K线走势、量价关系、均线形态、阶段判断。需要股票代码。',
       parameters: z.object({
         code: z.string().describe('6位股票代码'),
-        name: z.string().optional().describe('股票名称'),
+        name: z.string().nullable().describe('股票名称'),
       }),
       execute: async ({ code, name }) => {
         const tickflowKey = await fetchTickFlowKey(userId)
