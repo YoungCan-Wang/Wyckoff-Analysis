@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 参数敏感性分析 (Grid Search)
 
@@ -12,6 +11,7 @@
         --snapshot-dir data/backtest_snapshots/20260301 \
         --output-dir analysis/sensitivity
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,17 +25,16 @@ from pathlib import Path
 
 import pandas as pd
 
-
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.backtester import run_backtest, parse_date
+from core.backtester import parse_date, run_backtest
 
 # ── 默认参数空间（可通过环境变量 JSON 覆盖） ──
 
 DEFAULT_HOLD_DAYS_GRID = [15, 30, 45, 60]
 DEFAULT_STOP_LOSS_GRID = [0.0, -5.0, -8.0, -12.0]  # 0 = 不设止损
-DEFAULT_TAKE_PROFIT_GRID = [0.0, 8.0, 15.0, 25.0]   # 0 = 不设止盈
+DEFAULT_TAKE_PROFIT_GRID = [0.0, 8.0, 15.0, 25.0]  # 0 = 不设止盈
 DEFAULT_TRAILING_STOP_GRID = [0.0, -5.0, -8.0, -12.0]  # 0 = 不启用移动止盈
 DEFAULT_TRAILING_ACTIVATE_GRID = [0.0, 10.0, 15.0]  # 移动止盈激活门槛(%)
 DEFAULT_TOP_N_GRID = [3, 5, 8]
@@ -81,7 +80,9 @@ def run_sensitivity(
     tn_grid = top_n_grid or _load_grid("SENSITIVITY_TOP_N", DEFAULT_TOP_N_GRID)
 
     combos = list(itertools.product(hd_grid, sl_grid, tp_grid, ts_grid, ta_grid, tn_grid))
-    print(f"[sensitivity] 参数空间: {len(hd_grid)}×{len(sl_grid)}×{len(tp_grid)}×{len(ts_grid)}×{len(ta_grid)}×{len(tn_grid)} = {len(combos)} 组合")
+    print(
+        f"[sensitivity] 参数空间: {len(hd_grid)}×{len(sl_grid)}×{len(tp_grid)}×{len(ts_grid)}×{len(ta_grid)}×{len(tn_grid)} = {len(combos)} 组合"
+    )
 
     rows: list[dict] = []
     for idx, (hd, sl, tp, ts, ta, tn) in enumerate(combos, 1):
@@ -137,20 +138,24 @@ def run_sensitivity(
                 row[f"{track}_avg_ret"] = track_stats.get("avg_ret_pct")
                 row[f"{track}_sharpe"] = track_stats.get("sharpe_ratio")
             rows.append(row)
-            print(f"  -> trades={row['trades']}, win={row.get('win_rate_pct', '-')}%, sharpe={row.get('sharpe_ratio', '-')}")
+            print(
+                f"  -> trades={row['trades']}, win={row.get('win_rate_pct', '-')}%, sharpe={row.get('sharpe_ratio', '-')}"
+            )
         except Exception as exc:
             print(f"  -> FAILED: {exc}")
             traceback.print_exc()
-            rows.append({
-                "hold_days": hd,
-                "stop_loss_pct": sl,
-                "take_profit_pct": tp,
-                "trailing_stop_pct": ts,
-                "trailing_activate_pct": ta,
-                "top_n": tn,
-                "trades": 0,
-                "error": str(exc),
-            })
+            rows.append(
+                {
+                    "hold_days": hd,
+                    "stop_loss_pct": sl,
+                    "take_profit_pct": tp,
+                    "trailing_stop_pct": ts,
+                    "trailing_activate_pct": ta,
+                    "top_n": tn,
+                    "trades": 0,
+                    "error": str(exc),
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -174,21 +179,23 @@ def _build_sensitivity_md(df: pd.DataFrame) -> str:
     if sharpe_col.notna().any():
         best_idx = sharpe_col.idxmax()
         best = valid.loc[best_idx]
-        lines.extend([
-            "## 最优参数（按夏普比）",
-            "",
-            f"- hold_days: **{int(best['hold_days'])}**",
-            f"- stop_loss: **{best['stop_loss_pct']}%**",
-            f"- take_profit: **{best['take_profit_pct']}%**",
-            f"- trailing_stop: **{best.get('trailing_stop_pct', 0)}%**",
-            f"- trailing_activate: **{best.get('trailing_activate_pct', 0)}%**",
-            f"- top_n: **{int(best['top_n'])}**",
-            f"- 夏普比: **{best.get('sharpe_ratio', '-')}**",
-            f"- 胜率: {best.get('win_rate_pct', '-')}%",
-            f"- 平均收益: {best.get('avg_ret_pct', '-')}%",
-            f"- 最大回撤: {best.get('max_drawdown_pct', '-')}%",
-            "",
-        ])
+        lines.extend(
+            [
+                "## 最优参数（按夏普比）",
+                "",
+                f"- hold_days: **{int(best['hold_days'])}**",
+                f"- stop_loss: **{best['stop_loss_pct']}%**",
+                f"- take_profit: **{best['take_profit_pct']}%**",
+                f"- trailing_stop: **{best.get('trailing_stop_pct', 0)}%**",
+                f"- trailing_activate: **{best.get('trailing_activate_pct', 0)}%**",
+                f"- top_n: **{int(best['top_n'])}**",
+                f"- 夏普比: **{best.get('sharpe_ratio', '-')}**",
+                f"- 胜率: {best.get('win_rate_pct', '-')}%",
+                f"- 平均收益: {best.get('avg_ret_pct', '-')}%",
+                f"- 最大回撤: {best.get('max_drawdown_pct', '-')}%",
+                "",
+            ]
+        )
 
     # Top 10
     if sharpe_col.notna().any():
@@ -197,8 +204,10 @@ def _build_sensitivity_md(df: pd.DataFrame) -> str:
         lines.append("| 排名 | hold | SL | TP | topN | 笔数 | 胜率 | 均收 | 夏普 | 卡玛 | MDD |")
         lines.append("|------|------|-----|-----|------|------|------|------|------|------|------|")
         for rank, (_, r) in enumerate(top10.iterrows(), 1):
+
             def _f(v, n=2):
                 return f"{v:.{n}f}" if pd.notna(v) else "-"
+
             lines.append(
                 f"| {rank} | {int(r['hold_days'])} | {r['stop_loss_pct']} | {r['take_profit_pct']} "
                 f"| {int(r['top_n'])} | {int(r['trades'])} | {_f(r.get('win_rate_pct'))} "
@@ -208,21 +217,32 @@ def _build_sensitivity_md(df: pd.DataFrame) -> str:
         lines.append("")
 
     # 各维度敏感性
-    for dim_name, dim_col in [("hold_days", "hold_days"), ("stop_loss_pct", "stop_loss_pct"), ("take_profit_pct", "take_profit_pct"), ("top_n", "top_n")]:
+    for dim_name, dim_col in [
+        ("hold_days", "hold_days"),
+        ("stop_loss_pct", "stop_loss_pct"),
+        ("take_profit_pct", "take_profit_pct"),
+        ("top_n", "top_n"),
+    ]:
         if dim_col not in valid.columns:
             continue
-        grouped = valid.groupby(dim_col).agg(
-            trades=("trades", "sum"),
-            avg_sharpe=("sharpe_ratio", "mean"),
-            avg_win_rate=("win_rate_pct", "mean"),
-            avg_ret=("avg_ret_pct", "mean"),
-        ).reset_index()
+        grouped = (
+            valid.groupby(dim_col)
+            .agg(
+                trades=("trades", "sum"),
+                avg_sharpe=("sharpe_ratio", "mean"),
+                avg_win_rate=("win_rate_pct", "mean"),
+                avg_ret=("avg_ret_pct", "mean"),
+            )
+            .reset_index()
+        )
         lines.extend([f"## 敏感性：{dim_name}", ""])
         lines.append(f"| {dim_name} | 总笔数 | 平均夏普 | 平均胜率 | 平均收益 |")
         lines.append("|----------|--------|---------|---------|---------|")
         for _, r in grouped.iterrows():
+
             def _f2(v, n=3):
                 return f"{v:.{n}f}" if pd.notna(v) else "-"
+
             lines.append(
                 f"| {r[dim_col]} | {int(r['trades'])} | {_f2(r.get('avg_sharpe'))} "
                 f"| {_f2(r.get('avg_win_rate'), 2)} | {_f2(r.get('avg_ret'))} |"
@@ -250,7 +270,8 @@ def main() -> int:
     snapshot = Path(args.snapshot_dir).resolve() if args.snapshot_dir.strip() else None
 
     result_df = run_sensitivity(
-        start_dt, end_dt,
+        start_dt,
+        end_dt,
         board=args.board,
         sample_size=args.sample_size,
         trading_days=args.trading_days,

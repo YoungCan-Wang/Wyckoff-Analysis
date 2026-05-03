@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 用 Streamlit AppTest 验证读盘室聊天输入框的交互行为：
   1. Enter / 点击发送 能正确提交消息
   2. 新对话按钮能清空消息历史
   3. 提交后输入框被清空
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 # ── 最小化 Streamlit 页面，只含聊天 form 逻辑 ──
-_MINI_APP = '''\
+_MINI_APP = """\
 import streamlit as st
 
 st.session_state.setdefault("chat_messages", [])
@@ -39,7 +39,7 @@ if prompt:
 
 # 输出消息数量供测试断言
 st.text(f"msg_count={len(st.session_state['chat_messages'])}")
-'''
+"""
 
 _MINI_APP_PATH = Path(__file__).parent / "_mini_chat_app.py"
 

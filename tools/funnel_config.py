@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 FunnelConfig 环境变量覆盖工具。
 
 提供 FunnelConfig 的 env-var 覆盖与布尔解析逻辑，
 供 agents/ 和 scripts/ 共同复用。
 """
+
 from __future__ import annotations
 
 import os

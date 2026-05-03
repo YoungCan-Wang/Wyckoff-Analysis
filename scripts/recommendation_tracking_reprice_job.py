@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 推荐跟踪价格回填任务（独立定时）：
 - 从 recommendation_tracking 读取 code / recommend_date
@@ -7,6 +6,7 @@
   - current_price: 当前系统时间对应最近交易日收盘价
   - change_pct
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,6 @@ import os
 import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
@@ -65,4 +64,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

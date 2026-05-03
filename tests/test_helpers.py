@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """utils/helpers.py 冒烟测试。"""
+
 from __future__ import annotations
 
 from utils.helpers import extract_symbols_from_text
@@ -21,8 +21,6 @@ class TestExtractSymbolsFromText:
         assert result == []
 
     def test_with_valid_codes_filter(self):
-        result = extract_symbols_from_text(
-            "000001 999999", valid_codes={"000001"}
-        )
+        result = extract_symbols_from_text("000001 999999", valid_codes={"000001"})
         assert "000001" in result
         assert "999999" not in result

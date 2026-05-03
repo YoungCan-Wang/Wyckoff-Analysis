@@ -20,6 +20,7 @@ def _optional_cache(ttl: int, **kwargs):
     """Return ``st.cache_data`` decorator when Streamlit is available, else a no-op."""
     try:
         import streamlit as st
+
         return st.cache_data(ttl=ttl, **kwargs)
     except Exception:
         return lambda fn: fn
@@ -27,7 +28,6 @@ def _optional_cache(ttl: int, **kwargs):
 
 @dataclass
 class WorkflowRun:
-
     run_id: int
     status: str
     conclusion: str | None
@@ -44,6 +44,7 @@ def _secrets_get(name: str, default: str = "") -> str:
         return val
     try:
         import streamlit as st
+
         if hasattr(st, "secrets") and name in st.secrets:
             return str(st.secrets.get(name) or "").strip()
     except Exception:
@@ -74,9 +75,7 @@ def background_jobs_allowed_for_user(user_id: str) -> bool:
     allow_raw = str(cfg.get("allow_user_ids", "") or "").strip()
     if not allow_raw:
         return True
-    allow_set = {
-        x.strip() for x in allow_raw.replace(";", ",").split(",") if x.strip()
-    }
+    allow_set = {x.strip() for x in allow_raw.replace(";", ",").split(",") if x.strip()}
     return str(user_id or "").strip() in allow_set
 
 
@@ -180,11 +179,7 @@ def _list_run_artifacts(run_id: int) -> list[dict[str, Any]]:
 def load_result_json_for_run(run_id: int) -> dict[str, Any] | None:
     artifacts = _list_run_artifacts(run_id)
     target = next(
-        (
-            item
-            for item in artifacts
-            if str(item.get("name", "")).startswith("web-job-result-")
-        ),
+        (item for item in artifacts if str(item.get("name", "")).startswith("web-job-result-")),
         None,
     )
     if not target:

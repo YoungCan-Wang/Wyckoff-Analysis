@@ -1,52 +1,57 @@
-# -*- coding: utf-8 -*-
 """
 批量 AI 研报（Step3）
 拉取选中股票的 OHLCV → 特征工程 → AI 三阵营分析 → 飞书/企微/钉钉推送
 """
+
 from __future__ import annotations
 
 import os
 import re
 import sys
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 import pandas as pd
 
-
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from functools import partial
+
 from core.prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
-from integrations.fetch_a_share_csv import _resolve_trading_window, _fetch_hist
+from core.sector_rotation import SECTOR_STATE_LABELS
+from core.wyckoff_engine import fit_ai_candidate_quotas, normalize_hist_from_fetch
+from integrations.data_source import (
+    fetch_index_hist,
+    fetch_market_cap_map,
+    fetch_sector_map,
+)
+from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from integrations.llm_client import call_llm
 from integrations.rag_veto import (
     get_rag_veto_runtime_status,
     is_rag_veto_enabled,
     run_negative_news_veto,
 )
-from integrations.data_source import (
-    fetch_index_hist,
-    fetch_market_cap_map,
-    fetch_sector_map,
-)
-from utils.feishu import send_feishu_notification
-from utils.notify import send_all_webhooks, send_wecom_notification, send_dingtalk_notification
-from utils.trading_clock import resolve_end_calendar_day
-from core.wyckoff_engine import fit_ai_candidate_quotas, normalize_hist_from_fetch
-from core.sector_rotation import SECTOR_STATE_LABELS
-
-# ── tools/ 层导入 ──
-from tools.report_builder import (    generate_stock_payload,
-    build_track_user_message as _build_track_user_message,
-    _extract_ops_codes_from_markdown,
-    _try_parse_structured_report,
+from tools.data_fetcher import (
+    append_spot_bar_if_needed,
 )
 from tools.data_fetcher import (
     latest_trade_date_from_hist as _latest_trade_date_from_hist,
-    append_spot_bar_if_needed,
 )
-from functools import partial
+
+# ── tools/ 层导入 ──
+from tools.report_builder import (
+    _extract_ops_codes_from_markdown,
+    _try_parse_structured_report,
+    generate_stock_payload,
+)
+from tools.report_builder import (
+    build_track_user_message as _build_track_user_message,
+)
+from utils.feishu import send_feishu_notification
+from utils.notify import send_dingtalk_notification, send_wecom_notification
+from utils.trading_clock import resolve_end_calendar_day
 
 _append_spot_bar_if_needed = partial(
     append_spot_bar_if_needed,
@@ -56,9 +61,7 @@ _append_spot_bar_if_needed = partial(
 
 TRADING_DAYS = 320
 GEMINI_MODEL_FALLBACK = ""
-STEP3_REPORT_STYLE = (
-    os.getenv("STEP3_REPORT_STYLE", "v3_three_camp").strip().lower()
-)
+STEP3_REPORT_STYLE = os.getenv("STEP3_REPORT_STYLE", "v3_three_camp").strip().lower()
 _LEGACY_REPORT_STYLES = {
     "legacy",
     "legacy_dual_pool",
@@ -69,12 +72,9 @@ _LEGACY_REPORT_STYLES = {
 STEP3_USE_LEGACY_REPORT = STEP3_REPORT_STYLE in _LEGACY_REPORT_STYLES
 if STEP3_USE_LEGACY_REPORT:
     raise RuntimeError(
-        "STEP3_REPORT_STYLE legacy 口径已禁用。"
-        "请改为 v3_three_camp（或任意非 legacy 样式）以启用三阵营输出。"
+        "STEP3_REPORT_STYLE legacy 口径已禁用。请改为 v3_three_camp（或任意非 legacy 样式）以启用三阵营输出。"
     )
-STEP3_MAX_AI_INPUT = int(
-    os.getenv("STEP3_MAX_AI_INPUT", "0")
-)
+STEP3_MAX_AI_INPUT = int(os.getenv("STEP3_MAX_AI_INPUT", "0"))
 STEP3_DEFAULT_CONTEXT_CAP = max(
     int(os.getenv("STEP3_DEFAULT_CONTEXT_CAP", "0")),
     0,
@@ -89,23 +89,21 @@ STEP3_MAX_OUTPUT_TOKENS = 32768
 DYNAMIC_MAINLINE_BONUS_RATE = 0.15
 DYNAMIC_MAINLINE_TOP_N = 3
 DYNAMIC_MAINLINE_MIN_CLUSTER = 2
-STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "1").strip().lower() in {
-    "1", "true", "yes", "on"
+STEP3_ENABLE_COMPRESSION = os.getenv("STEP3_ENABLE_COMPRESSION", "1").strip().lower() in {"1", "true", "yes", "on"}
+STEP3_ENABLE_RAG_VETO = os.getenv("STEP3_ENABLE_RAG_VETO", "1").strip().lower() in {"1", "true", "yes", "on"}
+STEP3_SKIP_LLM = os.getenv("STEP3_SKIP_LLM", "0").strip().lower() in {"1", "true", "yes", "on"}
+STEP3_RESPECT_UPSTREAM_PRIORITY = os.getenv("STEP3_RESPECT_UPSTREAM_PRIORITY", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
 }
-STEP3_ENABLE_RAG_VETO = os.getenv(
-    "STEP3_ENABLE_RAG_VETO", "1"
-).strip().lower() in {
-    "1", "true", "yes", "on"
+STEP3_SEND_COMPLIANCE_BRIEF = os.getenv("STEP3_SEND_COMPLIANCE_BRIEF", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
 }
-STEP3_SKIP_LLM = os.getenv("STEP3_SKIP_LLM", "0").strip().lower() in {
-    "1", "true", "yes", "on"
-}
-STEP3_RESPECT_UPSTREAM_PRIORITY = os.getenv(
-    "STEP3_RESPECT_UPSTREAM_PRIORITY", "1"
-).strip().lower() in {"1", "true", "yes", "on"}
-STEP3_SEND_COMPLIANCE_BRIEF = os.getenv(
-    "STEP3_SEND_COMPLIANCE_BRIEF", "1"
-).strip().lower() in {"1", "true", "yes", "on"}
 STEP3_COMPLIANCE_FOCUS_LIMIT = max(
     int(os.getenv("STEP3_COMPLIANCE_FOCUS_LIMIT", "5")),
     1,
@@ -116,7 +114,8 @@ RECENT_DAYS = 15
 HIGHLIGHT_DAYS = 60
 HIGHLIGHT_PCT_THRESHOLD = 5.0
 HIGHLIGHT_VOL_RATIO = 2.0
-from tools.debug_io import DEBUG_MODEL_IO, DEBUG_MODEL_IO_FULL, dump_model_input as _dump_model_input_shared
+from tools.debug_io import dump_model_input as _dump_model_input_shared
+
 # 已按策略要求关闭"目标交易日强校验"，避免数据源时差导致候选被整批跳过。
 ENFORCE_TARGET_TRADE_DATE = False
 SUPPLY_HEAVY_VOL_RATIO = 1.5
@@ -197,9 +196,7 @@ def _send_input_preview(
                 "",
             ]
         )
-    report = (
-        "\n".join(blocks).rstrip() + "\n"
-    )
+    report = "\n".join(blocks).rstrip() + "\n"
     title = f"🧪 模型输入预演 {date.today().strftime('%Y-%m-%d')}"
     sent = send_feishu_notification(webhook_url, title, report) if webhook_url else True
     if wecom_webhook:
@@ -211,7 +208,6 @@ def _send_input_preview(
         return (False, report)
     print(f"[step3] 预演报告发送成功，股票数={total_selected}")
     return (True, report)
-
 
 
 def _has_required_sections(report: str) -> bool:
@@ -244,12 +240,7 @@ def _repair_report_structure(
         "明显假突破、派发、放量失守归入逻辑破产；其余未到起跳点的非操作标的归入储备营地。"
         "不可新增未在输入中出现的股票代码。"
     )
-    repair_user = (
-        "允许使用的股票代码："
-        + ", ".join(selected_codes)
-        + "\n\n以下是待修复文本：\n\n"
-        + report
-    )
+    repair_user = "允许使用的股票代码：" + ", ".join(selected_codes) + "\n\n以下是待修复文本：\n\n" + report
     try:
         fixed = call_llm(
             provider=provider,
@@ -297,11 +288,6 @@ def _build_fallback_sections(selected_df: pd.DataFrame) -> str:
     lines.append("## 🏹 处于起跳板（系统兜底）")
     lines.append("- 无（模型未输出可操作标的，保持耐心观察）")
     return "\n".join(lines)
-
-
-
-
-
 
 
 def _safe_return(series: pd.Series, lookback: int = 10) -> float | None:
@@ -373,43 +359,30 @@ def ultimate_compressor(
     # 百分位因子分数
     df["rs_score"] = df["rs_10"].rank(pct=True, ascending=True, method="average")
     # 量比越小越好：ascending=False 使小值获得更高分位
-    df["dry_score"] = df["min_vol_ratio_5d"].rank(
-        pct=True, ascending=False, method="average"
-    )
+    df["dry_score"] = df["min_vol_ratio_5d"].rank(pct=True, ascending=False, method="average")
     df["base_wyckoff_score"] = 0.6 * df["rs_score"] + 0.4 * df["dry_score"]
 
     # 动态主线识别：候选池内"有集群且相对强度高"的行业
-    industry_stats = (
-        df.groupby("industry", as_index=False)
-        .agg(stock_count=("code", "count"), avg_rs=("rs_score", "mean"))
+    industry_stats = df.groupby("industry", as_index=False).agg(
+        stock_count=("code", "count"), avg_rs=("rs_score", "mean")
     )
-    valid_industry_stats = industry_stats[
-        industry_stats["stock_count"] >= DYNAMIC_MAINLINE_MIN_CLUSTER
-    ]
+    valid_industry_stats = industry_stats[industry_stats["stock_count"] >= DYNAMIC_MAINLINE_MIN_CLUSTER]
     hot_industries: set[str] = set()
     if not valid_industry_stats.empty:
         hot_industries = set(
-            valid_industry_stats.nlargest(DYNAMIC_MAINLINE_TOP_N, "avg_rs")["industry"]
-            .astype(str)
-            .tolist()
+            valid_industry_stats.nlargest(DYNAMIC_MAINLINE_TOP_N, "avg_rs")["industry"].astype(str).tolist()
         )
     df["is_hot_mainline"] = df["industry"].astype(str).isin(hot_industries)
     df["policy_tag"] = df.apply(
         lambda r: _format_mainline_tag(str(r.get("industry", "")), bool(r.get("is_hot_mainline"))),
         axis=1,
     )
-    df["dynamic_bonus"] = df["is_hot_mainline"].map(
-        lambda v: float(bonus_rate) if bool(v) else 0.0
-    )
+    df["dynamic_bonus"] = df["is_hot_mainline"].map(lambda v: float(bonus_rate) if bool(v) else 0.0)
     df["wyckoff_score"] = df["base_wyckoff_score"] * (1.0 + df["dynamic_bonus"])
 
     # 先全局排序，再做行业拥挤度限制
     df = df.sort_values("wyckoff_score", ascending=False).copy()
-    df["industry_rank"] = (
-        df.groupby("industry")["wyckoff_score"]
-        .rank(ascending=False, method="first")
-        .astype(int)
-    )
+    df["industry_rank"] = df.groupby("industry")["wyckoff_score"].rank(ascending=False, method="first").astype(int)
     df = df.groupby("industry", group_keys=False).head(max_per_industry)
     df = df.head(max_total).reset_index(drop=True)
     if hot_industries:
@@ -509,11 +482,7 @@ def _select_upstream_priority_candidates(
     if accum_cap > 0:
         selected_parts.append(core_df[core_df["track"] == "Accum"].head(accum_cap))
 
-    selected_df = (
-        pd.concat(selected_parts, ignore_index=False)
-        if selected_parts
-        else df.iloc[0:0].copy()
-    )
+    selected_df = pd.concat(selected_parts, ignore_index=False) if selected_parts else df.iloc[0:0].copy()
     selected_codes = set(selected_df["code"].astype(str).tolist())
 
     remaining_slots = max(context_cap - len(selected_df), 0)
@@ -572,7 +541,9 @@ def _build_compliance_brief(
         sec_df["industry"] = sec_df.get("industry", "").astype(str).str.strip()
         sec_df = sec_df[sec_df["industry"] != ""]
         score_series = pd.to_numeric(sec_df.get("priority_score"), errors="coerce")
-        score_series = score_series.where(score_series.notna(), pd.to_numeric(sec_df.get("funnel_score"), errors="coerce"))
+        score_series = score_series.where(
+            score_series.notna(), pd.to_numeric(sec_df.get("funnel_score"), errors="coerce")
+        )
         sec_df["score"] = score_series.fillna(0.0)
 
     strong_lines: list[str] = []
@@ -663,7 +634,7 @@ def _call_track_report(
     report = ""
     used_model = ""
     models_to_try = [model]
-    if GEMINI_MODEL_FALLBACK and GEMINI_MODEL_FALLBACK != model:
+    if GEMINI_MODEL_FALLBACK and model != GEMINI_MODEL_FALLBACK:
         models_to_try.append(GEMINI_MODEL_FALLBACK)
 
     for m in models_to_try:
@@ -741,6 +712,7 @@ def run(
 
     print(f"[step3] AI 输入股票数={len(items)}（全量命中输入）")
     from cli.progress import report_progress
+
     report_progress("研报准备", f"输入{len(items)}只", 0.1)
 
     end_day = resolve_end_calendar_day()
@@ -765,6 +737,7 @@ def run(
     if tickflow_api_key:
         try:
             from integrations.tickflow_client import TickFlowClient
+
             _tf = TickFlowClient(api_key=tickflow_api_key)
             codes = [str(i["code"]) for i in items if i.get("code")]
             print(f"[step3] TickFlow 财务指标请求: symbols={len(codes)}")
@@ -797,9 +770,7 @@ def run(
         industry = str(item.get("industry") or sector_map.get(code, "未知行业") or "未知行业").strip()
         rotation_info = sector_rotation_map.get(industry, {}) or {}
         sector_state_code = str(
-            item.get("sector_state_code")
-            or rotation_info.get("state", "")
-            or "NEUTRAL_MIXED"
+            item.get("sector_state_code") or rotation_info.get("state", "") or "NEUTRAL_MIXED"
         ).strip()
         sector_state = str(
             item.get("sector_state")
@@ -857,9 +828,7 @@ def run(
             vol_ratio = volume / vol_ma20.replace(0, pd.NA)
             min_vol_ratio_5d = pd.to_numeric(vol_ratio.tail(5), errors="coerce").min()
             avg_amount_20_yi = (
-                float(amount_ma20.iloc[-1]) / 1e8
-                if len(amount_ma20) and pd.notna(amount_ma20.iloc[-1])
-                else pd.NA
+                float(amount_ma20.iloc[-1]) / 1e8 if len(amount_ma20) and pd.notna(amount_ma20.iloc[-1]) else pd.NA
             )
 
             candidate_rows.append(
@@ -902,9 +871,9 @@ def run(
     candidates_df = pd.DataFrame(candidate_rows)
     candidates_df["code"] = candidates_df["code"].astype(str).str.strip()
     candidates_df["input_order"] = pd.to_numeric(candidates_df.get("input_order"), errors="coerce")
-    candidates_df["input_order"] = candidates_df["input_order"].fillna(
-        pd.Series(range(len(candidates_df)), index=candidates_df.index)
-    ).astype(int)
+    candidates_df["input_order"] = (
+        candidates_df["input_order"].fillna(pd.Series(range(len(candidates_df)), index=candidates_df.index)).astype(int)
+    )
     candidates_df["track"] = candidates_df.get("track", "").astype(str).str.strip()
     candidates_df.loc[~candidates_df["track"].isin(["Trend", "Accum"]), "track"] = "Trend"
     candidates_df["policy_tag"] = ""
@@ -923,11 +892,7 @@ def run(
     if _has_upstream_priority_context(candidates_df):
         selected_df = _select_upstream_priority_candidates(candidates_df)
         fill_count = int(selected_df.get("selection_is_fill", pd.Series(dtype=bool)).sum())
-        track_counts = (
-            selected_df["track"].value_counts().to_dict()
-            if "track" in selected_df.columns
-            else {}
-        )
+        track_counts = selected_df["track"].value_counts().to_dict() if "track" in selected_df.columns else {}
         print(
             f"[step3] 尊重上游优先级收口: raw={len(candidates_df)} -> selected={len(selected_df)} "
             f"(cap={effective_context_cap}, Trend={int(track_counts.get('Trend', 0))}, "
@@ -1024,8 +989,7 @@ def run(
                     f"hits={hit_text} "
                     f"veto={bool(result.veto)} "
                     f"semantic_checked={bool(result.semantic_checked)} "
-                    f"elapsed_ms={int(result.elapsed_ms or 0)}"
-                    + (f" err={result.error}" if result.error else "")
+                    f"elapsed_ms={int(result.elapsed_ms or 0)}" + (f" err={result.error}" if result.error else "")
                 )
 
                 if result.veto:
@@ -1033,9 +997,8 @@ def run(
                     ev_text = f" | 证据: {result.evidence[0]}" if result.evidence else ""
                     semantic_text = ""
                     if result.semantic_checked:
-                        semantic_text = (
-                            f" | 语义判定: 极端负面={result.semantic_negative}"
-                            + (f"({result.semantic_reason})" if result.semantic_reason else "")
+                        semantic_text = f" | 语义判定: 极端负面={result.semantic_negative}" + (
+                            f"({result.semantic_reason})" if result.semantic_reason else ""
                         )
                     rag_veto_lines.append(
                         f"- {code} {result.name}: 命中 {hit_text if hit_text != '-' else '负面关键词'}{semantic_text}{ev_text}"
@@ -1052,12 +1015,10 @@ def run(
 
             if vetoed_codes:
                 before_n = len(selected_df)
-                selected_df = selected_df[
-                    ~selected_df["code"].astype(str).isin(set(vetoed_codes))
-                ].reset_index(drop=True)
-                print(
-                    f"[step3][rag] 负面新闻 veto: {before_n} -> {len(selected_df)}（剔除{len(vetoed_codes)}）"
+                selected_df = selected_df[~selected_df["code"].astype(str).isin(set(vetoed_codes))].reset_index(
+                    drop=True
                 )
+                print(f"[step3][rag] 负面新闻 veto: {before_n} -> {len(selected_df)}（剔除{len(vetoed_codes)}）")
                 rag_veto_preview = (
                     "## 🛡️ RAG 防雷执行摘要（前置）\n"
                     + "\n".join(rag_summary_lines)
@@ -1067,11 +1028,7 @@ def run(
                 )
             else:
                 print("[step3][rag] 未命中负面关键词，保持候选不变")
-                rag_veto_preview = (
-                    "## 🛡️ RAG 防雷执行摘要（前置）\n"
-                    + "\n".join(rag_summary_lines)
-                    + "\n\n---\n"
-                )
+                rag_veto_preview = "## 🛡️ RAG 防雷执行摘要（前置）\n" + "\n".join(rag_summary_lines) + "\n\n---\n"
     else:
         if STEP3_ENABLE_RAG_VETO:
             if selected_df.empty:
@@ -1084,11 +1041,7 @@ def run(
                 print("[step3][rag] 跳过：未满足运行条件")
                 rag_skip_reason = "未满足运行条件"
     if STEP3_ENABLE_RAG_VETO and not rag_veto_preview and rag_skip_reason:
-        rag_veto_preview = (
-            "## 🛡️ RAG 防雷执行摘要（前置）\n"
-            "- 执行状态: 跳过\n"
-            f"- 原因: {rag_skip_reason}\n\n---\n"
-        )
+        rag_veto_preview = f"## 🛡️ RAG 防雷执行摘要（前置）\n- 执行状态: 跳过\n- 原因: {rag_skip_reason}\n\n---\n"
 
     selected_codes = [str(x) for x in selected_df["code"].tolist()]
     if not selected_codes:
@@ -1143,11 +1096,7 @@ def run(
         if track_key not in {"Trend", "Accum"}:
             track_key = "Trend"
         policy_val = row.get("policy_tag")
-        policy_text = (
-            str(policy_val).strip()
-            if isinstance(policy_val, str) and str(policy_val).strip()
-            else None
-        )
+        policy_text = str(policy_val).strip() if isinstance(policy_val, str) and str(policy_val).strip() else None
         _exit_sig = str(row.get("exit_signal", "")).strip() or None
         _exit_price_raw = pd.to_numeric(row.get("exit_price"), errors="coerce")
         _exit_price = float(_exit_price_raw) if pd.notna(_exit_price_raw) else None
@@ -1192,9 +1141,7 @@ def run(
             f"ma200={benchmark_context.get('ma200')}, "
             f"ma50_slope_5d={benchmark_context.get('ma50_slope_5d')}"
         )
-        benchmark_lines.append(
-            f"recent3_cum_pct={benchmark_context.get('recent3_cum_pct')}"
-        )
+        benchmark_lines.append(f"recent3_cum_pct={benchmark_context.get('recent3_cum_pct')}")
         if benchmark_context.get("main_vol_ratio_5_20") is not None:
             benchmark_lines.append(
                 f"main_vol_ratio_5_20={benchmark_context.get('main_vol_ratio_5_20'):.3f}, "
@@ -1210,8 +1157,7 @@ def run(
                 benchmark_lines.append(market_pv_outlook)
         if breadth_ctx:
             benchmark_lines.append(
-                f"breadth_pct={breadth_ctx.get('ratio_pct')}, "
-                f"breadth_delta_pct={breadth_ctx.get('delta_pct')}"
+                f"breadth_pct={breadth_ctx.get('ratio_pct')}, breadth_delta_pct={breadth_ctx.get('delta_pct')}"
             )
         rotation_headline = str(sector_rotation_ctx.get("headline", "")).strip()
         rotation_lines = sector_rotation_ctx.get("overview_lines", []) or []
@@ -1221,18 +1167,12 @@ def run(
                 benchmark_lines.append(rotation_headline)
             benchmark_lines.extend(rotation_lines[:4])
 
-    active_tracks = [
-        track for track in ["Trend", "Accum"] if payloads_by_track.get(track)
-    ]
+    active_tracks = [track for track in ["Trend", "Accum"] if payloads_by_track.get(track)]
     if not active_tracks:
         detail = ", ".join(f"{s}({e})" for s, e in failed) if failed else "无可用 payload"
         print(f"[step3] 候选存在，但未能生成可用模型输入: {detail}")
         return (False, "payload_build_failed", "")
-    candidate_track_counts = (
-        candidates_df["track"].value_counts().to_dict()
-        if "track" in candidates_df.columns
-        else {}
-    )
+    candidate_track_counts = candidates_df["track"].value_counts().to_dict() if "track" in candidates_df.columns else {}
     current_regime = str(benchmark_context.get("regime", "")) if benchmark_context else ""
     track_requests: list[dict] = []
     for track in active_tracks:
@@ -1325,13 +1265,9 @@ def run(
         model_banner = f"🤖 模型: {unique_used_models[0]}（分轨调用）"
     else:
         model_banner = "🤖 模型: " + " | ".join(
-            f"{TRACK_LABELS.get(track, track)}={used_models.get(track, model)}"
-            for track in active_tracks
+            f"{TRACK_LABELS.get(track, track)}={used_models.get(track, model)}" for track in active_tracks
         )
-    code_name = {
-        str(row.get("code")): str(row.get("name", row.get("code")))
-        for _, row in selected_df.iterrows()
-    }
+    code_name = {str(row.get("code")): str(row.get("name", row.get("code"))) for _, row in selected_df.iterrows()}
     selected_set = set(selected_codes)
     # 优先从 Markdown 操作区提取；若未来回退为结构化 JSON，也保持兼容。
     ops_codes = _extract_ops_codes_from_markdown(report, selected_set)
@@ -1346,19 +1282,14 @@ def run(
             if code and code not in ops_codes:
                 ops_codes.append(code)
     ops_lines = [f"- {c} {code_name.get(c, c)}" for c in ops_codes]
-    ops_preview = (
-        "## 🏹 处于起跳板速览（前置）\n"
-        + ("\n".join(ops_lines) if ops_lines else "- 无")
-        + "\n\n---\n"
-    )
+    ops_preview = "## 🏹 处于起跳板速览（前置）\n" + ("\n".join(ops_lines) if ops_lines else "- 无") + "\n\n---\n"
 
     content = f"{model_banner}\n\n{rag_veto_preview}{ops_preview}{SPRINGBOARD_ABC_LEGEND}\n{report}"
     if rag_veto_lines:
         content += "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
     print(f"[step3] 飞书发送原文长度={len(content)}（不压缩，交由飞书分片）")
     print(
-        "[step3] 研报实际使用模型="
-        + " | ".join(f"{track}:{used_models.get(track, model)}" for track in active_tracks)
+        "[step3] 研报实际使用模型=" + " | ".join(f"{track}:{used_models.get(track, model)}" for track in active_tracks)
     )
     if failed:
         content += f"\n\n**获取失败**: {', '.join(f'{s}({e})' for s, e in failed)}"

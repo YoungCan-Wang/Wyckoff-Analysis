@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import textwrap
 from pathlib import Path
 
-from cli.skills import BUILTIN_SKILLS, Skill, _parse_skill_md, load_skills, load_user_skills
+from cli.skills import BUILTIN_SKILLS, _parse_skill_md, load_skills
 
 
 class TestBuiltinSkills:
@@ -26,7 +25,8 @@ class TestBuiltinSkills:
 class TestParseSkillMd:
     def test_with_frontmatter(self, tmp_path: Path):
         md = tmp_path / "morning.md"
-        md.write_text(textwrap.dedent("""\
+        md.write_text(
+            textwrap.dedent("""\
             ---
             name: morning
             description: 每日早盘复盘
@@ -34,7 +34,9 @@ class TestParseSkillMd:
 
             1. 调用 get_market_overview
             2. 综合建议
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         skill = _parse_skill_md(md)
         assert skill is not None
         assert skill.name == "morning"
@@ -59,7 +61,7 @@ class TestParseSkillMd:
 
     def test_invalid_frontmatter_name_rejected(self, tmp_path: Path):
         md = tmp_path / "ok.md"
-        md.write_text("---\nname: \"bad'inject\"\n---\nprompt", encoding="utf-8")
+        md.write_text('---\nname: "bad\'inject"\n---\nprompt', encoding="utf-8")
         assert _parse_skill_md(md) is None
 
 
@@ -72,26 +74,32 @@ class TestLoadSkills:
 
     def test_user_overrides_builtin(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr("cli.skills.SKILLS_DIR", tmp_path)
-        (tmp_path / "screen.md").write_text(textwrap.dedent("""\
+        (tmp_path / "screen.md").write_text(
+            textwrap.dedent("""\
             ---
             name: screen
             description: 自定义筛选
             ---
             我的自定义筛选流程
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         skills = load_skills()
         assert skills["screen"].description == "自定义筛选"
         assert "自定义筛选流程" in skills["screen"].prompt
 
     def test_user_adds_new(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr("cli.skills.SKILLS_DIR", tmp_path)
-        (tmp_path / "morning.md").write_text(textwrap.dedent("""\
+        (tmp_path / "morning.md").write_text(
+            textwrap.dedent("""\
             ---
             name: morning
             description: 早盘复盘
             ---
             每日早盘
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         skills = load_skills()
         assert "morning" in skills
         assert "screen" in skills
@@ -100,6 +108,7 @@ class TestLoadSkills:
 class TestLoopGuardRequiredArgs:
     def test_missing_when_wrong_mode(self):
         from cli.loop_guard import TurnExpectation, missing_required_tool
+
         exp = TurnExpectation(
             required_tool="portfolio",
             reason="test",
@@ -109,6 +118,7 @@ class TestLoopGuardRequiredArgs:
 
     def test_satisfied_when_correct_mode(self):
         from cli.loop_guard import TurnExpectation, missing_required_tool
+
         exp = TurnExpectation(
             required_tool="portfolio",
             reason="test",
@@ -118,16 +128,19 @@ class TestLoopGuardRequiredArgs:
 
     def test_no_required_args_accepts_any(self):
         from cli.loop_guard import TurnExpectation, missing_required_tool
+
         exp = TurnExpectation(required_tool="portfolio", reason="test")
         assert missing_required_tool(exp, [("portfolio", {})]) is False
 
     def test_backward_compat_str_entries(self):
         from cli.loop_guard import TurnExpectation, missing_required_tool
+
         exp = TurnExpectation(required_tool="portfolio", reason="test")
         assert missing_required_tool(exp, ["portfolio"]) is False
 
     def test_str_entries_fail_when_args_required(self):
         from cli.loop_guard import TurnExpectation, missing_required_tool
+
         exp = TurnExpectation(
             required_tool="portfolio",
             reason="test",

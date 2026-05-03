@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """尾盘买入记录页面。"""
+
 import pandas as pd
 import streamlit as st
 
@@ -29,8 +29,14 @@ with content_col:
     df = pd.DataFrame(raw_data)
 
     display_cols = [
-        "code", "name", "run_date", "signal_type",
-        "rule_score", "priority_score", "llm_decision", "llm_reason",
+        "code",
+        "name",
+        "run_date",
+        "signal_type",
+        "rule_score",
+        "priority_score",
+        "llm_decision",
+        "llm_reason",
     ]
     display_cols = [c for c in display_cols if c in df.columns]
     df = df[display_cols]

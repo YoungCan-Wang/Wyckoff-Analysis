@@ -1,8 +1,8 @@
-# -*- coding: utf-8 -*-
 """app/background_jobs.py AGENT_MODE 开关集成测试。
 
 Streamlit 和 integrations.github_actions 在测试环境中不可用，使用 mock 替代。
 """
+
 from __future__ import annotations
 
 import os
@@ -55,6 +55,7 @@ class TestBackgroundJobsAgentModeSwitch:
 
         with patch.dict(os.environ, {"AGENT_MODE": "1"}):
             from app.background_jobs import background_jobs_ready_for_current_user
+
             ready, msg = background_jobs_ready_for_current_user()
             assert ready is True
             assert msg == ""
@@ -65,6 +66,7 @@ class TestBackgroundJobsAgentModeSwitch:
 
         with patch.dict(os.environ, {"AGENT_MODE": "1"}):
             from app.background_jobs import background_jobs_ready_for_current_user
+
             ready, msg = background_jobs_ready_for_current_user()
             assert ready is False
             assert "未登录" in msg
@@ -78,6 +80,7 @@ class TestBackgroundJobsAgentModeSwitch:
             gh_mod.github_actions_ready.return_value = (False, "未配置 GITHUB_ACTIONS_TOKEN")
 
             from app.background_jobs import background_jobs_ready_for_current_user
+
             ready, msg = background_jobs_ready_for_current_user()
             assert ready is False
             assert "GITHUB_ACTIONS_TOKEN" in msg
@@ -89,6 +92,7 @@ class TestBackgroundJobsAgentModeSwitch:
         with patch.dict(os.environ, {"AGENT_MODE": "1"}):
             with patch("app.agent_jobs.submit_agent_job", return_value="funnel_screen_abc123") as mock_submit:
                 from app.background_jobs import submit_background_job
+
                 rid = submit_background_job("funnel_screen", {"board": "all"}, state_key="test_key")
                 assert rid == "funnel_screen_abc123"
                 mock_submit.assert_called_once()
@@ -100,6 +104,7 @@ class TestBackgroundJobsAgentModeSwitch:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("AGENT_MODE", None)
             from app.background_jobs import submit_background_job
+
             rid = submit_background_job("funnel_screen", {"board": "all"}, state_key="test_gh_key")
 
             gh_mod = sys.modules["integrations.github_actions"]
@@ -118,7 +123,8 @@ class TestBackgroundJobsAgentModeSwitch:
 
         with patch("app.agent_jobs.sync_agent_job_state", return_value={"status": "done"}) as mock_sync:
             from app.background_jobs import sync_background_job_state
-            result = sync_background_job_state(state_key="test_sync_key")
+
+            sync_background_job_state(state_key="test_sync_key")
             mock_sync.assert_called_once_with(state_key="test_sync_key")
 
     def test_sync_gh_actions_flag(self):
@@ -131,7 +137,8 @@ class TestBackgroundJobsAgentModeSwitch:
         }
 
         from app.background_jobs import sync_background_job_state
-        result = sync_background_job_state(state_key="test_sync_gh")
+
+        sync_background_job_state(state_key="test_sync_gh")
 
         gh_mod = sys.modules["integrations.github_actions"]
         gh_mod.find_run_by_request_id.assert_called_once_with("req_xyz")

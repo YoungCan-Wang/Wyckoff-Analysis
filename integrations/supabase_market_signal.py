@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Supabase 最新交易日市场信号读写
 
@@ -6,10 +5,10 @@ Supabase 最新交易日市场信号读写
 1) 定时任务写入 A50 / VIX / 大盘水温
 2) Web 端读取最新交易日市场信号并渲染全局提示栏
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-import os
+from datetime import UTC, date, datetime
 from typing import Any
 
 from supabase import Client
@@ -290,8 +289,7 @@ def compose_market_state(row: dict[str, Any] | None) -> dict[str, str]:
     benchmark_slot = _normalize_benchmark_slot(benchmark_regime)
     premarket_slot = _normalize_premarket_slot(premarket_regime)
     strategy = (
-        MARKET_BANNER_MATRIX.get(premarket_slot, {}).get(benchmark_slot)
-        or MARKET_BANNER_MATRIX["CAUTION"]["NEUTRAL"]
+        MARKET_BANNER_MATRIX.get(premarket_slot, {}).get(benchmark_slot) or MARKET_BANNER_MATRIX["CAUTION"]["NEUTRAL"]
     )
 
     return {
@@ -312,10 +310,7 @@ def compose_market_banner(row: dict[str, Any] | None) -> dict[str, str]:
     premarket_regime = str(data.get("premarket_regime", "") or "").strip().upper()
     state = compose_market_state(data)
     title = (
-        MARKET_BANNER_MATRIX
-        .get(state["premarket_slot"], {})
-        .get(state["benchmark_slot"], {})
-        .get("title")
+        MARKET_BANNER_MATRIX.get(state["premarket_slot"], {}).get(state["benchmark_slot"], {}).get("title")
         or "亲爱的投资者，最新交易日请顺势而为，保持节奏。"
     )
     body = (
@@ -375,13 +370,7 @@ def _normalize_row_for_upsert(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_market_signal_by_trade_date(client: Client, trade_date: str) -> dict[str, Any] | None:
-    resp = (
-        client.table(TABLE_MARKET_SIGNAL_DAILY)
-        .select("*")
-        .eq("trade_date", trade_date)
-        .limit(1)
-        .execute()
-    )
+    resp = client.table(TABLE_MARKET_SIGNAL_DAILY).select("*").eq("trade_date", trade_date).limit(1).execute()
     if not resp.data:
         return None
     return dict(resp.data[0])
@@ -423,7 +412,7 @@ def upsert_market_signal_daily(trade_date: date | str, patch: dict[str, Any]) ->
             patch.get("source_jobs") if isinstance(patch, dict) else None,
         )
         merged.update(compose_market_banner(merged))
-        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+        merged["updated_at"] = datetime.now(UTC).isoformat()
         try:
             client.table(TABLE_MARKET_SIGNAL_DAILY).upsert(
                 _normalize_row_for_upsert(merged),

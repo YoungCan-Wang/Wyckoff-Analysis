@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """core/wyckoff_engine.py 冒烟测试。"""
+
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from core.wyckoff_engine import (
     FunnelConfig,

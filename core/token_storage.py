@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Token 持久化 — 服务端缓存 + URL query_params 双通道。
 
@@ -9,6 +8,7 @@ Token 持久化 — 服务端缓存 + URL query_params 双通道。
 不依赖任何浏览器端 JavaScript，彻底规避 iframe 沙箱限制。
 服务端重启后缓存丢失，用户需重新登录（可接受）。
 """
+
 from __future__ import annotations
 
 import secrets
@@ -16,15 +16,15 @@ import time
 
 import streamlit as st
 
-
-_QP_KEY = "sk"           # URL 里的 query param 名称
-_MAX_ENTRIES = 500        # 最大缓存条目（防内存泄漏）
-_ENTRY_TTL = 7 * 86400   # 7 天过期
+_QP_KEY = "sk"  # URL 里的 query param 名称
+_MAX_ENTRIES = 500  # 最大缓存条目（防内存泄漏）
+_ENTRY_TTL = 7 * 86400  # 7 天过期
 
 
 # ---------------------------------------------------------------------------
 # 服务端 token 缓存（进程级，st.cache_resource 保证跨 session 共享）
 # ---------------------------------------------------------------------------
+
 
 @st.cache_resource
 def _get_token_store() -> dict:
@@ -48,6 +48,7 @@ def _cleanup_store(store: dict) -> None:
 # ---------------------------------------------------------------------------
 # Persist (write)
 # ---------------------------------------------------------------------------
+
 
 def persist_tokens_to_storage(access_token: str, refresh_token: str) -> bool:
     """将 token 存入服务端缓存，session_key 写入 URL query_params。"""
@@ -74,6 +75,7 @@ def persist_tokens_to_storage(access_token: str, refresh_token: str) -> bool:
 # ---------------------------------------------------------------------------
 # Restore (read)
 # ---------------------------------------------------------------------------
+
 
 def restore_tokens_from_storage() -> tuple[str | None, str | None]:
     """从 URL query_params 读 session_key → 查服务端缓存 → 返回 token。"""
@@ -105,6 +107,7 @@ def restore_tokens_from_storage() -> tuple[str | None, str | None]:
 # Clear
 # ---------------------------------------------------------------------------
 
+
 def clear_tokens_from_storage() -> bool:
     """清除服务端缓存 + URL query_params。"""
     try:
@@ -123,6 +126,7 @@ def clear_tokens_from_storage() -> bool:
 # ---------------------------------------------------------------------------
 # Query params 同步（确保跨页面导航后 URL 仍带 session_key）
 # ---------------------------------------------------------------------------
+
 
 def ensure_query_params_synced() -> None:
     """如果 session_state 有 session_key 但 URL 没有，补写 URL。"""

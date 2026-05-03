@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 ADK 工具函数 — 将已有的 Wyckoff 引擎能力暴露给对话 Agent。
 
@@ -8,13 +7,14 @@ ADK 的 FunctionTool 会自动解析为工具 schema。
 用户凭据（API Key / Tushare Token 等）按需从 Supabase 实时获取，
 不依赖 st.session_state 或 os.environ 的长链传递。
 """
+
 from __future__ import annotations
 
 import logging
 import os
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 try:
@@ -24,6 +24,7 @@ except ImportError:
     class ToolContext:  # type: ignore[no-redef]
         def __init__(self, state=None):
             self.state = state or {}
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ def _code_to_name(code: str) -> str:
     if _NAME_MAP is None:
         try:
             from integrations.fetch_a_share_csv import get_all_stocks
+
             _NAME_MAP = {s["code"]: s["name"] for s in get_all_stocks()}
         except Exception:
             _NAME_MAP = {}
@@ -116,6 +118,7 @@ def _load_user_credentials(user_id: str) -> dict[str, Any]:
 
     try:
         from integrations.supabase_portfolio import load_user_settings_admin
+
         row = load_user_settings_admin(user_id) or {}
     except Exception as e:
         logger.warning("_load_user_credentials failed for %s: %s", user_id, e)
@@ -164,6 +167,7 @@ def _get_credential(tool_context: ToolContext | None, key: str, env_fallback: st
     # 第二层：wyckoff.json 本地配置
     try:
         from cli.auth import load_config
+
         local_val = str(load_config().get(key, "") or "").strip()
         if local_val:
             return local_val
@@ -181,13 +185,15 @@ def _resolve_llm_config(tool_context) -> tuple[str, str, str, str]:
     优先读 CLI 默认模型配置，其次 Supabase/env gemini 兜底。
     """
     try:
-        from cli.auth import load_model_configs, load_default_model_id
+        from cli.auth import load_default_model_id, load_model_configs
+
         configs = load_model_configs()
         default_id = load_default_model_id()
         cfg = next((c for c in configs if c["id"] == default_id), None)
         if cfg and cfg.get("api_key"):
             prov = cfg.get("provider_name", "openai")
             from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS
+
             base = cfg.get("base_url", "") or OPENAI_COMPATIBLE_BASE_URLS.get(prov, "")
             return prov, cfg["api_key"], cfg.get("model", ""), base
     except Exception:
@@ -212,6 +218,7 @@ def _ensure_tushare_token(tool_context: ToolContext | None) -> None:
 # ---------------------------------------------------------------------------
 # Tool 1: 股票搜索
 # ---------------------------------------------------------------------------
+
 
 def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
     """根据关键词搜索 A 股股票，支持名称和代码双向模糊搜索。
@@ -249,7 +256,10 @@ def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
 # Tool 2: 个股分析（合并原 diagnose_stock + get_stock_price）
 # ---------------------------------------------------------------------------
 
-def analyze_stock(code: str, mode: str = "diagnose", cost: float = 0.0, days: int = 30, tool_context: ToolContext = None) -> dict:
+
+def analyze_stock(
+    code: str, mode: str = "diagnose", cost: float = 0.0, days: int = 30, tool_context: ToolContext = None
+) -> dict:
     """分析单只 A 股股票：Wyckoff 健康诊断或近期行情查询。
 
     Args:
@@ -263,8 +273,8 @@ def analyze_stock(code: str, mode: str = "diagnose", cost: float = 0.0, days: in
     """
     try:
         _ensure_tushare_token(tool_context)
-        from integrations.stock_hist_repository import get_stock_hist
         from core.stock_cache import _COL_MAP
+        from integrations.stock_hist_repository import get_stock_hist
 
         mode = (mode or "diagnose").strip().lower()
         if mode not in ("diagnose", "price"):
@@ -284,15 +294,17 @@ def analyze_stock(code: str, mode: str = "diagnose", cost: float = 0.0, days: in
             latest = df.iloc[-1] if len(df) > 0 else {}
             records = []
             for _, row in df.iterrows():
-                records.append({
-                    "date": str(row.get("date", "")),
-                    "open": round(float(row.get("open", 0)), 2),
-                    "high": round(float(row.get("high", 0)), 2),
-                    "low": round(float(row.get("low", 0)), 2),
-                    "close": round(float(row.get("close", 0)), 2),
-                    "volume": int(row.get("volume", 0)),
-                    "pct_chg": round(float(row.get("pct_chg", 0)), 2),
-                })
+                records.append(
+                    {
+                        "date": str(row.get("date", "")),
+                        "open": round(float(row.get("open", 0)), 2),
+                        "high": round(float(row.get("high", 0)), 2),
+                        "low": round(float(row.get("low", 0)), 2),
+                        "close": round(float(row.get("close", 0)), 2),
+                        "volume": int(row.get("volume", 0)),
+                        "pct_chg": round(float(row.get("pct_chg", 0)), 2),
+                    }
+                )
             return {
                 "code": code,
                 "days": len(records),
@@ -306,6 +318,7 @@ def analyze_stock(code: str, mode: str = "diagnose", cost: float = 0.0, days: in
 
         # mode == "diagnose"
         from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_text
+
         start_date = end_date - timedelta(days=500)
         df = get_stock_hist(code, start_date, end_date)
         if df is None or df.empty:
@@ -352,6 +365,7 @@ def analyze_stock(code: str, mode: str = "diagnose", cost: float = 0.0, days: in
 # Tool 3: 持仓（合并原 get_portfolio + diagnose_portfolio）
 # ---------------------------------------------------------------------------
 
+
 def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
     """查看或诊断用户当前持仓。
 
@@ -371,17 +385,20 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
         # local-first
         try:
             from integrations.local_db import load_portfolio
+
             state = load_portfolio(portfolio_id)
         except Exception:
             pass
 
         if state is None and _has_cloud(tool_context):
             from integrations.supabase_portfolio import load_portfolio_state
+
             _client = _get_user_client(tool_context)
             state = _with_auth_retry(tool_context, load_portfolio_state, portfolio_id, client=_client)
             if state:
                 try:
                     from integrations.local_db import save_portfolio
+
                     save_portfolio(
                         portfolio_id,
                         float(state.get("free_cash", 0) or 0),
@@ -409,13 +426,15 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
         if mode == "view":
             positions = []
             for p in state.get("positions", []):
-                positions.append({
-                    "code": p.get("code", ""),
-                    "name": p.get("name", ""),
-                    "shares": p.get("shares", 0),
-                    "cost_price": p.get("cost", p.get("cost_price", 0)),
-                    "buy_dt": p.get("buy_dt", ""),
-                })
+                positions.append(
+                    {
+                        "code": p.get("code", ""),
+                        "name": p.get("name", ""),
+                        "shares": p.get("shares", 0),
+                        "cost_price": p.get("cost", p.get("cost_price", 0)),
+                        "buy_dt": p.get("buy_dt", ""),
+                    }
+                )
             return {
                 "portfolio_id": portfolio_id,
                 "free_cash": state.get("free_cash", 0),
@@ -425,8 +444,8 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
 
         # mode == "diagnose"
         _ensure_tushare_token(tool_context)
-        from integrations.stock_hist_repository import get_stock_hist
         from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_text
+        from integrations.stock_hist_repository import get_stock_hist
 
         if not state.get("positions"):
             return {
@@ -458,23 +477,26 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
                     if hint not in hist_tickflow_hints:
                         hist_tickflow_hints.append(hint)
                 from core.stock_cache import _COL_MAP
+
                 df = df.rename(columns=_COL_MAP)
                 d = diagnose_one_stock(pos_code, pos_name, pos_cost, df)
                 successful_count += 1
-                results.append({
-                    "code": d.code,
-                    "name": d.name,
-                    "health": d.health,
-                    "pnl_pct": round(d.pnl_pct, 2),
-                    "latest_close": d.latest_close,
-                    "l2_channel": d.l2_channel,
-                    "l4_triggers": d.l4_triggers,
-                    "health_reasons": d.health_reasons,
-                    "formatted_text": format_diagnostic_text(d),
-                    "data_status": "ok",
-                    "latest_date": latest_date or _latest_hist_date(df),
-                    **hist_meta,
-                })
+                results.append(
+                    {
+                        "code": d.code,
+                        "name": d.name,
+                        "health": d.health,
+                        "pnl_pct": round(d.pnl_pct, 2),
+                        "latest_close": d.latest_close,
+                        "l2_channel": d.l2_channel,
+                        "l4_triggers": d.l4_triggers,
+                        "health_reasons": d.health_reasons,
+                        "formatted_text": format_diagnostic_text(d),
+                        "data_status": "ok",
+                        "latest_date": latest_date or _latest_hist_date(df),
+                        **hist_meta,
+                    }
+                )
             except Exception as e:
                 failed_count += 1
                 results.append({"code": pos_code, "name": pos_name, "error": str(e)})
@@ -498,6 +520,7 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
 # ---------------------------------------------------------------------------
 # Tool 5: 大盘概览
 # ---------------------------------------------------------------------------
+
 
 def get_market_overview(tool_context: ToolContext) -> dict:
     """获取当前 A 股大盘环境概览。
@@ -670,7 +693,9 @@ def screen_stocks(board: str = "all", tool_context: ToolContext = None) -> dict:
 
         try:
             ok, symbols, bench_ctx, details = run_funnel(
-                "", notify=False, return_details=True,
+                "",
+                notify=False,
+                return_details=True,
             )
         finally:
             # 恢复环境变量，避免影响后续调用
@@ -722,6 +747,7 @@ def screen_stocks(board: str = "all", tool_context: ToolContext = None) -> dict:
 # ---------------------------------------------------------------------------
 # Tool 7: AI 研报生成
 # ---------------------------------------------------------------------------
+
 
 def generate_ai_report(stock_codes: list[str], tool_context: ToolContext) -> dict:
     """对指定股票列表生成威科夫三阵营 AI 深度研报。
@@ -785,6 +811,7 @@ def generate_ai_report(stock_codes: list[str], tool_context: ToolContext) -> dic
 # ---------------------------------------------------------------------------
 # Tool 8: 持仓策略决策
 # ---------------------------------------------------------------------------
+
 
 def generate_strategy_decision(tool_context: ToolContext) -> dict:
     """生成持仓去留决策和新标的买入策略（需要先运行筛选和研报）。
@@ -870,6 +897,7 @@ def generate_strategy_decision(tool_context: ToolContext) -> dict:
 # Tool 5: 历史记录查询（合并原 recommendation / signal / tail_buy）
 # ---------------------------------------------------------------------------
 
+
 def query_history(source: str, status: str = "all", run_date: str = "", decision: str = "", limit: int = 20) -> dict:
     """查询历史记录：AI 推荐追踪、信号确认池或尾盘买入记录。
 
@@ -900,15 +928,18 @@ def _query_recommendation(limit: int) -> dict:
         records = []
         try:
             from integrations.local_db import load_recommendations
+
             records = load_recommendations(limit=limit)
         except Exception:
             pass
         if not records:
             from integrations.supabase_recommendation import load_recommendation_tracking
+
             records = load_recommendation_tracking(limit=limit)
             if records:
                 try:
                     from integrations.local_db import save_recommendations
+
                     save_recommendations(records)
                 except Exception:
                     pass
@@ -940,13 +971,15 @@ def _query_signal(status: str, limit: int) -> dict:
         rows: list[dict] = []
         try:
             from integrations.local_db import load_signals
+
             st = status if status in ("pending", "confirmed", "expired") else None
             rows = load_signals(status=st, limit=limit)
         except Exception:
             pass
         if not rows:
-            from integrations.supabase_base import create_admin_client, is_admin_configured
             from core.constants import TABLE_SIGNAL_PENDING
+            from integrations.supabase_base import create_admin_client, is_admin_configured
+
             if not is_admin_configured():
                 return {"error": "本地无缓存且 Supabase 未配置"}
             client = create_admin_client()
@@ -957,6 +990,7 @@ def _query_signal(status: str, limit: int) -> dict:
             if rows:
                 try:
                     from integrations.local_db import save_signals
+
                     save_signals(rows)
                 except Exception:
                     pass
@@ -1003,7 +1037,7 @@ def _get_user_client(tool_context: ToolContext | None):
     """获取或复用 user client。token 变化时重建；auth 失败自动重登。"""
     if tool_context is None:
         return None
-    at = (tool_context.state.get("access_token") or "")
+    at = tool_context.state.get("access_token") or ""
     if not at:
         return None
     user_id = _get_user_id(tool_context)
@@ -1011,8 +1045,9 @@ def _get_user_client(tool_context: ToolContext | None):
     cached = _user_client_cache.get(cache_key)
     if cached is not None:
         return cached
-    rt = (tool_context.state.get("refresh_token") or "")
+    rt = tool_context.state.get("refresh_token") or ""
     from integrations.supabase_base import create_user_client, get_session_tokens
+
     try:
         client = create_user_client(at, rt)
         new_at, new_rt = get_session_tokens(client)
@@ -1035,12 +1070,14 @@ def _get_user_client(tool_context: ToolContext | None):
 def _relogin_and_create_client(tool_context: ToolContext | None):
     """用 wyckoff.json 中的凭证重新登录，返回 (client, access_token, refresh_token)。"""
     from cli.auth import _auto_relogin
+
     data = _auto_relogin()
     if not data:
         return None, "", ""
     tool_context.state["access_token"] = data["access_token"]
     tool_context.state["refresh_token"] = data["refresh_token"]
     from integrations.supabase_base import create_user_client, get_session_tokens
+
     client = create_user_client(data["access_token"], data["refresh_token"])
     new_at, new_rt = get_session_tokens(client)
     return client, new_at or data["access_token"], new_rt or data["refresh_token"]
@@ -1091,6 +1128,7 @@ def _to_ts_code(code: str) -> str:
 # Tool 6: 持仓管理（合并原 update_portfolio + delete_tracking_records）
 # ---------------------------------------------------------------------------
 
+
 def update_portfolio(
     action: str,
     code: str = "",
@@ -1128,10 +1166,12 @@ def update_portfolio(
             codes = [str(c).strip() for c in codes if str(c).strip()]
             if table == "recommendation":
                 from integrations.local_db import delete_recommendations
+
                 n = delete_recommendations(codes)
                 return {"deleted": n, "table": "recommendation_tracking", "codes": codes}
             elif table == "signal":
                 from integrations.local_db import delete_signals
+
                 n = delete_signals(codes)
                 return {"deleted": n, "table": "signal_pending", "codes": codes}
             else:
@@ -1157,14 +1197,25 @@ def update_portfolio(
                 return {"error": f"代码 {code} 在股票列表中未找到，请确认代码是否正确"}
             if cloud:
                 from integrations.supabase_portfolio import upsert_position
+
                 client = _get_user_client(tool_context)
-                ok, msg = _with_auth_retry(tool_context, upsert_position, portfolio_id, {
-                    "code": code, "name": name, "shares": shares,
-                    "cost_price": cost_price, "buy_dt": buy_dt,
-                }, client=client)
+                ok, msg = _with_auth_retry(
+                    tool_context,
+                    upsert_position,
+                    portfolio_id,
+                    {
+                        "code": code,
+                        "name": name,
+                        "shares": shares,
+                        "cost_price": cost_price,
+                        "buy_dt": buy_dt,
+                    },
+                    client=client,
+                )
                 if not ok:
                     return {"error": msg}
             from integrations.local_db import upsert_local_position
+
             upsert_local_position(portfolio_id, code, name, shares, cost_price, buy_dt)
             msg = msg or f"{code} 已更新"
 
@@ -1174,22 +1225,26 @@ def update_portfolio(
             code = code.strip()
             if cloud:
                 from integrations.supabase_portfolio import delete_position
+
                 client = _get_user_client(tool_context)
                 ok, msg = _with_auth_retry(tool_context, delete_position, portfolio_id, code, client=client)
                 if not ok:
                     return {"error": msg}
             from integrations.local_db import delete_local_position
+
             delete_local_position(portfolio_id, code)
             msg = msg or f"{code} 已删除"
 
         elif action == "set_cash":
             if cloud:
                 from integrations.supabase_portfolio import update_free_cash
+
                 client = _get_user_client(tool_context)
                 ok, msg = _with_auth_retry(tool_context, update_free_cash, portfolio_id, free_cash, client=client)
                 if not ok:
                     return {"error": msg}
             from integrations.local_db import update_local_free_cash
+
             update_local_free_cash(portfolio_id, free_cash)
             msg = msg or f"可用资金已更新为 {free_cash:,.2f}"
 
@@ -1200,10 +1255,12 @@ def update_portfolio(
         if cloud:
             try:
                 from integrations.supabase_portfolio import load_portfolio_state
+
                 client = _get_user_client(tool_context)
                 state = _with_auth_retry(tool_context, load_portfolio_state, portfolio_id, client=client)
                 if state:
                     from integrations.local_db import save_portfolio
+
                     save_portfolio(
                         portfolio_id,
                         float(state.get("free_cash", 0) or 0),
@@ -1223,13 +1280,14 @@ def update_portfolio(
 
         # 读本地最新状态返回
         from integrations.local_db import load_portfolio
+
         state = load_portfolio(portfolio_id)
         if not state:
             return {"success": True, "message": msg, "positions": []}
 
         summary = []
         for p in state.get("positions", []):
-            summary.append(f"{p['code']} {p.get('name','')} {p.get('shares',0)}股 成本{p.get('cost_price',0)}")
+            summary.append(f"{p['code']} {p.get('name', '')} {p.get('shares', 0)}股 成本{p.get('cost_price', 0)}")
         result = {
             "success": True,
             "message": msg,
@@ -1249,6 +1307,7 @@ def _query_tail_buy(run_date: str, decision: str, limit: int) -> dict:
     try:
         limit = min(max(int(limit), 1), 200)
         from integrations.local_db import load_tail_buy_history
+
         records = load_tail_buy_history(
             run_date=str(run_date or "").strip(),
             decision=str(decision or "").strip(),
@@ -1256,26 +1315,30 @@ def _query_tail_buy(run_date: str, decision: str, limit: int) -> dict:
         )
         if not records:
             from integrations.supabase_tail_buy import load_tail_buy_from_supabase
+
             sb_rows = load_tail_buy_from_supabase(limit=limit)
             if sb_rows:
                 from integrations.local_db import save_tail_buy_results
-                save_tail_buy_results([
-                    {
-                        "code": str(r.get("code", "")),
-                        "name": r.get("name", ""),
-                        "run_date": str(r.get("run_date", "")),
-                        "signal_date": r.get("signal_date", ""),
-                        "signal_type": r.get("signal_type", ""),
-                        "status": "",
-                        "final_decision": r.get("final_decision", "BUY"),
-                        "rule_score": float(r.get("rule_score", 0)),
-                        "priority_score": float(r.get("priority_score", 0)),
-                        "rule_reasons": r.get("rule_reasons", ""),
-                        "llm_decision": r.get("llm_decision", ""),
-                        "llm_reason": r.get("llm_reason", ""),
-                    }
-                    for r in sb_rows
-                ])
+
+                save_tail_buy_results(
+                    [
+                        {
+                            "code": str(r.get("code", "")),
+                            "name": r.get("name", ""),
+                            "run_date": str(r.get("run_date", "")),
+                            "signal_date": r.get("signal_date", ""),
+                            "signal_type": r.get("signal_type", ""),
+                            "status": "",
+                            "final_decision": r.get("final_decision", "BUY"),
+                            "rule_score": float(r.get("rule_score", 0)),
+                            "priority_score": float(r.get("priority_score", 0)),
+                            "rule_reasons": r.get("rule_reasons", ""),
+                            "llm_decision": r.get("llm_decision", ""),
+                            "llm_reason": r.get("llm_reason", ""),
+                        }
+                        for r in sb_rows
+                    ]
+                )
                 records = load_tail_buy_history(
                     run_date=str(run_date or "").strip(),
                     decision=str(decision or "").strip(),
@@ -1307,6 +1370,7 @@ def _query_tail_buy(run_date: str, decision: str, limit: int) -> dict:
 # Tool 15: 回测
 # ---------------------------------------------------------------------------
 
+
 def run_backtest(
     start: str = "",
     end: str = "",
@@ -1336,6 +1400,7 @@ def run_backtest(
     """
     try:
         from datetime import date, timedelta
+
         from core.backtester import run_backtest as _run_backtest
 
         _ensure_tushare_token(tool_context)
@@ -1410,8 +1475,12 @@ def exec_command(command: str, timeout: int = 30, tool_context: ToolContext = No
     timeout = max(1, min(int(timeout), 120))
     try:
         r = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            timeout=timeout, cwd=os.path.expanduser("~"),
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=os.path.expanduser("~"),
         )
         return {
             "stdout": r.stdout[:8000] + ("...(截断)" if len(r.stdout) > 8000 else ""),
@@ -1449,16 +1518,19 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
     try:
         if suffix == ".csv":
             import pandas as pd
+
             df = pd.read_csv(p, encoding=encoding, nrows=50)
             preview = df.to_markdown(index=False)
             return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": preview}
         elif suffix in (".xls", ".xlsx"):
             import pandas as pd
+
             df = pd.read_excel(p, nrows=50)
             preview = df.to_markdown(index=False)
             return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": preview}
         elif suffix == ".json":
             import json as _json
+
             text = p.read_text(encoding=encoding)[:10000]
             try:
                 obj = _json.loads(text)
@@ -1469,7 +1541,8 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
         else:
             text = p.read_text(encoding=encoding)
             return {
-                "path": str(p), "size": size,
+                "path": str(p),
+                "size": size,
                 "content": text[:10000] + ("...(截断)" if len(text) > 10000 else ""),
             }
     except Exception as e:
@@ -1508,6 +1581,8 @@ def web_fetch(url: str, tool_context: ToolContext = None) -> dict:
         包含 url, status, content 的 dict。
     """
     import re
+
+    import requests
 
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Wyckoff-Agent/1.0"})

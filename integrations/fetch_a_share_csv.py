@@ -57,7 +57,7 @@ def _trade_dates() -> list[date]:
 
     def _read_cache() -> list[date]:
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
+            with open(cache_path, encoding="utf-8") as f:
                 raw = json.load(f)
             if not isinstance(raw, list):
                 return []
@@ -245,7 +245,7 @@ def get_all_stocks() -> list[dict[str, str]]:
 
     def _read_cache() -> list[dict[str, str]]:
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
+            with open(cache_path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 return [
@@ -338,9 +338,7 @@ def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
         out = []
         for s in all_stocks:
             code = s["code"]
-            if code.startswith(
-                ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")
-            ):
+            if code.startswith(("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")):
                 out.append(s)
         return out
 
@@ -359,9 +357,7 @@ def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
         elif board == "main":  # 主板 (沪深)
             # 沪市主板: 600, 601, 603, 605
             # 深市主板: 000, 001, 002, 003
-            if code.startswith(
-                ("600", "601", "603", "605", "000", "001", "002", "003")
-            ):
+            if code.startswith(("600", "601", "603", "605", "000", "001", "002", "003")):
                 out.append(s)
     return out
 
@@ -461,16 +457,12 @@ def _normalize_symbols(symbols: list[str]) -> list[str]:
     return out
 
 
-def _write_two_csv(
-    symbol: str, name: str, df_hist: pd.DataFrame, out_dir: str, sector: str
-) -> tuple[str, str]:
+def _write_two_csv(symbol: str, name: str, df_hist: pd.DataFrame, out_dir: str, sector: str) -> tuple[str, str]:
     file_prefix = f"{safe_filename_part(symbol, fallback='')}_{safe_filename_part(name, fallback='')}"
     hist_path = os.path.join(out_dir, f"{file_prefix}_hist_data.csv")
     ohlcv_path = os.path.join(out_dir, f"{file_prefix}_ohlcv.csv")
     df_hist.to_csv(hist_path, index=False, encoding="utf-8-sig")
-    _build_export(df_hist, sector=sector).to_csv(
-        ohlcv_path, index=False, encoding="utf-8-sig"
-    )
+    _build_export(df_hist, sector=sector).to_csv(ohlcv_path, index=False, encoding="utf-8-sig")
     return hist_path, ohlcv_path
 
 
@@ -480,16 +472,12 @@ def main() -> int:
         description="使用 akshare 拉取 A 股指定股票近 N 个交易日数据，并输出 hist_data 与 ohlcv 两个 CSV 文件。",
     )
     parser.add_argument("--symbol", help="单个股票代码，如 300364")
-    parser.add_argument(
-        "--symbols", nargs="*", help="多个股票代码，如 000973 600798 300459"
-    )
+    parser.add_argument("--symbols", nargs="*", help="多个股票代码，如 000973 600798 300459")
     parser.add_argument(
         "--symbols-text",
         help='从一段文本中提取股票代码（支持夹中文/无空格），如 "000973 佛塑科技 600798鲁抗医药"',
     )
-    parser.add_argument(
-        "--trading-days", type=int, default=320, help="交易日数量，默认 320"
-    )
+    parser.add_argument("--trading-days", type=int, default=320, help="交易日数量，默认 320")
     parser.add_argument(
         "--end-offset-days",
         type=int,
@@ -506,9 +494,7 @@ def main() -> int:
     args = parser.parse_args()
 
     info = ak.stock_info_a_code_name()
-    code_to_name: dict[str, str] = dict(
-        zip(info["code"].astype(str), info["name"].astype(str))
-    )
+    code_to_name: dict[str, str] = dict(zip(info["code"].astype(str), info["name"].astype(str)))
     valid_codes = set(code_to_name.keys())
 
     candidates: list[str] = []
@@ -517,24 +503,18 @@ def main() -> int:
     if args.symbols:
         candidates.extend(args.symbols)
     if args.symbols_text:
-        candidates.extend(
-            extract_symbols_from_text(args.symbols_text, valid_codes=valid_codes)
-        )
+        candidates.extend(extract_symbols_from_text(args.symbols_text, valid_codes=valid_codes))
     symbols = _normalize_symbols(candidates)
     if not symbols:
         raise SystemExit("请提供股票代码：--symbol 或 --symbols 或 --symbols-text")
 
     end_calendar = date.today() - timedelta(days=int(args.end_offset_days))
-    window = _resolve_trading_window(
-        end_calendar_day=end_calendar, trading_days=int(args.trading_days)
-    )
+    window = _resolve_trading_window(end_calendar_day=end_calendar, trading_days=int(args.trading_days))
 
     out_dir = os.path.abspath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    print(
-        f"trade_window={window.start_trade_date}..{window.end_trade_date} (trading_days={args.trading_days})"
-    )
+    print(f"trade_window={window.start_trade_date}..{window.end_trade_date} (trading_days={args.trading_days})")
     failures: list[tuple[str, str]] = []
     for symbol in symbols:
         try:
@@ -550,9 +530,7 @@ def main() -> int:
                 out_dir=out_dir,
                 sector=sector,
             )
-            print(
-                f"OK symbol={symbol} name={name} -> {os.path.basename(hist_path)}, {os.path.basename(ohlcv_path)}"
-            )
+            print(f"OK symbol={symbol} name={name} -> {os.path.basename(hist_path)}, {os.path.basename(ohlcv_path)}")
         except Exception as e:
             failures.append((symbol, str(e)))
             print(f"FAIL symbol={symbol} err={e}")

@@ -10,11 +10,7 @@ from tempfile import gettempdir
 
 import pandas as pd
 
-
-_EXPORT_ROOT = Path(
-    os.getenv("STREAMLIT_EXPORT_DIR")
-    or Path(gettempdir()) / "akshare_streamlit_exports"
-)
+_EXPORT_ROOT = Path(os.getenv("STREAMLIT_EXPORT_DIR") or Path(gettempdir()) / "akshare_streamlit_exports")
 _EXPORT_TTL_SECONDS = max(
     int(os.getenv("STREAMLIT_EXPORT_TTL_SECONDS", str(12 * 60 * 60))),
     60 * 60,

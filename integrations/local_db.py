@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 本地 SQLite 存储层 — CLI Agent 的离线缓存 + 记忆。
 
 所有 CLI 场景下的读操作优先走本地 SQLite，Supabase 降级为 fallback。
 GitHub Actions 不用此模块。
 """
+
 from __future__ import annotations
 
 import json
@@ -289,6 +289,7 @@ def _migrate_fts5_memory(conn: sqlite3.Connection) -> None:
 # Recommendation tracking
 # ---------------------------------------------------------------------------
 
+
 def save_recommendations(rows: list[dict]) -> int:
     if not rows:
         return 0
@@ -328,6 +329,7 @@ def load_recommendations(*, limit: int = 100) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Signal pending
 # ---------------------------------------------------------------------------
+
 
 def save_signals(rows: list[dict]) -> int:
     if not rows:
@@ -402,6 +404,7 @@ def delete_signals(codes: list[str]) -> int:
 # Market signal daily
 # ---------------------------------------------------------------------------
 
+
 def save_market_signal(trade_date: str, data: dict) -> None:
     conn = get_db()
     with conn:
@@ -414,9 +417,7 @@ def save_market_signal(trade_date: str, data: dict) -> None:
 
 def load_latest_market_signal() -> dict | None:
     conn = get_db()
-    cur = conn.execute(
-        "SELECT data_json FROM market_signal_daily ORDER BY trade_date DESC LIMIT 1"
-    )
+    cur = conn.execute("SELECT data_json FROM market_signal_daily ORDER BY trade_date DESC LIMIT 1")
     row = cur.fetchone()
     if not row:
         return None
@@ -429,6 +430,7 @@ def load_latest_market_signal() -> dict | None:
 # ---------------------------------------------------------------------------
 # Portfolio
 # ---------------------------------------------------------------------------
+
 
 def save_portfolio(portfolio_id: str, free_cash: float, positions: list[dict]) -> None:
     conn = get_db()
@@ -464,15 +466,11 @@ def save_portfolio(portfolio_id: str, free_cash: float, positions: list[dict]) -
 
 def load_portfolio(portfolio_id: str) -> dict | None:
     conn = get_db()
-    cur = conn.execute(
-        "SELECT * FROM portfolio WHERE portfolio_id=?", (portfolio_id,)
-    )
+    cur = conn.execute("SELECT * FROM portfolio WHERE portfolio_id=?", (portfolio_id,))
     row = cur.fetchone()
     if not row:
         return None
-    pos_cur = conn.execute(
-        "SELECT * FROM portfolio_position WHERE portfolio_id=?", (portfolio_id,)
-    )
+    pos_cur = conn.execute("SELECT * FROM portfolio_position WHERE portfolio_id=?", (portfolio_id,))
     return {
         "portfolio_id": row["portfolio_id"],
         "free_cash": row["free_cash"],
@@ -490,8 +488,12 @@ def _ensure_local_portfolio(portfolio_id: str) -> None:
 
 
 def upsert_local_position(
-    portfolio_id: str, code: str, name: str,
-    shares: int, cost_price: float, buy_dt: str = "",
+    portfolio_id: str,
+    code: str,
+    name: str,
+    shares: int,
+    cost_price: float,
+    buy_dt: str = "",
 ) -> None:
     _ensure_local_portfolio(portfolio_id)
     conn = get_db()
@@ -526,6 +528,7 @@ def update_local_free_cash(portfolio_id: str, free_cash: float) -> None:
 # ---------------------------------------------------------------------------
 # Agent memory
 # ---------------------------------------------------------------------------
+
 
 def save_memory(memory_type: str, content: str, codes: str = "") -> int:
     conn = get_db()
@@ -689,6 +692,7 @@ def prune_memories(keep_days: int = 90) -> int:
 # Sync metadata
 # ---------------------------------------------------------------------------
 
+
 def update_sync_meta(table_name: str, row_count: int) -> None:
     conn = get_db()
     with conn:
@@ -701,9 +705,7 @@ def update_sync_meta(table_name: str, row_count: int) -> None:
 
 def get_sync_meta(table_name: str) -> dict | None:
     conn = get_db()
-    cur = conn.execute(
-        "SELECT * FROM sync_meta WHERE table_name=?", (table_name,)
-    )
+    cur = conn.execute("SELECT * FROM sync_meta WHERE table_name=?", (table_name,))
     row = cur.fetchone()
     return dict(row) if row else None
 
@@ -722,6 +724,7 @@ def needs_sync(table_name: str, max_age_hours: int = 6) -> bool:
 # ---------------------------------------------------------------------------
 # Chat log — 对话记录
 # ---------------------------------------------------------------------------
+
 
 def save_chat_log(
     session_id: str,
@@ -744,8 +747,19 @@ def save_chat_log(
                (session_id, role, content, model, provider,
                 tokens_in, tokens_out, elapsed_s, error, tool_calls, metadata)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, role, content, model, provider,
-             tokens_in, tokens_out, elapsed_s, error, tool_calls_json, metadata_json),
+            (
+                session_id,
+                role,
+                content,
+                model,
+                provider,
+                tokens_in,
+                tokens_out,
+                elapsed_s,
+                error,
+                tool_calls_json,
+                metadata_json,
+            ),
         )
         return cur.lastrowid or 0
 
@@ -822,8 +836,7 @@ def get_session_preview(session_id: str) -> str:
     """取会话首条用户消息作为摘要预览。"""
     conn = get_db()
     cur = conn.execute(
-        "SELECT content FROM chat_log WHERE session_id=? AND role='user' "
-        "ORDER BY created_at ASC LIMIT 1",
+        "SELECT content FROM chat_log WHERE session_id=? AND role='user' ORDER BY created_at ASC LIMIT 1",
         (session_id,),
     )
     row = cur.fetchone()
@@ -836,6 +849,7 @@ def get_session_preview(session_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Tail-buy history
 # ---------------------------------------------------------------------------
+
 
 def save_tail_buy_results(rows: list[dict]) -> int:
     if not rows:
@@ -896,11 +910,13 @@ def load_tail_buy_history(
 # Chat sessions
 # ---------------------------------------------------------------------------
 
+
 def delete_chat_session(session_id: str) -> int:
     conn = get_db()
     with conn:
         cur = conn.execute(
-            "DELETE FROM chat_log WHERE session_id=?", (session_id,),
+            "DELETE FROM chat_log WHERE session_id=?",
+            (session_id,),
         )
     return cur.rowcount
 
@@ -932,6 +948,7 @@ def list_chat_sessions(limit: int = 50) -> list[dict]:
 # Cleanup
 # ---------------------------------------------------------------------------
 
+
 def cleanup_old_records(days: int = 30) -> dict[str, int]:
     """删除 N 天前的 chat_log / background_task_result / agent_memory 记录。"""
     conn = get_db()
@@ -940,7 +957,8 @@ def cleanup_old_records(days: int = 30) -> dict[str, int]:
     with conn:
         for table in ("chat_log", "background_task_result", "agent_memory"):
             cur = conn.execute(
-                f"DELETE FROM {table} WHERE created_at < ?", (cutoff,),
+                f"DELETE FROM {table} WHERE created_at < ?",
+                (cutoff,),
             )
             deleted[table] = cur.rowcount
     return deleted

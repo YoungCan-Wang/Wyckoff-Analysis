@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Wyckoff Funnel 后台筛选页。"""
 
 import pandas as pd
@@ -62,9 +61,7 @@ def _render_funnel_result(result: dict) -> None:
     if top_sectors:
         st.info(f"Top 行业: {', '.join(str(x) for x in top_sectors)}")
 
-    st.caption(
-        "后台版结果只回传轻量摘要与候选，不再把全量 OHLCV 明细塞进页面会话。"
-    )
+    st.caption("后台版结果只回传轻量摘要与候选，不再把全量 OHLCV 明细塞进页面会话。")
 
     st.markdown("### AI 候选池")
     if symbols_for_report:
@@ -124,22 +121,23 @@ content_col = show_right_nav()
 with content_col:
     st.title("🔬 Wyckoff Funnel")
     st.markdown("后台版 4 层漏斗：前台只负责提交任务、看状态、读结果。")
-    st.warning(
-        "网页端不再本地执行全量漏斗。重计算已经迁到 GitHub Actions，"
-        "这样能明显降低 Streamlit 内存和超时风险。"
-    )
+    st.warning("网页端不再本地执行全量漏斗。重计算已经迁到 GitHub Actions，这样能明显降低 Streamlit 内存和超时风险。")
 
     with st.sidebar:
         st.subheader("漏斗参数")
         min_cap = st.number_input("最小市值(亿)", min_value=5.0, max_value=100.0, value=35.0, step=5.0, format="%.0f")
-        min_amt = st.number_input("近20日均成交额阈值(万)", min_value=1000.0, max_value=20000.0, value=5000.0, step=1000.0, format="%.0f")
+        min_amt = st.number_input(
+            "近20日均成交额阈值(万)", min_value=1000.0, max_value=20000.0, value=5000.0, step=1000.0, format="%.0f"
+        )
         ma_short = st.number_input("短期均线", min_value=10, max_value=100, value=50, step=10)
         ma_long = st.number_input("长期均线", min_value=100, max_value=500, value=200, step=50)
         ma_hold = st.number_input("守线均线", min_value=5, max_value=60, value=20, step=5)
         top_n = st.number_input("Top-N 行业", min_value=1, max_value=10, value=3, step=1)
         spring_support_w = st.number_input("Spring 支撑窗口", min_value=20, max_value=120, value=60, step=10)
         lps_vol_dry = st.number_input("LPS 缩量比", min_value=0.1, max_value=0.8, value=0.35, step=0.05, format="%.2f")
-        evr_vol_ratio = st.number_input("EvR 量比阈值", min_value=1.0, max_value=5.0, value=2.0, step=0.5, format="%.1f")
+        evr_vol_ratio = st.number_input(
+            "EvR 量比阈值", min_value=1.0, max_value=5.0, value=2.0, step=0.5, format="%.1f"
+        )
         trading_days = st.number_input("交易日数量", min_value=200, max_value=500, value=320, step=50)
         max_workers = int(st.number_input("后台并发拉取数", min_value=1, max_value=16, value=8, step=1))
 

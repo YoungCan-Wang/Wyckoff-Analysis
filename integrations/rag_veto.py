@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 """
 RAG 防雷：基于东方财富个股新闻做负面关键词 veto（通过 akshare）。
 """
+
 from __future__ import annotations
 
 import json
@@ -11,7 +11,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,7 @@ RAG_SEMANTIC_TIMEOUT = int(os.getenv("RAG_SEMANTIC_TIMEOUT", "25"))
 from integrations.llm_client import DEFAULT_GEMINI_MODEL as _DEFAULT_GEMINI_MODEL
 
 RAG_SEMANTIC_MODEL = (
-    os.getenv("RAG_SEMANTIC_MODEL", "").strip()
-    or os.getenv("GEMINI_MODEL", "").strip()
-    or _DEFAULT_GEMINI_MODEL
+    os.getenv("RAG_SEMANTIC_MODEL", "").strip() or os.getenv("GEMINI_MODEL", "").strip() or _DEFAULT_GEMINI_MODEL
 )
 _STAR_ST_PATTERN = re.compile(r"(?<![a-z0-9])(?:\*|＊)st\s*[\u4e00-\u9fff]", re.IGNORECASE)
 _ST_PATTERN = re.compile(r"(?<![a-z0-9\*＊])st\s*[\u4e00-\u9fff]", re.IGNORECASE)
@@ -125,7 +123,7 @@ def _fetch_news_akshare(code: str) -> list[dict[str, str]]:
     """通过 akshare 拉取东方财富个股新闻，返回近 N 天内的条目。"""
     import akshare as ak
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max(RAG_NEWS_LOOKBACK_DAYS, 1))
+    cutoff = datetime.now(UTC) - timedelta(days=max(RAG_NEWS_LOOKBACK_DAYS, 1))
     df = ak.stock_news_em(symbol=code)
     if df is None or df.empty:
         return []
@@ -141,10 +139,12 @@ def _fetch_news_akshare(code: str) -> list[dict[str, str]]:
                     continue
             except Exception:
                 pass
-        results.append({
-            "title": str(row.get("新闻标题", "")).strip(),
-            "content": str(row.get("新闻内容", "")).strip(),
-        })
+        results.append(
+            {
+                "title": str(row.get("新闻标题", "")).strip(),
+                "content": str(row.get("新闻内容", "")).strip(),
+            }
+        )
     return results
 
 
@@ -242,7 +242,6 @@ def _semantic_negative_via_gemini(
 def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
     started = time.perf_counter()
     search_source = "akshare"
-    error_msg = None
 
     try:
         results = _fetch_news_akshare(code)
@@ -250,9 +249,15 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
         logger.debug("[rag_veto] akshare fetch failed for %s: %s", code, e)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return VetoResult(
-            code=code, name=name, veto=False, hits=[], evidence=[],
-            search_source=search_source, raw_result_count=0,
-            relevant_result_count=0, elapsed_ms=elapsed_ms,
+            code=code,
+            name=name,
+            veto=False,
+            hits=[],
+            evidence=[],
+            search_source=search_source,
+            raw_result_count=0,
+            relevant_result_count=0,
+            elapsed_ms=elapsed_ms,
             error=f"akshare_err:{e}",
         )
 
@@ -275,9 +280,15 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
     hits = _extract_hits(combined, keywords)
     if not hits:
         return VetoResult(
-            code=code, name=name, veto=False, hits=[], evidence=evidence[:3],
-            search_source=search_source, raw_result_count=len(results),
-            relevant_result_count=relevant_count, elapsed_ms=elapsed_ms,
+            code=code,
+            name=name,
+            veto=False,
+            hits=[],
+            evidence=evidence[:3],
+            search_source=search_source,
+            raw_result_count=len(results),
+            relevant_result_count=relevant_count,
+            elapsed_ms=elapsed_ms,
         )
 
     # 关键词命中 → 语义二判
@@ -286,7 +297,10 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
     semantic_reason: str | None = None
     semantic_err: str | None = None
     verdict, reason_or_err = _semantic_negative_via_gemini(
-        code=code, name=name, hits=hits, snippets=semantic_snippets,
+        code=code,
+        name=name,
+        hits=hits,
+        snippets=semantic_snippets,
     )
     if verdict is not None:
         semantic_checked = True
@@ -298,11 +312,19 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
         semantic_err = reason_or_err
 
     return VetoResult(
-        code=code, name=name, veto=veto, hits=hits, evidence=evidence[:3],
-        search_source=search_source, raw_result_count=len(results),
-        relevant_result_count=relevant_count, elapsed_ms=elapsed_ms,
-        semantic_checked=semantic_checked, semantic_negative=semantic_negative,
-        semantic_reason=semantic_reason, error=semantic_err,
+        code=code,
+        name=name,
+        veto=veto,
+        hits=hits,
+        evidence=evidence[:3],
+        search_source=search_source,
+        raw_result_count=len(results),
+        relevant_result_count=relevant_count,
+        elapsed_ms=elapsed_ms,
+        semantic_checked=semantic_checked,
+        semantic_negative=semantic_negative,
+        semantic_reason=semantic_reason,
+        error=semantic_err,
     )
 
 
@@ -324,10 +346,7 @@ def run_negative_news_veto(candidates: list[dict[str, str]]) -> dict[str, VetoRe
         return out
 
     with ThreadPoolExecutor(max_workers=max(RAG_MAX_WORKERS, 1)) as ex:
-        futures = {
-            ex.submit(_scan_one, it["code"], it["name"] or it["code"], keywords): it["code"]
-            for it in items
-        }
+        futures = {ex.submit(_scan_one, it["code"], it["name"] or it["code"], keywords): it["code"] for it in items}
         for fut in as_completed(futures):
             code = futures[fut]
             try:

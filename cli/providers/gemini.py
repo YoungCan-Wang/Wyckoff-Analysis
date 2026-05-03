@@ -1,10 +1,11 @@
-# -*- coding: utf-8 -*-
 """Gemini Provider — google-genai SDK 实现。"""
+
 from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 
 from google import genai
 from google.genai import types
@@ -80,11 +81,13 @@ class GeminiProvider(LLMProvider):
             for part in chunk.candidates[0].content.parts:
                 if part.function_call:
                     fc = part.function_call
-                    tool_calls.append({
-                        "id": uuid.uuid4().hex[:12],
-                        "name": fc.name,
-                        "args": dict(fc.args) if fc.args else {},
-                    })
+                    tool_calls.append(
+                        {
+                            "id": uuid.uuid4().hex[:12],
+                            "name": fc.name,
+                            "args": dict(fc.args) if fc.args else {},
+                        }
+                    )
                 elif part.text:
                     text_buf += part.text
                     yield {"type": "text_delta", "text": part.text}
@@ -105,10 +108,12 @@ class GeminiProvider(LLMProvider):
             role = msg["role"]
 
             if role == "user":
-                contents.append(types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=msg["content"])],
-                ))
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=msg["content"])],
+                    )
+                )
 
             elif role == "assistant":
                 parts = []
@@ -117,12 +122,14 @@ class GeminiProvider(LLMProvider):
                     parts.append(types.Part.from_text(text=msg["content"]))
                 # 工具调用部分
                 for tc in msg.get("tool_calls", []):
-                    parts.append(types.Part(
-                        function_call=types.FunctionCall(
-                            name=tc["name"],
-                            args=tc["args"],
+                    parts.append(
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                name=tc["name"],
+                                args=tc["args"],
+                            )
                         )
-                    ))
+                    )
                 if parts:
                     contents.append(types.Content(role="model", parts=parts))
 
@@ -137,15 +144,19 @@ class GeminiProvider(LLMProvider):
                 # Gemini FunctionResponse.response 必须是 dict，不能是 list
                 if not isinstance(result, dict):
                     result = {"result": result}
-                contents.append(types.Content(
-                    role="user",
-                    parts=[types.Part(
-                        function_response=types.FunctionResponse(
-                            name=msg.get("name", "unknown"),
-                            response=result,
-                        )
-                    )],
-                ))
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(
+                                function_response=types.FunctionResponse(
+                                    name=msg.get("name", "unknown"),
+                                    response=result,
+                                )
+                            )
+                        ],
+                    )
+                )
 
         return contents
 
@@ -154,11 +165,13 @@ class GeminiProvider(LLMProvider):
         declarations = []
         for t in tools:
             params = t.get("parameters", {})
-            declarations.append(types.FunctionDeclaration(
-                name=t["name"],
-                description=t.get("description", ""),
-                parameters=params if params.get("properties") else None,
-            ))
+            declarations.append(
+                types.FunctionDeclaration(
+                    name=t["name"],
+                    description=t.get("description", ""),
+                    parameters=params if params.get("properties") else None,
+                )
+            )
         return [types.Tool(function_declarations=declarations)]
 
     def _parse_response(self, response) -> dict[str, Any]:
@@ -173,11 +186,13 @@ class GeminiProvider(LLMProvider):
         for part in parts:
             if part.function_call:
                 fc = part.function_call
-                tool_calls.append({
-                    "id": uuid.uuid4().hex[:12],
-                    "name": fc.name,
-                    "args": dict(fc.args) if fc.args else {},
-                })
+                tool_calls.append(
+                    {
+                        "id": uuid.uuid4().hex[:12],
+                        "name": fc.name,
+                        "args": dict(fc.args) if fc.args else {},
+                    }
+                )
             elif part.text:
                 text_parts.append(part.text)
 

@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """
 共享 pytest fixtures — mock 外部服务，让 core/ 单测可离线运行。
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import pytest
-
 
 # ── 屏蔽 Streamlit ────────────────────────────────────────────────
 # core/ 层不应依赖 streamlit，但某些 integrations 模块在顶层 import 了它。

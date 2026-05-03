@@ -1,13 +1,13 @@
-# -*- coding: utf-8 -*-
 """
 尾盘买入策略核心（规则层 + LLM 合并层）。
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import math
 import re
+from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -214,21 +214,13 @@ def compute_tail_features(df_1m: pd.DataFrame) -> dict[str, Any]:
     last30_ret_pct = _ret_pct(close, 30)
     last15_ret_pct = _ret_pct(close, 15)
     day_ret_pct = ((last_close / first_open - 1.0) * 100.0) if first_open > 0 else 0.0
-    tail30_volume_share = (
-        float(volume.tail(min(30, len(volume))).sum()) / total_volume
-        if total_volume > 0
-        else 0.0
-    )
-    tail15_volume_share = (
-        float(volume.tail(min(15, len(volume))).sum()) / total_volume
-        if total_volume > 0
-        else 0.0
-    )
+    tail30_volume_share = float(volume.tail(min(30, len(volume))).sum()) / total_volume if total_volume > 0 else 0.0
+    tail15_volume_share = float(volume.tail(min(15, len(volume))).sum()) / total_volume if total_volume > 0 else 0.0
     drop_from_high_pct = (last_close / day_high - 1.0) * 100.0 if day_high > 0 else 0.0
     dist_vwap_pct = (last_close / vwap - 1.0) * 100.0 if vwap > 0 else 0.0
 
     history_window = min(90, max(len(close) - 1, 1))
-    history_before_tail = close.iloc[:-min(20, len(close))] if len(close) > 20 else close.iloc[:-1]
+    history_before_tail = close.iloc[: -min(20, len(close))] if len(close) > 20 else close.iloc[:-1]
     if history_before_tail.empty:
         history_before_tail = close.iloc[:-1]
     min_before_tail = _safe_float(history_before_tail.tail(history_window).min(), last_close)
@@ -505,10 +497,7 @@ def build_llm_prompt(
             f"买盘总量: {depth_info.get('bid_total', 0)}手 | "
             f"卖盘总量: {depth_info.get('ask_total', 0)}手\n"
         )
-    user_prompt += (
-        "\n请输出严格 JSON："
-        '{"decision":"BUY|WATCH|SKIP","reason":"<=80字","risk":"<=40字","confidence":0.0}'
-    )
+    user_prompt += '\n请输出严格 JSON：{"decision":"BUY|WATCH|SKIP","reason":"<=80字","risk":"<=40字","confidence":0.0}'
     return system_prompt, user_prompt
 
 
@@ -568,11 +557,7 @@ def select_llm_overlay_candidates(
     if limit <= 0 or not candidates:
         return []
 
-    allowed = {
-        str(x or "").strip().upper()
-        for x in (allowed_rule_decisions or ())
-        if str(x or "").strip()
-    }
+    allowed = {str(x or "").strip().upper() for x in (allowed_rule_decisions or ()) if str(x or "").strip()}
     if not allowed:
         return []
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -126,7 +125,9 @@ class TestCompactMessages:
     def _make_messages(self, n: int) -> list[dict]:
         msgs = []
         for i in range(n):
-            msgs.append({"role": "user", "content": f"消息内容 {i} " + "这是一段很长的中文测试文本用来占据token空间" * 50})
+            msgs.append(
+                {"role": "user", "content": f"消息内容 {i} " + "这是一段很长的中文测试文本用来占据token空间" * 50}
+            )
             msgs.append({"role": "assistant", "content": f"回复 {i} " + "这是助手的回复内容同样需要足够长" * 50})
         return msgs
 

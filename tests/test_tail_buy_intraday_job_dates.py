@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -19,7 +18,7 @@ def test_resolve_trade_dates_on_trading_day_uses_prev_trade_and_today(monkeypatc
         assert trading_days == 2
         return TradingWindow(
             start_trade_date=date(2026, 4, 24),  # 上周五
-            end_trade_date=date(2026, 4, 27),    # 周一
+            end_trade_date=date(2026, 4, 27),  # 周一
         )
 
     monkeypatch.setattr(tail_job, "_resolve_trading_window", fake_window)

@@ -1,18 +1,17 @@
-# -*- coding: utf-8 -*-
 """
 阶段 4：私人账户再平衡决策（OMS 重构版）
 1) LLM 只输出结构化动作 JSON
 2) Python 订单管理引擎负责仓位/手数/风险计算
 3) 输出标准交易工单并推送 Telegram
 """
+
 from __future__ import annotations
 
 import json
 import math
 import os
-import sys
 import re
-import time
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -20,35 +19,38 @@ from uuid import uuid4
 
 import pandas as pd
 
-
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.wyckoff_engine import normalize_hist_from_fetch, FunnelConfig
+from functools import partial
+
+from core.batch_report import generate_stock_payload
 from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_for_llm
 from core.prompts import PRIVATE_PM_DECISION_JSON_PROMPT
+from core.wyckoff_engine import FunnelConfig, normalize_hist_from_fetch
 from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from integrations.llm_client import call_llm
-from integrations.data_source import fetch_stock_spot_snapshot
 from integrations.supabase_market_signal import compose_market_banner, load_market_signal_daily
 from integrations.supabase_portfolio import (
     cancel_trade_orders,
     check_daily_run_exists,
     compute_portfolio_state_signature,
-    load_portfolio_state as load_portfolio_state_from_supabase,
     save_ai_trade_orders,
     update_position_stops,
     upsert_daily_nav,
 )
-from core.batch_report import generate_stock_payload
-from utils.trading_clock import CN_TZ, resolve_end_calendar_day
-from utils.notify import send_to_telegram
+from integrations.supabase_portfolio import (
+    load_portfolio_state as load_portfolio_state_from_supabase,
+)
 from tools.data_fetcher import (
-    latest_trade_date_from_hist as _latest_trade_date_from_hist,
     append_spot_bar_if_needed,
 )
+from tools.data_fetcher import (
+    latest_trade_date_from_hist as _latest_trade_date_from_hist,
+)
 from tools.report_builder import _extract_json_block
-from functools import partial
+from utils.notify import send_to_telegram
+from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 _append_spot_bar_if_needed = partial(
     append_spot_bar_if_needed,
@@ -60,7 +62,8 @@ _append_spot_bar_if_needed = partial(
 TRADING_DAYS = 320
 TELEGRAM_MAX_LEN = 3900
 ENFORCE_TARGET_TRADE_DATE = False
-from tools.debug_io import DEBUG_MODEL_IO, DEBUG_MODEL_IO_FULL, dump_model_input as _dump_model_input_shared
+from tools.debug_io import dump_model_input as _dump_model_input_shared
+
 STEP4_MAX_OUTPUT_TOKENS = 8192
 STEP4_ATR_PERIOD = int(os.getenv("STEP4_ATR_PERIOD", "14"))
 STEP4_ATR_MULTIPLIER = float(os.getenv("STEP4_ATR_MULTIPLIER", "2.0"))
@@ -92,8 +95,8 @@ STEP4_CHASE_ATR_MULT_MIN = max(float(os.getenv("STEP4_CHASE_ATR_MULT_MIN", "0.8"
 STEP4_CHASE_ATR_MULT_MAX = max(float(os.getenv("STEP4_CHASE_ATR_MULT_MAX", "2.4")), STEP4_CHASE_ATR_MULT_MIN)
 
 # --- OMS 防追高与滑点保护配置 ---
-STEP4_MAX_GAP_UP_PCT = float(os.getenv("STEP4_MAX_GAP_UP_PCT", "3.0"))          # 最大允许跳空/追高幅度(%)
-STEP4_MAX_GAP_UP_ATR_MULT = float(os.getenv("STEP4_MAX_GAP_UP_ATR_MULT", "1.5")) # 最大允许追高 ATR 倍数
+STEP4_MAX_GAP_UP_PCT = float(os.getenv("STEP4_MAX_GAP_UP_PCT", "3.0"))  # 最大允许跳空/追高幅度(%)
+STEP4_MAX_GAP_UP_ATR_MULT = float(os.getenv("STEP4_MAX_GAP_UP_ATR_MULT", "1.5"))  # 最大允许追高 ATR 倍数
 STEP4_MAX_NEW_BUYS_RISK_ON = max(int(os.getenv("STEP4_MAX_NEW_BUYS_RISK_ON", "2")), 0)
 STEP4_MAX_NEW_BUYS_CAUTION = max(int(os.getenv("STEP4_MAX_NEW_BUYS_CAUTION", "1")), 0)
 STEP4_MAX_NEW_BUYS_NEUTRAL = max(int(os.getenv("STEP4_MAX_NEW_BUYS_NEUTRAL", "1")), 0)
@@ -260,8 +263,7 @@ def _build_market_guardrail(
 ) -> tuple[str, str, str]:
     row = dict(market_signal_row or {})
     benchmark_regime = _normalize_benchmark_regime(
-        row.get("benchmark_regime")
-        or (benchmark_context or {}).get("regime")
+        row.get("benchmark_regime") or (benchmark_context or {}).get("regime")
     )
     premarket_regime = _normalize_premarket_regime(row.get("premarket_regime"))
     effective_regime = _resolve_effective_market_regime(benchmark_regime, premarket_regime)
@@ -283,15 +285,9 @@ def _build_market_guardrail(
 
     banner = compose_market_banner(row)
     panic_reasons = [
-        str(x).strip()
-        for x in ((benchmark_context or {}).get("panic_reasons", []) or [])
-        if str(x).strip()
+        str(x).strip() for x in ((benchmark_context or {}).get("panic_reasons", []) or []) if str(x).strip()
     ]
-    premarket_reasons = [
-        str(x).strip()
-        for x in (row.get("premarket_reasons", []) or [])
-        if str(x).strip()
-    ]
+    premarket_reasons = [str(x).strip() for x in (row.get("premarket_reasons", []) or []) if str(x).strip()]
 
     lines = [
         "[全局风控]",
@@ -508,7 +504,7 @@ class WyckoffOrderEngine:
 
     SLIPPAGE_BPS = 0.005
     RISK_LIMITS = {
-        "PROBE": 0.008,   # 0.8%
+        "PROBE": 0.008,  # 0.8%
         "ATTACK": 0.012,  # 1.2%
     }
     BUDGET_LIMITS = {
@@ -621,18 +617,12 @@ class WyckoffOrderEngine:
                 else:
                     merged = max(effective_stop_loss, trailing_stop)
                     if merged > effective_stop_loss:
-                        audit_parts.append(
-                            f"atr_entry_tighten({effective_stop_loss:.2f}->{merged:.2f})"
-                        )
+                        audit_parts.append(f"atr_entry_tighten({effective_stop_loss:.2f}->{merged:.2f})")
                     effective_stop_loss = merged
 
         # 实盘硬止损：买入动作不得放宽到 -STEP4_BUY_HARD_STOP_PCT 之外
         # 仅约束 PROBE/ATTACK，不影响 HOLD/TRIM/EXIT 的存量跟踪止损逻辑。
-        if (
-            action in {"PROBE", "ATTACK"}
-            and STEP4_BUY_HARD_STOP_ENABLED
-            and STEP4_BUY_HARD_STOP_PCT > 0
-        ):
+        if action in {"PROBE", "ATTACK"} and STEP4_BUY_HARD_STOP_ENABLED and STEP4_BUY_HARD_STOP_PCT > 0:
             hard_stop = current_price * (1.0 - STEP4_BUY_HARD_STOP_PCT / 100.0)
             if hard_stop > 0:
                 if STEP4_BUY_STOP_MODE == "fixed":
@@ -643,21 +633,15 @@ class WyckoffOrderEngine:
                     elif prev_stop < hard_stop:
                         # fixed 模式也不允许放宽已有更紧止损，最多只做风控兜底上调。
                         effective_stop_loss = hard_stop
-                        audit_parts.append(
-                            f"hard_stop_fixed_raise({prev_stop:.2f}->{hard_stop:.2f})"
-                        )
+                        audit_parts.append(f"hard_stop_fixed_raise({prev_stop:.2f}->{hard_stop:.2f})")
                     else:
-                        audit_parts.append(
-                            f"hard_stop_fixed_keep_tighter({prev_stop:.2f})"
-                        )
+                        audit_parts.append(f"hard_stop_fixed_keep_tighter({prev_stop:.2f})")
                 else:
                     if effective_stop_loss is None:
                         effective_stop_loss = hard_stop
                         audit_parts.append(f"hard_stop_floor_init({effective_stop_loss:.2f})")
                     elif effective_stop_loss < hard_stop:
-                        audit_parts.append(
-                            f"hard_stop_floor_raise({effective_stop_loss:.2f}->{hard_stop:.2f})"
-                        )
+                        audit_parts.append(f"hard_stop_floor_raise({effective_stop_loss:.2f}->{hard_stop:.2f})")
                         effective_stop_loss = hard_stop
 
         if action == "EXIT":
@@ -844,11 +828,7 @@ class WyckoffOrderEngine:
 
         # 计算每股真实风险（静态滑点 + ATR 跳空保护）
         base_slippage = current_price * self.SLIPPAGE_BPS
-        atr_slippage = (
-            max(float(atr14), 0.0) * max(STEP4_ATR_SLIPPAGE_FACTOR, 0.0)
-            if atr14 is not None
-            else 0.0
-        )
+        atr_slippage = max(float(atr14), 0.0) * max(STEP4_ATR_SLIPPAGE_FACTOR, 0.0) if atr14 is not None else 0.0
         slippage_abs = max(base_slippage, atr_slippage)
         fill_price = current_price + slippage_abs
         # 对称滑点口径：入场更贵，止损成交更差，避免低估极端风险。
@@ -875,9 +855,7 @@ class WyckoffOrderEngine:
         amount = actual_shares * fill_price
         max_loss = actual_shares * risk_per_share
         drawdown_ratio = (max_loss / self.total_equity) if self.total_equity > 0 else 0.0
-        effective_slippage_bps = (
-            slippage_abs / current_price if current_price > 0 else self.SLIPPAGE_BPS
-        )
+        effective_slippage_bps = slippage_abs / current_price if current_price > 0 else self.SLIPPAGE_BPS
 
         self.free_cash -= amount
         return ExecutionTicket(
@@ -1024,8 +1002,6 @@ def load_portfolio_from_supabase(portfolio_id: str) -> tuple[PortfolioState, str
         raise ValueError(f"Supabase {portfolio_id} 未就绪，且 env 持仓不可用: {e}") from e
 
 
-
-
 def _calc_holding_trade_days(
     df: pd.DataFrame,
     buy_dt: str,
@@ -1050,7 +1026,6 @@ def _calc_holding_trade_days(
     if entry_trade_date is None:
         return None
     return int(sum(1 for d in dates if d >= entry_trade_date))
-
 
 
 def _fetch_latest_real_close(code: str, window) -> float | None:
@@ -1168,8 +1143,12 @@ def _process_one_position(
         # 持仓健康诊断：复用 Wyckoff 引擎检测 L2 通道、退出信号、阶段等
         try:
             diag = diagnose_one_stock(
-                code=pos.code, name=pos.name, cost=pos.cost,
-                df=df_qfq, bench_df=None, cfg=FunnelConfig(),
+                code=pos.code,
+                name=pos.name,
+                cost=pos.cost,
+                df=df_qfq,
+                bench_df=None,
+                cfg=FunnelConfig(),
             )
             diag_text = f"- {format_diagnostic_for_llm(diag)}\n"
             # 将诊断结果传入 payload 生成，让 AI 看到退出预警
@@ -1326,7 +1305,6 @@ def _format_candidate_payload(
     return ("\n\n".join(ordered_blocks), failures, latest_close_map, atr_map)
 
 
-
 def _parse_bool_like(v: object) -> bool:
     if isinstance(v, bool):
         return v
@@ -1464,10 +1442,7 @@ def _trim_new_buy_decisions(
     if max_new_names < 0:
         return decisions
 
-    new_buys = [
-        dec for dec in decisions
-        if dec.action in {"PROBE", "ATTACK"} and dec.code not in held_codes
-    ]
+    new_buys = [dec for dec in decisions if dec.action in {"PROBE", "ATTACK"} and dec.code not in held_codes]
     if len(new_buys) <= max_new_names:
         return decisions
 
@@ -1477,10 +1452,7 @@ def _trim_new_buy_decisions(
         action_rank = 1 if dec.action == "ATTACK" else 0
         return (confidence, funnel_score, action_rank)
 
-    keep_codes = {
-        dec.code
-        for dec in sorted(new_buys, key=_rank_key, reverse=True)[:max_new_names]
-    }
+    keep_codes = {dec.code for dec in sorted(new_buys, key=_rank_key, reverse=True)[:max_new_names]}
     dropped = [dec.code for dec in new_buys if dec.code not in keep_codes]
     if dropped:
         print(
@@ -1488,7 +1460,8 @@ def _trim_new_buy_decisions(
             f"max_new_buy_names={max_new_names}, dropped={','.join(dropped)}"
         )
     return [
-        dec for dec in decisions
+        dec
+        for dec in decisions
         if not (dec.action in {"PROBE", "ATTACK"} and dec.code not in held_codes and dec.code not in keep_codes)
     ]
 
@@ -1558,7 +1531,9 @@ def _render_trade_ticket(
         for t in holds:
             lines.append(f"- 🟨 HOLD | {t.code} {t.name} | 止损：{_fmt_stop(t.stop_loss)}")
             if t.atr14 is not None:
-                lines.append(f"  风控：ATR{STEP4_ATR_PERIOD}={t.atr14:.3f} | 动态止损={_fmt_stop(t.effective_stop_loss)}")
+                lines.append(
+                    f"  风控：ATR{STEP4_ATR_PERIOD}={t.atr14:.3f} | 动态止损={_fmt_stop(t.effective_stop_loss)}"
+                )
             lines.append(f"  观察：{_first_sentence(t.reason)}")
             lines.append(f"  触发：{_first_sentence(t.tape_condition)}")
             lines.append(f"  失效：{_first_sentence(t.invalidate_condition)}")
@@ -1634,10 +1609,9 @@ def run(
     except Exception as e:
         print(f"[step4] 持仓读取失败: {e}")
         return (True, "skipped_invalid_portfolio")
-    print(
-        f"[step4] 持仓来源: {portfolio_source} | portfolio_id={portfolio_id} | state_sig={state_signature or '-'}"
-    )
+    print(f"[step4] 持仓来源: {portfolio_source} | portfolio_id={portfolio_id} | state_sig={state_signature or '-'}")
     from cli.progress import report_progress
+
     report_progress("持仓决策", f"来源: {portfolio_source}", 0.1)
 
     if not str(tg_bot_token or "").strip() or not str(tg_chat_id or "").strip():
@@ -1646,9 +1620,7 @@ def run(
 
     trade_date = resolve_end_calendar_day().strftime("%Y-%m-%d")
     if check_daily_run_exists(portfolio_id, trade_date, state_signature=state_signature):
-        print(
-            f"[step4] 幂等性检查: {portfolio_id} {trade_date} 当前持仓快照已运行过，跳过。"
-        )
+        print(f"[step4] 幂等性检查: {portfolio_id} {trade_date} 当前持仓快照已运行过，跳过。")
         return (True, "skipped_idempotency")
 
     end_day = resolve_end_calendar_day()

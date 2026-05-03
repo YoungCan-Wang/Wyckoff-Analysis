@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from utils.helpers import (
     extract_symbols_from_text,
     safe_filename_part,

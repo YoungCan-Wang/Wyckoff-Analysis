@@ -3,12 +3,12 @@ import re
 import streamlit as st
 from supabase import AuthApiError
 
+from app.ui_helpers import show_page_loading
 from integrations.supabase_client import (
     get_supabase_client,
     load_user_settings,
     reset_user_settings_state,
 )
-from app.ui_helpers import show_page_loading
 
 try:
     from core.token_storage import clear_tokens_from_storage, persist_tokens_to_storage
@@ -19,6 +19,7 @@ except ImportError:
 
     def clear_tokens_from_storage() -> bool:
         return False
+
 
 _EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _MIN_PASSWORD_LEN = 6
@@ -45,10 +46,7 @@ def _safe_get_supabase_client():
     try:
         return get_supabase_client()
     except Exception as e:
-        st.error(
-            "Supabase 配置缺失或初始化失败，请检查 SUPABASE_URL/SUPABASE_KEY 或 "
-            "Streamlit secrets 设置。"
-        )
+        st.error("Supabase 配置缺失或初始化失败，请检查 SUPABASE_URL/SUPABASE_KEY 或 Streamlit secrets 设置。")
         st.caption(f"详细错误: {e}")
         return None
 
@@ -135,70 +133,57 @@ def login_form():
 
         tab1, tab2 = st.tabs(["登录", "注册"])
 
-        with tab1:
-            with st.form("login_form", clear_on_submit=False):
-                email = st.text_input(
-                    "邮箱", key="login_email", placeholder="name@example.com"
-                )
-                password = st.text_input(
-                    "密码",
-                    type="password",
-                    key="login_password",
-                    placeholder="请输入密码",
-                )
-                submit = st.form_submit_button("登录", type="primary", width="stretch")
+        with tab1, st.form("login_form", clear_on_submit=False):
+            email = st.text_input("邮箱", key="login_email", placeholder="name@example.com")
+            password = st.text_input(
+                "密码",
+                type="password",
+                key="login_password",
+                placeholder="请输入密码",
+            )
+            submit = st.form_submit_button("登录", type="primary", width="stretch")
 
-                if submit:
-                    email = _normalize_email(email)
-                    if not email or not password:
-                        st.error("请填写邮箱和密码")
-                    elif not _is_valid_email(email):
-                        st.error("请输入有效的邮箱地址")
-                    else:
+            if submit:
+                email = _normalize_email(email)
+                if not email or not password:
+                    st.error("请填写邮箱和密码")
+                elif not _is_valid_email(email):
+                    st.error("请输入有效的邮箱地址")
+                else:
+                    try:
+                        loading = show_page_loading(title="思考中...", subtitle="正在登录")
                         try:
-                            loading = show_page_loading(
-                                title="思考中...", subtitle="正在登录"
-                            )
-                            try:
-                                response = supabase.auth.sign_in_with_password(
-                                    {"email": email, "password": password}
-                                )
-                                user_payload = _user_payload(response.user)
-                                if not user_payload or not user_payload.get("id"):
-                                    raise RuntimeError("登录成功但未拿到用户信息")
+                            response = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                            user_payload = _user_payload(response.user)
+                            if not user_payload or not user_payload.get("id"):
+                                raise RuntimeError("登录成功但未拿到用户信息")
 
-                                st.session_state.user = user_payload
-                                session = getattr(response, "session", None)
-                                st.session_state.access_token = (
-                                    getattr(session, "access_token", None)
-                                    if session is not None
-                                    else None
-                                )
-                                st.session_state.refresh_token = (
-                                    getattr(session, "refresh_token", None)
-                                    if session is not None
-                                    else None
-                                )
-                                load_user_settings(user_payload["id"])
-                                persist_tokens_to_storage(
-                                    st.session_state.access_token or "",
-                                    st.session_state.refresh_token or "",
-                                )
-                                st.success("登录成功！")
-                                st.rerun()
-                            finally:
-                                loading.empty()
-                        except AuthApiError:
-                            st.error("登录失败：邮箱或密码错误，或账号尚未完成验证")
-                        except Exception as e:
-                            st.error(f"登录失败: {str(e)}")
+                            st.session_state.user = user_payload
+                            session = getattr(response, "session", None)
+                            st.session_state.access_token = (
+                                getattr(session, "access_token", None) if session is not None else None
+                            )
+                            st.session_state.refresh_token = (
+                                getattr(session, "refresh_token", None) if session is not None else None
+                            )
+                            load_user_settings(user_payload["id"])
+                            persist_tokens_to_storage(
+                                st.session_state.access_token or "",
+                                st.session_state.refresh_token or "",
+                            )
+                            st.success("登录成功！")
+                            st.rerun()
+                        finally:
+                            loading.empty()
+                    except AuthApiError:
+                        st.error("登录失败：邮箱或密码错误，或账号尚未完成验证")
+                    except Exception as e:
+                        st.error(f"登录失败: {str(e)}")
 
         with tab2:
             st.caption("注册好账号密码后，无需邮件确认即可登录。")
             with st.form("register_form", clear_on_submit=False):
-                new_email = st.text_input(
-                    "邮箱", key="reg_email", placeholder="name@example.com"
-                )
+                new_email = st.text_input("邮箱", key="reg_email", placeholder="name@example.com")
                 new_password = st.text_input(
                     "密码",
                     type="password",
@@ -211,9 +196,7 @@ def login_form():
                     key="reg_confirm",
                     placeholder="请再次输入密码",
                 )
-                submit_reg = st.form_submit_button(
-                    "注册新账号", type="primary", width="stretch"
-                )
+                submit_reg = st.form_submit_button("注册新账号", type="primary", width="stretch")
 
                 if submit_reg:
                     new_email = _normalize_email(new_email)
@@ -227,16 +210,10 @@ def login_form():
                         st.error(f"密码长度至少为 {_MIN_PASSWORD_LEN} 位")
                     else:
                         try:
-                            loading = show_page_loading(
-                                title="思考中...", subtitle="正在注册"
-                            )
+                            loading = show_page_loading(title="思考中...", subtitle="正在注册")
                             try:
-                                supabase.auth.sign_up(
-                                    {"email": new_email, "password": new_password}
-                                )
-                                st.success(
-                                    "注册成功！无需邮件确认，可直接登录。"
-                                )
+                                supabase.auth.sign_up({"email": new_email, "password": new_password})
+                                st.success("注册成功！无需邮件确认，可直接登录。")
                             finally:
                                 loading.empty()
                         except AuthApiError as e:

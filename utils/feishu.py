@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 飞书 Webhook 通知，纯工具函数。
 
@@ -6,12 +5,14 @@
 - Streamlit：使用用户登录后 Supabase 中的 feishu_webhook
 - 定时任务：使用 GitHub Actions 的 FEISHU_WEBHOOK_URL secret
 """
+
 from __future__ import annotations
 
 import os
 import re
-import requests
 import time
+
+import requests
 
 from integrations.tickflow_notice import (
     TICKFLOW_LIMIT_HINT,
@@ -124,7 +125,7 @@ def _split_lark_md(content: str, max_len: int = 2800) -> list[str]:
             continue
         start = 0
         while start < len(p):
-            chunks.append(p[start:start + max_len])
+            chunks.append(p[start : start + max_len])
             start += max_len
     if current:
         chunks.append(current)
@@ -137,9 +138,7 @@ def _post_card(webhook_url: str, title: str, chunk: str) -> tuple[bool, str]:
         "msg_type": "interactive",
         "card": {
             "header": {"title": {"tag": "plain_text", "content": title}},
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": chunk}}
-            ],
+            "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": chunk}}],
         },
     }
     resp = requests.post(webhook_url.strip(), headers=headers, json=payload, timeout=10)
@@ -156,7 +155,10 @@ def _post_card(webhook_url: str, title: str, chunk: str) -> tuple[bool, str]:
 
 
 def _post_rich_card(
-    webhook_url: str, title: str, elements: list, template: str = "blue",
+    webhook_url: str,
+    title: str,
+    elements: list,
+    template: str = "blue",
 ) -> tuple[bool, str]:
     """发送飞书富文本卡片（column_set 等原生组件）。"""
     headers = {"Content-Type": "application/json"}
@@ -188,7 +190,7 @@ def send_backtest_card(webhook_url: str, summary_path: str) -> bool:
     if not webhook_url or not webhook_url.strip():
         return False
 
-    with open(summary_path, "r", encoding="utf-8") as f:
+    with open(summary_path, encoding="utf-8") as f:
         content = f.read()
 
     def _extract(keyword: str) -> float | None:
@@ -212,10 +214,10 @@ def send_backtest_card(webhook_url: str, summary_path: str) -> bool:
     avg = _extract("平均收益")
     sharpe = _extract("夏普比")
     mdd = _extract("最大回撤")
-    calmar = _extract("卡玛比")
+    _extract("卡玛比")
     trades = _extract("成交样本")
     hold = _extract_str("持有周期")
-    exit_mode = _extract_str("离场模式")
+    _extract_str("离场模式")
     sl = _extract_str("止损线")
     tp = _extract_str("止盈线")
     trail = _extract_str("移动止盈")
@@ -263,10 +265,18 @@ def send_backtest_card(webhook_url: str, summary_path: str) -> bool:
     elements = []
 
     # 摘要
-    elements.append({"tag": "div", "text": {"tag": "lark_md",
-        "content": f"**区间** {bt_range}  ·  **TopN** {top_n}  ·  **{pool}**"}})
-    elements.append({"tag": "div", "text": {"tag": "lark_md",
-        "content": f"📌 **参数**  持有{hold} / SL{sl} / TP{tp} / 移动止盈{trail}"}})
+    elements.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**区间** {bt_range}  ·  **TopN** {top_n}  ·  **{pool}**"},
+        }
+    )
+    elements.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"📌 **参数**  持有{hold} / SL{sl} / TP{tp} / 移动止盈{trail}"},
+        }
+    )
     elements.append({"tag": "hr"})
 
     # 核心指标
@@ -279,18 +289,27 @@ def send_backtest_card(webhook_url: str, summary_path: str) -> bool:
         ("**回撤**", f"{_fmt(mdd, '.1f')}%"),
         ("**样本**", f"{int(trades or 0)}笔"),
     ]
-    elements.append({"tag": "column_set", "flex_mode": "stretch",
-        "background_style": "grey", "columns": [
-            {"tag": "column", "width": "weighted", "weight": 1, "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": f"{label}\n{val}"}}
-            ]} for label, val in cols
-        ]})
+    elements.append(
+        {
+            "tag": "column_set",
+            "flex_mode": "stretch",
+            "background_style": "grey",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": f"{label}\n{val}"}}],
+                }
+                for label, val in cols
+            ],
+        }
+    )
     elements.append({"tag": "hr"})
 
     # 分轨统计
     if track_data:
-        elements.append({"tag": "div", "text": {"tag": "lark_md",
-            "content": "**分轨统计 (Trend vs Accum)**"}})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**分轨统计 (Trend vs Accum)**"}})
         track_cols = []
         icons = {"Trend": "⚡", "Accum": "🔄"}
         for name in track_data:
@@ -301,18 +320,26 @@ def send_backtest_card(webhook_url: str, summary_path: str) -> bool:
                 f"均收{d.get('平均收益(%)', '?')}% · 夏普{d.get('夏普比', '?')}\n"
                 f"连亏{d.get('最长连亏', '?')}笔"
             )
-            track_cols.append({"tag": "column", "width": "weighted", "weight": 1,
-                "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": txt}}]})
+            track_cols.append(
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": txt}}],
+                }
+            )
         elements.append({"tag": "column_set", "flex_mode": "stretch", "columns": track_cols})
         elements.append({"tag": "hr"})
 
     # 按水温
     if regime_data:
-        elements.append({"tag": "div", "text": {"tag": "lark_md",
-            "content": "**按大盘水温**"}})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**按大盘水温**"}})
         regime_icons = {
-            "NEUTRAL": "🟡", "PANIC_REPAIR": "🟠", "RISK_OFF": "🔴",
-            "RISK_ON": "🟢", "CRASH": "⚫",
+            "NEUTRAL": "🟡",
+            "PANIC_REPAIR": "🟠",
+            "RISK_OFF": "🔴",
+            "RISK_ON": "🟢",
+            "CRASH": "⚫",
         }
         regime_cols = []
         for name in regime_data:
@@ -323,8 +350,14 @@ def send_backtest_card(webhook_url: str, summary_path: str) -> bool:
                 f"{d.get('成交笔数', '?')}笔 · 胜率{d.get('胜率(%)', '?')}%\n"
                 f"均收{d.get('平均收益(%)', '?')}%"
             )
-            regime_cols.append({"tag": "column", "width": "weighted", "weight": 1,
-                "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": txt}}]})
+            regime_cols.append(
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": txt}}],
+                }
+            )
         elements.append({"tag": "column_set", "flex_mode": "stretch", "columns": regime_cols})
 
     if has_recent_tickflow_limit_event():
@@ -492,7 +525,7 @@ def send_tail_buy_card(webhook_url: str, title: str, content: str) -> bool:
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "- 无"}})
             return
         if int(max_items) > 0:
-            shown = safe_items[: max_items]
+            shown = safe_items[:max_items]
         else:
             shown = safe_items
         body = "\n".join([_tail_buy_format_item(x, item_char_limit) for x in shown])
@@ -525,13 +558,17 @@ def send_tail_buy_card(webhook_url: str, title: str, content: str) -> bool:
                     "tag": "column",
                     "width": "weighted",
                     "weight": 1,
-                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": f"**扫描**\n{scan_count or '-'}"}}],
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "lark_md", "content": f"**扫描**\n{scan_count or '-'}"}}
+                    ],
                 },
                 {
                     "tag": "column",
                     "width": "weighted",
                     "weight": 1,
-                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": f"**分层**\n{decision_line or '-'}"}}],
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "lark_md", "content": f"**分层**\n{decision_line or '-'}"}}
+                    ],
                 },
                 {
                     "tag": "column",
@@ -543,7 +580,9 @@ def send_tail_buy_card(webhook_url: str, title: str, content: str) -> bool:
                     "tag": "column",
                     "width": "weighted",
                     "weight": 1,
-                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": f"**耗时**\n{elapsed_line or '-'}"}}],
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "lark_md", "content": f"**耗时**\n{elapsed_line or '-'}"}}
+                    ],
                 },
             ],
         }

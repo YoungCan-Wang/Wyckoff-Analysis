@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 """integrations/supabase_base.py 冒烟测试。"""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from integrations.supabase_base import is_admin_configured
 

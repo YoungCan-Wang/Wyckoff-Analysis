@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """终端 UI — Claude Code 风格的精致 TUI。"""
+
 from __future__ import annotations
 
 import os
@@ -50,6 +50,7 @@ def _get_session() -> PromptSession:
 # 交互式输入辅助
 # ---------------------------------------------------------------------------
 
+
 def _prompt(label: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
     try:
@@ -61,6 +62,7 @@ def _prompt(label: str, default: str = "") -> str:
 
 def _prompt_secret(label: str, current: str = "") -> str:
     import getpass
+
     masked = ""
     if current:
         masked = current[:6] + "..." + current[-4:] if len(current) > 12 else "***"
@@ -88,6 +90,7 @@ def print_banner(email: str = "", model: str = "", version: str = "") -> None:
     if not version:
         try:
             from importlib.metadata import version as _v
+
             version = _v("youngcan-wyckoff-analysis")
         except Exception:
             version = "dev"
@@ -130,6 +133,7 @@ def print_banner(email: str = "", model: str = "", version: str = "") -> None:
 # Help
 # ---------------------------------------------------------------------------
 
+
 def print_help() -> None:
     console.print()
     console.print("  [bold]命令[/bold]")
@@ -151,6 +155,7 @@ def print_help() -> None:
 # ---------------------------------------------------------------------------
 # /login 交互式登录
 # ---------------------------------------------------------------------------
+
 
 def login_prompt() -> tuple[str, str] | None:
     console.print()
@@ -275,6 +280,7 @@ def _stop_live() -> None:
 
 def print_tool_call(name: str, display_name: str, args: dict) -> None:
     import time
+
     global _live, _tool_start
     _stop_live()
     _tool_start = time.monotonic()
@@ -291,6 +297,7 @@ def print_tool_call(name: str, display_name: str, args: dict) -> None:
 
 def print_tool_result(name: str, display_name: str, result) -> None:
     import time
+
     _stop_live()
     elapsed = time.monotonic() - _tool_start
     time_str = f" [dim]{elapsed:.1f}s[/dim]" if elapsed >= 1.0 else ""
@@ -339,6 +346,7 @@ def print_info(message: str) -> None:
 
 
 _ctrl_c_count = 0
+
 
 def get_input() -> str:
     global _ctrl_c_count

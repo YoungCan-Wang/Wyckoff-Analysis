@@ -1,27 +1,27 @@
-# -*- coding: utf-8 -*-
 """
 Supabase 投资组合读写（脚本侧，无 Streamlit 依赖）
 用途：
 1) 读取 USER_LIVE 持仓状态给 Step4 使用
 2) 记录 AI 订单建议与每日净值快照
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
-import os
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 from supabase import Client
+
 from core.constants import (
     TABLE_DAILY_NAV,
-    TABLE_PORTFOLIOS,
     TABLE_PORTFOLIO_POSITIONS,
+    TABLE_PORTFOLIOS,
     TABLE_TRADE_ORDERS,
     TABLE_USER_SETTINGS,
 )
@@ -35,20 +35,14 @@ def load_user_settings_admin(user_id: str) -> dict[str, Any] | None:
         return None
     try:
         client = _get_supabase_admin_client()
-        resp = (
-            client.table(TABLE_USER_SETTINGS)
-            .select("*")
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
-        )
+        resp = client.table(TABLE_USER_SETTINGS).select("*").eq("user_id", user_id).limit(1).execute()
         if not resp.data:
             return None
         row = resp.data[0] or {}
         if not isinstance(row, dict):
             return None
         return row
-    except Exception as e:
+    except Exception:
         logger.debug("[supabase_portfolio] load_user_settings_admin failed: {e}")
         return None
 
@@ -142,9 +136,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
                     "cost": float(row.get("cost_price", 0.0) or 0.0),
                     "buy_dt": str(row.get("buy_dt", "") or "").strip(),
                     "shares": int(row.get("shares", 0) or 0),
-                    "stop_loss": (
-                        float(row["stop_loss"]) if row.get("stop_loss") is not None else None
-                    ),
+                    "stop_loss": (float(row["stop_loss"]) if row.get("stop_loss") is not None else None),
                     "updated_at": row_updated_at,
                 }
             )
@@ -152,14 +144,10 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
         return {
             "portfolio_id": str(p.get("portfolio_id")),
             "free_cash": float(p.get("free_cash", 0.0) or 0.0),
-            "total_equity": (
-                float(p["total_equity"]) if p.get("total_equity") is not None else None
-            ),
+            "total_equity": (float(p["total_equity"]) if p.get("total_equity") is not None else None),
             "updated_at": str(p.get("updated_at", "") or "").strip(),
             "state_updated_at": state_updated_at,
-            "state_signature": compute_portfolio_state_signature(
-                p.get("free_cash", 0.0), positions
-            ),
+            "state_signature": compute_portfolio_state_signature(p.get("free_cash", 0.0), positions),
             "positions": positions,
         }
     except Exception as e:
@@ -183,10 +171,7 @@ def list_step4_targets(target_user_id: str | None = None) -> list[dict[str, Any]
         return []
     try:
         client = _get_supabase_admin_client()
-        query = (
-            client.table(TABLE_USER_SETTINGS)
-            .select("user_id,tg_bot_token,tg_chat_id,gemini_api_key,gemini_model")
-        )
+        query = client.table(TABLE_USER_SETTINGS).select("user_id,tg_bot_token,tg_chat_id,gemini_api_key,gemini_model")
         target_user_id = str(target_user_id or "").strip()
         if target_user_id:
             query = query.eq("user_id", target_user_id).limit(1)
@@ -217,7 +202,7 @@ def list_step4_targets(target_user_id: str | None = None) -> list[dict[str, Any]
                 }
             )
         return targets
-    except Exception as e:
+    except Exception:
         logger.debug("[supabase_portfolio] list_step4_targets failed: {e}")
         return []
 
@@ -251,11 +236,8 @@ def check_daily_run_exists(
         expected_sig = str(state_signature or "").strip().lower()
         if not expected_sig:
             return True
-        return any(
-            extract_state_signature_from_run_id(row.get("run_id")) == expected_sig
-            for row in active_rows
-        )
-    except Exception as e:
+        return any(extract_state_signature_from_run_id(row.get("run_id")) == expected_sig for row in active_rows)
+    except Exception:
         logger.debug("[supabase_portfolio] check_daily_run_exists failed: {e}")
         return False
 
@@ -284,7 +266,7 @@ def update_position_stops(portfolio_id: str, updates: list[dict[str, Any]]) -> b
                 .execute()
             )
         return True
-    except Exception as e:
+    except Exception:
         logger.debug("[supabase_portfolio] update_position_stops failed: {e}")
         return False
 
@@ -379,24 +361,20 @@ def save_ai_trade_orders(
                     "action": str(o.get("action", "")).strip(),
                     "status": str(o.get("status", "")).strip(),
                     "shares": int(o.get("shares", 0) or 0),
-                    "price_hint": (
-                        float(o["price_hint"]) if o.get("price_hint") is not None else None
-                    ),
+                    "price_hint": (float(o["price_hint"]) if o.get("price_hint") is not None else None),
                     "amount": float(o.get("amount", 0.0) or 0.0),
-                    "stop_loss": (
-                        float(o["stop_loss"]) if o.get("stop_loss") is not None else None
-                    ),
+                    "stop_loss": (float(o["stop_loss"]) if o.get("stop_loss") is not None else None),
                     "max_loss": float(o.get("max_loss", 0.0) or 0.0),
                     "drawdown_ratio": float(o.get("drawdown_ratio", 0.0) or 0.0),
                     "reason": str(o.get("reason", "") or ""),
                     "tape_condition": str(o.get("tape_condition", "") or ""),
                     "invalidate_condition": str(o.get("invalidate_condition", "") or ""),
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.now(UTC).isoformat(),
                 }
             )
         client.table(TABLE_TRADE_ORDERS).insert(payload).execute()
         return True
-    except Exception as e:
+    except Exception:
         logger.debug("[supabase_portfolio] save_ai_trade_orders failed: {e}")
         return False
 
@@ -423,14 +401,9 @@ def cancel_trade_orders(
         rows = query.execute().data or []
         active_rows = [row for row in rows if _is_active_trade_order_status(row.get("status"))]
         for row in active_rows:
-            (
-                client.table(TABLE_TRADE_ORDERS)
-                .update({"status": "CANCELLED"})
-                .eq("id", row.get("id"))
-                .execute()
-            )
+            (client.table(TABLE_TRADE_ORDERS).update({"status": "CANCELLED"}).eq("id", row.get("id")).execute())
         return len(active_rows)
-    except Exception as e:
+    except Exception:
         logger.debug("[supabase_portfolio] cancel_trade_orders failed: {e}")
         return 0
 
@@ -453,13 +426,13 @@ def upsert_daily_nav(
             "free_cash": float(free_cash),
             "positions_value": float(positions_value),
             "total_equity": float(total_equity),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         client.table(TABLE_DAILY_NAV).upsert(
             payload,
             on_conflict="portfolio_id,trade_date",
         ).execute()
         return True
-    except Exception as e:
+    except Exception:
         logger.debug("[supabase_portfolio] upsert_daily_nav failed: {e}")
         return False

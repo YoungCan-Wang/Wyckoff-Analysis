@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 """
 TickFlow 行情客户端（带重试与超时控制）。
 """
+
 from __future__ import annotations
 
 import os
@@ -163,9 +163,7 @@ class TickFlowClient:
                         always=True,
                     )
                     raise RuntimeError(f"TickFlow HTTP 429: {body[:200]}（{TICKFLOW_LIMIT_HINT}）")
-                if attempt < self.max_retries and (
-                    resp.status_code >= 500 or "error code: 1010" in body.lower()
-                ):
+                if attempt < self.max_retries and (resp.status_code >= 500 or "error code: 1010" in body.lower()):
                     _tf_log(
                         f"retryable_http path={path} status={resp.status_code} "
                         f"attempt={attempt}/{self.max_retries} params={params_summary}",

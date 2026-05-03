@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from utils import feishu
@@ -66,9 +65,7 @@ def test_send_tail_buy_card_uses_rich_card_and_keeps_full_items_by_default(monke
     assert captured["template"] == "blue"
 
     body_text = "\n".join(
-        str(el.get("text", {}).get("content", ""))
-        for el in captured["elements"]
-        if isinstance(el, dict)
+        str(el.get("text", {}).get("content", "")) for el in captured["elements"] if isinstance(el, dict)
     )
     assert "持仓动作建议（加仓/减仓）" in body_text
     assert "BUY（优先关注）" in body_text

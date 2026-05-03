@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """
 威科夫终端读盘室 — Textual TUI。
 
 全屏布局：上方可滚动聊天区 + 下方固定输入框。
 """
+
 from __future__ import annotations
 
 import json
@@ -23,6 +23,12 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
+# ---------------------------------------------------------------------------
+# Widget
+# ---------------------------------------------------------------------------
+from cli.compaction import TAIL_KEEP as _TAIL_KEEP_DEFAULT
+from cli.compaction import compact_messages
+from cli.loop_guard import MAX_INCOMPLETE_TOOL_RETRIES as _MAX_INCOMPLETE_TOOL_RETRIES
 from cli.loop_guard import (
     build_retry_exhausted_warning,
     build_retry_user_message,
@@ -32,22 +38,13 @@ from cli.loop_guard import (
 from core.prompts import with_current_time
 
 
-# ---------------------------------------------------------------------------
-# Widget
-# ---------------------------------------------------------------------------
-
-from cli.compaction import TAIL_KEEP as _TAIL_KEEP_DEFAULT, compact_messages, estimate_tokens
-from cli.loop_guard import MAX_INCOMPLETE_TOOL_RETRIES as _MAX_INCOMPLETE_TOOL_RETRIES
-
-
 def _pop_lines(log_widget, n: int) -> None:
     """从 RichLog 底部移除 n 行 strips。"""
     from textual.geometry import Size
+
     if n > 0 and len(log_widget.lines) >= n:
         del log_widget.lines[-n:]
-        log_widget.virtual_size = Size(
-            log_widget._widest_line_width, len(log_widget.lines)
-        )
+        log_widget.virtual_size = Size(log_widget._widest_line_width, len(log_widget.lines))
         log_widget.refresh()
 
 
@@ -111,13 +108,16 @@ class BackgroundTaskPanel(Static):
         if self.styles.display == "none":
             self.styles.display = "block"
         from cli.tools import TOOL_DISPLAY_NAMES
+
         lines = []
         for t in tasks:
             m, s = divmod(int(time.monotonic() - t.submitted_at), 60)
             stage = t.current_stage or "准备中"
             detail = f" · {t.current_detail}" if t.current_detail else ""
             name = TOOL_DISPLAY_NAMES.get(t.tool_name, t.tool_name)
-            lines.append(f"  ⟳ {name}  {stage}{detail}    [{m}m{s:02d}s]" if m else f"  ⟳ {name}  {stage}{detail}    [{s}s]")
+            lines.append(
+                f"  ⟳ {name}  {stage}{detail}    [{m}m{s:02d}s]" if m else f"  ⟳ {name}  {stage}{detail}    [{s}s]"
+            )
         self.update("\n".join(lines))
 
 
@@ -173,8 +173,10 @@ _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 # 交互式输入状态机（/login, /model）
 # ---------------------------------------------------------------------------
 
+
 class _InputState:
     """管理多步交互式输入流程。"""
+
     NONE = "none"
     LOGIN_EMAIL = "login_email"
     LOGIN_PASSWORD = "login_password"
@@ -189,6 +191,7 @@ class _InputState:
 # ---------------------------------------------------------------------------
 # 工具确认弹窗
 # ---------------------------------------------------------------------------
+
 
 class ToolConfirmScreen(ModalScreen[dict]):
     """高风险工具执行前的确认弹窗。"""
@@ -314,6 +317,7 @@ class ToolConfirmScreen(ModalScreen[dict]):
 # 主应用
 # ---------------------------------------------------------------------------
 
+
 class WyckoffTUI(App):
     """威科夫终端读盘室。"""
 
@@ -370,6 +374,7 @@ class WyckoffTUI(App):
         if not self._agent_log.handlers:
             try:
                 from core.constants import LOCAL_DB_PATH
+
                 log_path = LOCAL_DB_PATH.parent / "agent.log"
                 log_path.parent.mkdir(parents=True, exist_ok=True)
                 fh = logging.FileHandler(str(log_path), encoding="utf-8")
@@ -380,6 +385,7 @@ class WyckoffTUI(App):
                 pass
         # 后台任务管理
         from cli.background import BackgroundTaskManager
+
         self._bg_manager = BackgroundTaskManager()
         self._bg_manager.set_progress_callback(self._on_bg_progress)
         if self._tools:
@@ -399,6 +405,7 @@ class WyckoffTUI(App):
         # 加载保存的主题
         try:
             from cli.auth import load_config
+
             saved_theme = load_config().get("theme", "")
             if saved_theme and saved_theme in self.available_themes:
                 self.theme = saved_theme
@@ -406,22 +413,21 @@ class WyckoffTUI(App):
             pass
 
         log = self.query_one("#chat-log", ChatLog)
-        log.write(Text.from_markup(
-            "[bold]Wyckoff 读盘室[/bold]\n"
-            "[dim]直接输入问题开始对话  ·  /help 查看命令  ·  Ctrl+P 命令面板  ·  Ctrl+C 复制/退出[/dim]\n"
-        ))
+        log.write(
+            Text.from_markup(
+                "[bold]Wyckoff 读盘室[/bold]\n"
+                "[dim]直接输入问题开始对话  ·  /help 查看命令  ·  Ctrl+P 命令面板  ·  Ctrl+C 复制/退出[/dim]\n"
+            )
+        )
         if not self._provider:
-            log.write(Text.from_markup(
-                "[yellow]⚠ 未配置模型，请输入 /model add 添加[/yellow]\n"
-            ))
+            log.write(Text.from_markup("[yellow]⚠ 未配置模型，请输入 /model add 添加[/yellow]\n"))
         if self._session_expired:
-            log.write(Text.from_markup(
-                "[yellow]⚠ 登录已过期，请输入 /login 重新登录[/yellow]\n"
-            ))
+            log.write(Text.from_markup("[yellow]⚠ 登录已过期，请输入 /login 重新登录[/yellow]\n"))
         self.query_one("#chat-input", Input).focus()
 
     def _build_status_text(self) -> str:
         from importlib.metadata import version as _ver
+
         try:
             ver = _ver("youngcan-wyckoff-analysis")
         except Exception:
@@ -435,7 +441,7 @@ class WyckoffTUI(App):
         parts.append(email or "未登录")
         t = self._session_tokens
         if t["rounds"] > 0:
-            parts.append(f"Token: {t['input']+t['output']:,}")
+            parts.append(f"Token: {t['input'] + t['output']:,}")
         return " · ".join(parts)
 
     def _update_status(self) -> None:
@@ -467,8 +473,10 @@ class WyckoffTUI(App):
     def _save_and_exit(self) -> None:
         if self._messages and self._provider:
             try:
-                from cli.memory import save_session_summary
                 import threading
+
+                from cli.memory import save_session_summary
+
                 t = threading.Thread(
                     target=save_session_summary,
                     args=(list(self._messages), self._provider),
@@ -514,11 +522,13 @@ class WyckoffTUI(App):
         if t["rounds"] == 0:
             log.write(Text.from_markup("[dim]本次会话尚无 Token 记录[/dim]"))
         else:
-            log.write(Text.from_markup(
-                f"\n[bold]Token 用量[/bold]  "
-                f"输入: {t['input']:,}  输出: {t['output']:,}  "
-                f"合计: {t['input']+t['output']:,}  轮次: {t['rounds']}"
-            ))
+            log.write(
+                Text.from_markup(
+                    f"\n[bold]Token 用量[/bold]  "
+                    f"输入: {t['input']:,}  输出: {t['output']:,}  "
+                    f"合计: {t['input'] + t['output']:,}  轮次: {t['rounds']}"
+                )
+            )
 
     def action_switch_theme(self) -> None:
         """打开主题切换器并保存选择。"""
@@ -528,6 +538,7 @@ class WyckoffTUI(App):
         """主题变化时自动保存。"""
         try:
             from cli.auth import save_config_key
+
             save_config_key("theme", new_theme)
         except Exception:
             pass
@@ -550,9 +561,7 @@ class WyckoffTUI(App):
 
     def _tick_spinner(self) -> None:
         self._spinner_idx = (self._spinner_idx + 1) % len(_SPINNER)
-        self.query_one("#chat-log", ChatLog).border_subtitle = (
-            f"{_SPINNER[self._spinner_idx]} {self._spinner_label}"
-        )
+        self.query_one("#chat-log", ChatLog).border_subtitle = f"{_SPINNER[self._spinner_idx]} {self._spinner_label}"
 
     # ----- 输入处理 -----
 
@@ -594,6 +603,7 @@ class WyckoffTUI(App):
         # 注入记忆上下文
         try:
             from cli.memory import build_memory_context
+
             mem_ctx = build_memory_context(text)
             if mem_ctx and mem_ctx not in self._system_prompt:
                 self._system_prompt = self._system_prompt.rstrip() + "\n" + mem_ctx
@@ -617,39 +627,42 @@ class WyckoffTUI(App):
             self.action_new_chat()
         elif cmd == "/help":
             from cli.skills import load_skills
+
             skills = load_skills()
-            skill_lines = "".join(
-                f"  /{s.name:<11s}— {s.description}\n" for s in skills.values()
+            skill_lines = "".join(f"  /{s.name:<11s}— {s.description}\n" for s in skills.values())
+            log.write(
+                Text.from_markup(
+                    "\n[bold]可用命令[/bold]\n"
+                    "  /model   — 切换模型（list/add/rm/default）\n"
+                    "  /config  — 数据源配置（tushare_token, tickflow_api_key）\n"
+                    "  /login   — 登录\n"
+                    "  /logout  — 退出登录\n"
+                    "  /token   — Token 用量\n"
+                    "  /resume  — 恢复历史对话\n"
+                    "  /new     — 新对话 (Ctrl+N)\n"
+                    "  /clear   — 清屏 (Ctrl+L)\n"
+                    "  /quit    — 退出 (Ctrl+Q)\n"
+                    f"\n[bold]Skills[/bold]\n{skill_lines}"
+                    "\n[bold]快捷键[/bold]\n"
+                    "  Ctrl+P   — 命令面板\n"
+                    "  Ctrl+C   — 复制选中文本 / 退出\n"
+                    "  Ctrl+N   — 新对话\n"
+                    "  Ctrl+L   — 清屏\n"
+                    "  鼠标拖选  — 选择文本\n"
+                )
             )
-            log.write(Text.from_markup(
-                "\n[bold]可用命令[/bold]\n"
-                "  /model   — 切换模型（list/add/rm/default）\n"
-                "  /config  — 数据源配置（tushare_token, tickflow_api_key）\n"
-                "  /login   — 登录\n"
-                "  /logout  — 退出登录\n"
-                "  /token   — Token 用量\n"
-                "  /resume  — 恢复历史对话\n"
-                "  /new     — 新对话 (Ctrl+N)\n"
-                "  /clear   — 清屏 (Ctrl+L)\n"
-                "  /quit    — 退出 (Ctrl+Q)\n"
-                f"\n[bold]Skills[/bold]\n{skill_lines}"
-                "\n[bold]快捷键[/bold]\n"
-                "  Ctrl+P   — 命令面板\n"
-                "  Ctrl+C   — 复制选中文本 / 退出\n"
-                "  Ctrl+N   — 新对话\n"
-                "  Ctrl+L   — 清屏\n"
-                "  鼠标拖选  — 选择文本\n"
-            ))
         elif cmd == "/token":
             t = self._session_tokens
             if t["rounds"] == 0:
                 log.write(Text.from_markup("[dim]本次会话尚无 Token 记录[/dim]"))
             else:
-                log.write(Text.from_markup(
-                    f"\n[bold]Token 用量[/bold]  "
-                    f"输入: {t['input']:,}  输出: {t['output']:,}  "
-                    f"合计: {t['input']+t['output']:,}  轮次: {t['rounds']}"
-                ))
+                log.write(
+                    Text.from_markup(
+                        f"\n[bold]Token 用量[/bold]  "
+                        f"输入: {t['input']:,}  输出: {t['output']:,}  "
+                        f"合计: {t['input'] + t['output']:,}  轮次: {t['rounds']}"
+                    )
+                )
         elif cmd == "/login":
             self._start_login()
         elif cmd == "/logout":
@@ -661,9 +674,11 @@ class WyckoffTUI(App):
             elif parts[1] == "set" and len(parts) >= 3:
                 self._start_config_set(parts[2])
             else:
-                log.write(Text.from_markup(
-                    "[dim]/config 用法: /config (查看) | /config set tushare_token | /config set tickflow_api_key[/dim]"
-                ))
+                log.write(
+                    Text.from_markup(
+                        "[dim]/config 用法: /config (查看) | /config set tushare_token | /config set tickflow_api_key[/dim]"
+                    )
+                )
         elif cmd == "/model":
             parts = raw.strip().split()
             if len(parts) == 1:
@@ -677,9 +692,11 @@ class WyckoffTUI(App):
             elif parts[1] == "default" and len(parts) >= 3:
                 self._set_default_model(parts[2])
             else:
-                log.write(Text.from_markup(
-                    "[dim]/model 用法: /model (切换) | /model list | /model add | /model rm <id> | /model default <id>[/dim]"
-                ))
+                log.write(
+                    Text.from_markup(
+                        "[dim]/model 用法: /model (切换) | /model list | /model add | /model rm <id> | /model default <id>[/dim]"
+                    )
+                )
         elif cmd == "/resume":
             parts = raw.strip().split(maxsplit=1)
             if len(parts) > 1:
@@ -693,6 +710,7 @@ class WyckoffTUI(App):
 
     def _try_skill(self, raw: str, log) -> None:
         from cli.skills import load_skills
+
         skills = load_skills()
         parts = raw.strip().split(maxsplit=1)
         cmd_name = parts[0].lstrip("/").lower()
@@ -704,6 +722,7 @@ class WyckoffTUI(App):
 
     def _execute_skill(self, name: str, user_input: str = "") -> None:
         from cli.skills import load_skills
+
         log = self.query_one("#chat-log", ChatLog)
         skills = load_skills()
         skill = skills.get(name)
@@ -724,12 +743,17 @@ class WyckoffTUI(App):
 
     _CONFIG_KEYS = {
         "tushare_token": ("Tushare Token", "TUSHARE_TOKEN", ""),
-        "tickflow_api_key": ("TickFlow API Key", "TICKFLOW_API_KEY", "购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4"),
+        "tickflow_api_key": (
+            "TickFlow API Key",
+            "TICKFLOW_API_KEY",
+            "购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4",
+        ),
     }
 
     def _show_config(self) -> None:
         log = self.query_one("#chat-log", ChatLog)
         from cli.auth import load_config
+
         cfg = load_config()
         log.write(Text.from_markup("\n[bold]数据源配置[/bold]"))
         for key, (label, _, hint) in self._CONFIG_KEYS.items():
@@ -773,6 +797,7 @@ class WyckoffTUI(App):
         if self._tools:
             try:
                 from cli.auth import logout
+
                 logout()
             except Exception:
                 pass
@@ -784,7 +809,8 @@ class WyckoffTUI(App):
 
     def _list_models(self) -> None:
         log = self.query_one("#chat-log", ChatLog)
-        from cli.auth import load_model_configs, load_default_model_id
+        from cli.auth import load_default_model_id, load_model_configs
+
         configs = load_model_configs()
         default_id = load_default_model_id()
         if not configs:
@@ -793,23 +819,23 @@ class WyckoffTUI(App):
         log.write(Text.from_markup("\n[bold]已配置模型[/bold] [dim](↑↓选择 Enter确认 Esc取消)[/dim]"))
         for c in configs:
             mark = " [green]⭐ 默认[/green]" if c["id"] == default_id else ""
-            log.write(Text.from_markup(
-                f"  [bold]{c['id']}[/bold] — {c['provider_name']}/{c.get('model', '?')}{mark}"
-            ))
+            log.write(Text.from_markup(f"  [bold]{c['id']}[/bold] — {c['provider_name']}/{c.get('model', '?')}{mark}"))
         self._switch_model_selector()
 
     def _remove_model(self, model_id: str) -> None:
         log = self.query_one("#chat-log", ChatLog)
         from cli.auth import remove_model_entry
+
         if remove_model_entry(model_id):
             log.write(Text.from_markup(f"  [green]✓ 已删除 {model_id}[/green]"))
             self._rebuild_provider()
         else:
-            log.write(Text.from_markup(f"  [red]无法删除（至少保留一个模型）[/red]"))
+            log.write(Text.from_markup("  [red]无法删除（至少保留一个模型）[/red]"))
 
     def _set_default_model(self, model_id: str) -> None:
         log = self.query_one("#chat-log", ChatLog)
         from cli.auth import load_model_configs, set_default_model
+
         configs = load_model_configs()
         if not any(c["id"] == model_id for c in configs):
             log.write(Text.from_markup(f"  [red]未找到: {model_id}[/red]"))
@@ -819,7 +845,8 @@ class WyckoffTUI(App):
         self._rebuild_provider()
 
     def _rebuild_provider(self) -> None:
-        from cli.auth import load_model_configs, load_default_model_id, load_fallback_model_id
+        from cli.auth import load_default_model_id, load_fallback_model_id, load_model_configs
+
         configs = load_model_configs()
         default_id = load_default_model_id()
         if not configs:
@@ -828,14 +855,18 @@ class WyckoffTUI(App):
         default_cfg = next((c for c in configs if c["id"] == default_id), configs[0])
         if len(configs) == 1:
             from cli.__main__ import _create_provider
+
             provider, err = _create_provider(
-                default_cfg["provider_name"], default_cfg["api_key"],
-                default_cfg.get("model", ""), default_cfg.get("base_url", ""),
+                default_cfg["provider_name"],
+                default_cfg["api_key"],
+                default_cfg.get("model", ""),
+                default_cfg.get("base_url", ""),
             )
             if not err:
                 self._provider = provider
         else:
             from cli.providers.fallback import FallbackProvider
+
             self._provider = FallbackProvider(configs, default_id, fallback_id=load_fallback_model_id())
         self._state.update(default_cfg)
         if self._tools and self._provider:
@@ -870,14 +901,19 @@ class WyckoffTUI(App):
         elif callback_id == "model_provider":
             self._input_buf["provider"] = value
             log.write(Text.from_markup(f"  供应商: {value}"))
-            log.write(Text.from_markup("  输入 API Key（购买: [link=https://www.1route.dev/register?aff=359904261]1route.dev[/link]）："))
+            log.write(
+                Text.from_markup(
+                    "  输入 API Key（购买: [link=https://www.1route.dev/register?aff=359904261]1route.dev[/link]）："
+                )
+            )
             inp.placeholder = "API Key..."
             inp.password = True
             self._input_mode = _InputState.MODEL_KEY
 
     def _switch_model_selector(self) -> None:
         """弹出浮层选择器切换当前模型。"""
-        from cli.auth import load_model_configs, load_default_model_id
+        from cli.auth import load_default_model_id, load_model_configs
+
         configs = load_model_configs()
         if not configs:
             log = self.query_one("#chat-log", ChatLog)
@@ -894,10 +930,7 @@ class WyckoffTUI(App):
     def _start_model_add(self) -> None:
         log = self.query_one("#chat-log", ChatLog)
         inp = self.query_one("#chat-input", Input)
-        log.write(Text.from_markup(
-            "\n[bold]添加模型[/bold]\n"
-            "  输入别名（如 gemini, longcat, deepseek）："
-        ))
+        log.write(Text.from_markup("\n[bold]添加模型[/bold]\n  输入别名（如 gemini, longcat, deepseek）："))
         inp.placeholder = "模型别名..."
         self._input_mode = _InputState.MODEL_ID
         self._input_buf = {}
@@ -921,8 +954,10 @@ class WyckoffTUI(App):
             key = self._input_buf["config_key"]
             label, env_key, _ = self._CONFIG_KEYS[key]
             from cli.auth import save_config_key
+
             save_config_key(key, text)
             import os
+
             os.environ[env_key] = text
             log.write(Text.from_markup(f"  [green]✓ {label} 已保存[/green]"))
             self._input_mode = _InputState.NONE
@@ -945,14 +980,18 @@ class WyckoffTUI(App):
             # 执行登录
             try:
                 from cli.auth import login
+
                 session = login(self._input_buf["email"], text)
-                self._tools.state.update({
-                    "user_id": session["user_id"],
-                    "email": session["email"],
-                    "access_token": session.get("access_token", ""),
-                    "refresh_token": session.get("refresh_token", ""),
-                })
+                self._tools.state.update(
+                    {
+                        "user_id": session["user_id"],
+                        "email": session["email"],
+                        "access_token": session.get("access_token", ""),
+                        "refresh_token": session.get("refresh_token", ""),
+                    }
+                )
                 from core.stock_cache import set_cli_tokens
+
                 set_cli_tokens(session.get("access_token", ""), session.get("refresh_token", ""))
                 log.write(Text.from_markup(f"  [green]✓ 登录成功 ({session['email']})[/green]"))
                 self._update_status()
@@ -975,11 +1014,14 @@ class WyckoffTUI(App):
             log.write(Text.from_markup(f"  别名: {model_id}"))
             log.write(Text.from_markup("  选择供应商（↑↓ 选择，Enter 确认，Esc 取消）："))
             self._input_mode = _InputState.MODEL_PROVIDER
-            self._show_selector([
-                ("gemini", "Gemini (Google)"),
-                ("openai", "OpenAI / 兼容接口 (LongCat, DeepSeek, Qwen...)"),
-                ("claude", "Claude (Anthropic)"),
-            ], "model_provider")
+            self._show_selector(
+                [
+                    ("gemini", "Gemini (Google)"),
+                    ("openai", "OpenAI / 兼容接口 (LongCat, DeepSeek, Qwen...)"),
+                    ("claude", "Claude (Anthropic)"),
+                ],
+                "model_provider",
+            )
             return  # 等 selector 回调
 
         elif mode == _InputState.MODEL_PROVIDER:
@@ -992,7 +1034,11 @@ class WyckoffTUI(App):
                 return
             self._input_buf["provider"] = prov
             log.write(Text.from_markup(f"  供应商: {prov}"))
-            log.write(Text.from_markup("  输入 API Key（购买: [link=https://www.1route.dev/register?aff=359904261]1route.dev[/link]）："))
+            log.write(
+                Text.from_markup(
+                    "  输入 API Key（购买: [link=https://www.1route.dev/register?aff=359904261]1route.dev[/link]）："
+                )
+            )
             inp.placeholder = "API Key..."
             inp.password = True
             self._input_mode = _InputState.MODEL_KEY
@@ -1034,17 +1080,25 @@ class WyckoffTUI(App):
                 "model": buf.get("model", ""),
                 "base_url": buf.get("base_url", ""),
             }
-            from cli.auth import save_model_entry, load_model_configs, set_default_model
+            from cli.auth import load_model_configs, save_model_entry, set_default_model
+
             save_model_entry(entry)
             # 首条模型或新添加的设为默认
             if len(load_model_configs()) == 1:
                 set_default_model(entry["id"])
             import os
-            env_key = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(buf["provider"])
+
+            env_key = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(
+                buf["provider"]
+            )
             if env_key:
                 os.environ[env_key] = buf["api_key"]
             self._rebuild_provider()
-            log.write(Text.from_markup(f"  [green]✓ 已添加 {entry['id']} ({self._provider.name if self._provider else '?'})[/green]"))
+            log.write(
+                Text.from_markup(
+                    f"  [green]✓ 已添加 {entry['id']} ({self._provider.name if self._provider else '?'})[/green]"
+                )
+            )
         except Exception as e:
             log.write(Text.from_markup(f"  [red]配置失败: {e}[/red]"))
 
@@ -1052,6 +1106,7 @@ class WyckoffTUI(App):
         """保存一条对话记录到 SQLite（静默失败）。"""
         try:
             from integrations.local_db import save_chat_log
+
             save_chat_log(self._session_id, role, content, **kwargs)
         except Exception:
             pass
@@ -1108,13 +1163,17 @@ class WyckoffTUI(App):
                 _spinner_start("压缩上下文")
                 prev_len = len(self._messages)
                 self._messages, compacted = compact_messages(
-                    self._messages, self._provider, _model_name_for_compact,
+                    self._messages,
+                    self._provider,
+                    _model_name_for_compact,
                 )
                 _spinner_stop()
                 if compacted:
-                    _write(Text.from_markup(
-                        f"  [dim]📦 上下文已压缩（{prev_len - _TAIL_KEEP_DEFAULT}条→摘要，保留最近{_TAIL_KEEP_DEFAULT}条）[/dim]"
-                    ))
+                    _write(
+                        Text.from_markup(
+                            f"  [dim]📦 上下文已压缩（{prev_len - _TAIL_KEEP_DEFAULT}条→摘要，保留最近{_TAIL_KEEP_DEFAULT}条）[/dim]"
+                        )
+                    )
 
                 text_buf = ""
                 thinking_buf = ""
@@ -1153,15 +1212,20 @@ class WyckoffTUI(App):
                     except Exception as _stream_err:
                         self._agent_log.warning(
                             "session=%s stream_connect_fail retry=%d err=%s",
-                            self._session_id, _retry, _stream_err,
+                            self._session_id,
+                            _retry,
+                            _stream_err,
                         )
                         from cli.providers.fallback import _is_retriable
+
                         if not _is_retriable(_stream_err) or _retry == _MAX_STREAM_RETRIES - 1:
                             raise
                         _delay = min(2 ** (_retry + 1), 30)
-                        _write(Text.from_markup(
-                            f"  [yellow]⚡ 连接失败，{_delay}s 后重试（{_retry+1}/{_MAX_STREAM_RETRIES}）[/yellow]"
-                        ))
+                        _write(
+                            Text.from_markup(
+                                f"  [yellow]⚡ 连接失败，{_delay}s 后重试（{_retry + 1}/{_MAX_STREAM_RETRIES}）[/yellow]"
+                            )
+                        )
                         _scroll()
                         time.sleep(_delay)
 
@@ -1174,9 +1238,7 @@ class WyckoffTUI(App):
                         _stream_line_buf += chunk["text"]
                         if not _streaming_started:
                             _spinner_stop()
-                            _stream_separator_strips += _write_stream(
-                                Text.from_markup("  [dim]───[/dim]")
-                            )
+                            _stream_separator_strips += _write_stream(Text.from_markup("  [dim]───[/dim]"))
                             _streaming_started = True
                         while "\n" in _stream_line_buf:
                             line, _stream_line_buf = _stream_line_buf.split("\n", 1)
@@ -1202,17 +1264,19 @@ class WyckoffTUI(App):
 
                 total_input += round_usage.get("input_tokens", 0)
                 total_output += round_usage.get("output_tokens", 0)
-                rounds_detail.append({
-                    "round": round_idx + 1,
-                    "model": _model_name,
-                    "tokens_in": round_usage.get("input_tokens", 0),
-                    "tokens_out": round_usage.get("output_tokens", 0),
-                    "cache_read": round_usage.get("cache_read_tokens", 0),
-                    "cache_write": round_usage.get("cache_write_tokens", 0),
-                    "duration": round(time.monotonic() - _round_start, 2),
-                    "has_tool_calls": bool(tool_calls),
-                    "tool_names": [c["name"] for c in (tool_calls or [])],
-                })
+                rounds_detail.append(
+                    {
+                        "round": round_idx + 1,
+                        "model": _model_name,
+                        "tokens_in": round_usage.get("input_tokens", 0),
+                        "tokens_out": round_usage.get("output_tokens", 0),
+                        "cache_read": round_usage.get("cache_read_tokens", 0),
+                        "cache_write": round_usage.get("cache_write_tokens", 0),
+                        "duration": round(time.monotonic() - _round_start, 2),
+                        "has_tool_calls": bool(tool_calls),
+                        "tool_names": [c["name"] for c in (tool_calls or [])],
+                    }
+                )
 
                 will_retry_missing_tool = (
                     missing_required_tool(expectation, used_tools_this_turn)
@@ -1234,9 +1298,11 @@ class WyckoffTUI(App):
                     preview = thinking_buf.strip().replace("\n", " ")
                     if len(preview) > 80:
                         preview = preview[:80] + "…"
-                    _write(Text.from_markup(
-                        f"  [italic magenta]💭 {preview}[/italic magenta]  [dim]({len(thinking_buf)} 字)[/dim]"
-                    ))
+                    _write(
+                        Text.from_markup(
+                            f"  [italic magenta]💭 {preview}[/italic magenta]  [dim]({len(thinking_buf)} 字)[/dim]"
+                        )
+                    )
 
                 # ── 工具调用 ──
                 if tool_calls:
@@ -1256,13 +1322,17 @@ class WyckoffTUI(App):
 
                         # ── Doom-loop 检测 ──
                         if check_doom_loop(_recent_calls, name, args, recent_args_texts=_recent_args_texts):
-                            _write(Text.from_markup(
-                                f"  [yellow]⚠ 检测到重复调用 {display}，已中止循环[/yellow]"
-                            ))
-                            self._messages.append({
-                                "role": "tool", "tool_call_id": call_id, "name": name,
-                                "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
-                            })
+                            _write(Text.from_markup(f"  [yellow]⚠ 检测到重复调用 {display}，已中止循环[/yellow]"))
+                            self._messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": call_id,
+                                    "name": name,
+                                    "content": json.dumps(
+                                        {"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False
+                                    ),
+                                }
+                            )
                             tool_calls = None
                             _doom_break = True
                             break
@@ -1276,41 +1346,47 @@ class WyckoffTUI(App):
                         _spinner_stop()
 
                         if isinstance(result, dict) and result.get("error"):
-                            executed_tool_summaries.append({
-                                "name": name,
-                                "args_brief": str(args)[:100],
-                                "status": "error",
-                                "error": str(result.get("error", ""))[:160],
-                            })
-                            _write(Text.from_markup(
-                                f"  [red]✗ {display}[/red] [dim]{elapsed_tool:.1f}s {str(result['error'])[:80]}[/dim]"
-                            ))
+                            executed_tool_summaries.append(
+                                {
+                                    "name": name,
+                                    "args_brief": str(args)[:100],
+                                    "status": "error",
+                                    "error": str(result.get("error", ""))[:160],
+                                }
+                            )
+                            _write(
+                                Text.from_markup(
+                                    f"  [red]✗ {display}[/red] [dim]{elapsed_tool:.1f}s {str(result['error'])[:80]}[/dim]"
+                                )
+                            )
                         elif isinstance(result, dict) and result.get("status") == "background":
-                            executed_tool_summaries.append({
-                                "name": name,
-                                "args_brief": str(args)[:100],
-                                "status": "background",
-                            })
-                            _write(Text.from_markup(
-                                f"  [cyan]↗ {display}[/cyan] [dim]已提交后台[/dim]"
-                            ))
+                            executed_tool_summaries.append(
+                                {
+                                    "name": name,
+                                    "args_brief": str(args)[:100],
+                                    "status": "background",
+                                }
+                            )
+                            _write(Text.from_markup(f"  [cyan]↗ {display}[/cyan] [dim]已提交后台[/dim]"))
                         else:
-                            executed_tool_summaries.append({
-                                "name": name,
-                                "args_brief": str(args)[:100],
-                                "status": "ok",
-                            })
-                            _write(Text.from_markup(
-                                f"  [green]✓ {display}[/green] [dim]{elapsed_tool:.1f}s[/dim]"
-                            ))
+                            executed_tool_summaries.append(
+                                {
+                                    "name": name,
+                                    "args_brief": str(args)[:100],
+                                    "status": "ok",
+                                }
+                            )
+                            _write(Text.from_markup(f"  [green]✓ {display}[/green] [dim]{elapsed_tool:.1f}s[/dim]"))
                         _scroll()
 
-                        self._messages.append({
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "name": name,
-                            "content": json.dumps(result, ensure_ascii=False, default=str),
-                        })
+                        self._messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "name": name,
+                                "content": json.dumps(result, ensure_ascii=False, default=str),
+                            }
+                        )
                     if tool_calls is not None:
                         continue
                     # doom-loop 中止：不再继续下一轮，走到最终输出
@@ -1328,9 +1404,7 @@ class WyckoffTUI(App):
                         expectation.required_tool if expectation else "",
                         expectation.reason if expectation else "",
                     )
-                    _write(Text.from_markup(
-                        "  [yellow]⚠ 模型未执行必需工具，已自动要求继续执行[/yellow]"
-                    ))
+                    _write(Text.from_markup("  [yellow]⚠ 模型未执行必需工具，已自动要求继续执行[/yellow]"))
                     _scroll()
                     if text_buf:
                         _retry_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
@@ -1370,11 +1444,7 @@ class WyckoffTUI(App):
 
                 # 保存对话记录
                 _chatlog_save("user", _user_text, model=_model_name, provider=_provider_name)
-                _tc_json = (
-                    json.dumps(executed_tool_summaries, ensure_ascii=False)
-                    if executed_tool_summaries
-                    else ""
-                )
+                _tc_json = json.dumps(executed_tool_summaries, ensure_ascii=False) if executed_tool_summaries else ""
                 _metadata = {
                     "cache_read": round_usage.get("cache_read_tokens", 0),
                     "cache_write": round_usage.get("cache_write_tokens", 0),
@@ -1386,15 +1456,22 @@ class WyckoffTUI(App):
                     "tools": self._tools.schemas() if self._tools else [],
                 }
                 _chatlog_save(
-                    "assistant", text_buf,
-                    model=_model_name, provider=_provider_name,
-                    tokens_in=total_input, tokens_out=total_output,
-                    elapsed_s=round(elapsed, 2), tool_calls_json=_tc_json,
+                    "assistant",
+                    text_buf,
+                    model=_model_name,
+                    provider=_provider_name,
+                    tokens_in=total_input,
+                    tokens_out=total_output,
+                    elapsed_s=round(elapsed, 2),
+                    tool_calls_json=_tc_json,
                     metadata_json=json.dumps(_metadata, ensure_ascii=False),
                 )
                 self._agent_log.info(
                     "session=%s done in=%.1fs tokens=%d/%d",
-                    self._session_id, elapsed, total_input, total_output,
+                    self._session_id,
+                    elapsed,
+                    total_input,
+                    total_output,
                 )
                 break
             else:
@@ -1406,6 +1483,7 @@ class WyckoffTUI(App):
             # 清理 HTML 错误响应，只保留关键信息
             if "<html" in err.lower():
                 import re
+
                 title = re.search(r"<title>(.*?)</title>", err, re.IGNORECASE)
                 err = title.group(1) if title else "服务端返回 HTML 错误"
             if len(err) > 200:
@@ -1415,11 +1493,17 @@ class WyckoffTUI(App):
             _elapsed = time.monotonic() - t_start
             self._agent_log.error(
                 "session=%s error after=%.1fs type=%s msg=%s",
-                self._session_id, _elapsed, type(e).__name__, str(e)[:500],
+                self._session_id,
+                _elapsed,
+                type(e).__name__,
+                str(e)[:500],
             )
             _chatlog_save("user", _user_text, model=_model_name, provider=_provider_name)
             _chatlog_save(
-                "error", "", model=_model_name, provider=_provider_name,
+                "error",
+                "",
+                model=_model_name,
+                provider=_provider_name,
                 elapsed_s=round(_elapsed, 2),
                 error=f"{type(e).__name__}: {str(e)[:500]}",
             )
@@ -1449,11 +1533,13 @@ class WyckoffTUI(App):
     def _on_bg_complete(self, task_id: str, tool_name: str, result) -> None:
         """后台任务完成，注入结果到消息队列。"""
         from cli.tools import TOOL_DISPLAY_NAMES
+
         display = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
         is_error = isinstance(result, dict) and result.get("error")
 
         try:
             from integrations.local_db import save_background_task_result
+
             save_background_task_result(
                 task_id,
                 tool_name,
@@ -1494,7 +1580,8 @@ class WyckoffTUI(App):
 
     def _resume_session_selector(self) -> None:
         """弹出选择器，选择要恢复的历史会话。"""
-        from integrations.local_db import list_chat_sessions, get_session_preview
+        from integrations.local_db import get_session_preview, list_chat_sessions
+
         log = self.query_one("#chat-log", ChatLog)
         sessions = list_chat_sessions(limit=20)
         sessions = [s for s in sessions if s["session_id"] != self._session_id]
@@ -1512,7 +1599,8 @@ class WyckoffTUI(App):
 
     def _resume_session(self, session_id: str) -> None:
         """恢复指定会话，加载历史消息到 self._messages。"""
-        from integrations.local_db import load_chat_logs, list_chat_sessions
+        from integrations.local_db import list_chat_sessions, load_chat_logs
+
         log = self.query_one("#chat-log", ChatLog)
 
         if session_id.isdigit():
@@ -1532,8 +1620,10 @@ class WyckoffTUI(App):
         # 保存当前会话记忆
         if self._messages and self._provider:
             try:
-                from cli.memory import save_session_summary
                 import threading
+
+                from cli.memory import save_session_summary
+
                 threading.Thread(
                     target=save_session_summary,
                     args=(list(self._messages), self._provider),
@@ -1549,9 +1639,7 @@ class WyckoffTUI(App):
         self._session_id = session_id
         log.clear()
 
-        log.write(Text.from_markup(
-            f"[green]已恢复会话[/green] [dim]{session_id} · {len(rows)} 条记录[/dim]\n"
-        ))
+        log.write(Text.from_markup(f"[green]已恢复会话[/green] [dim]{session_id} · {len(rows)} 条记录[/dim]\n"))
 
         for row in rows:
             role = row["role"]
@@ -1589,8 +1677,10 @@ class WyckoffTUI(App):
         # 保存会话记忆
         if self._messages and self._provider:
             try:
-                from cli.memory import save_session_summary
                 import threading
+
+                from cli.memory import save_session_summary
+
                 msgs_copy = list(self._messages)
                 threading.Thread(
                     target=save_session_summary,
@@ -1612,6 +1702,7 @@ class WyckoffTUI(App):
 # 注册命令面板（class 定义完成后）
 try:
     from cli.commands import WyckoffCommands
+
     WyckoffTUI.COMMANDS = {WyckoffCommands}
 except ImportError:
     pass

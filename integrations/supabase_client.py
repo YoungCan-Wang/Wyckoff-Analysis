@@ -1,8 +1,9 @@
 import json
-import os
+
 import streamlit as st
-from supabase import Client
 from postgrest.exceptions import APIError
+from supabase import Client
+
 from core.constants import TABLE_USER_SETTINGS
 from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.supabase_base import create_anon_client
@@ -117,12 +118,7 @@ def load_user_settings(user_id: str):
         return False
     try:
         supabase = get_supabase_client()
-        response = (
-            supabase.table(TABLE_USER_SETTINGS)
-            .select("*")
-            .eq("user_id", user_id)
-            .execute()
-        )
+        response = supabase.table(TABLE_USER_SETTINGS).select("*").eq("user_id", user_id).execute()
 
         if response.data and len(response.data) > 0:
             settings = response.data[0]
@@ -134,21 +130,17 @@ def load_user_settings(user_id: str):
 
             # 大模型配置
             st.session_state.gemini_api_key = settings.get("gemini_api_key") or ""
-            st.session_state.gemini_model = (
-                settings.get("gemini_model") or DEFAULT_GEMINI_MODEL
-            )
+            st.session_state.gemini_model = settings.get("gemini_model") or DEFAULT_GEMINI_MODEL
             st.session_state.gemini_base_url = settings.get("gemini_base_url") or ""
             st.session_state.openai_api_key = settings.get("openai_api_key") or ""
             st.session_state.openai_model = settings.get("openai_model") or ""
-            st.session_state.openai_base_url = (
-                settings.get("openai_base_url")
-                or OPENAI_COMPATIBLE_BASE_URLS.get("openai", "")
+            st.session_state.openai_base_url = settings.get("openai_base_url") or OPENAI_COMPATIBLE_BASE_URLS.get(
+                "openai", ""
             )
             st.session_state.deepseek_api_key = settings.get("deepseek_api_key") or ""
             st.session_state.deepseek_model = settings.get("deepseek_model") or ""
-            st.session_state.deepseek_base_url = (
-                settings.get("deepseek_base_url")
-                or OPENAI_COMPATIBLE_BASE_URLS.get("deepseek", "")
+            st.session_state.deepseek_base_url = settings.get("deepseek_base_url") or OPENAI_COMPATIBLE_BASE_URLS.get(
+                "deepseek", ""
             )
             for provider in CUSTOM_PROVIDER_KEYS:
                 st.session_state[f"{provider}_api_key"] = (
@@ -178,10 +170,12 @@ def load_user_settings(user_id: str):
             return True
     except APIError as e:
         import logging
+
         logging.warning("Supabase API Error in load_user_settings: %s - %s", e.code, e.message)
         st.toast(f"⚠️ 配置加载异常: {e.code}", icon="⚠️")
     except Exception as e:
         import logging
+
         logging.warning("Unexpected error in load_user_settings: %s", e)
         st.toast("⚠️ 配置加载失败，将使用默认值", icon="⚠️")
     return False
@@ -204,9 +198,7 @@ def save_user_settings(user_id: str, settings: dict):
 
             # 兼容 custom_providers 既可能是 jsonb（对象）也可能是 text（字符串）的库表定义
             if isinstance(fallback.get("custom_providers"), dict):
-                fallback["custom_providers"] = json.dumps(
-                    fallback["custom_providers"], ensure_ascii=False
-                )
+                fallback["custom_providers"] = json.dumps(fallback["custom_providers"], ensure_ascii=False)
                 changed = True
 
             # 兼容旧表结构（尚未添加这些列）时的兜底

@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """core/funnel_pipeline.py re-export 桥接测试。"""
+
 from __future__ import annotations
 
 import pytest
@@ -17,6 +17,7 @@ def test_bridge_exports_are_importable():
         run_funnel,
         run_funnel_job,
     )
+
     assert isinstance(TRIGGER_LABELS, (dict, list, tuple))
     assert callable(run_funnel)
     assert callable(run_funnel_job)

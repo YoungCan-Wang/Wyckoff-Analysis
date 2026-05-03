@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import random
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -45,14 +44,10 @@ def _load_symbols(board: str, sample_size: int) -> tuple[list[str], list[dict]]:
         pool.append({"code": code, "name": name})
 
     name_map = {
-        str(x.get("code", "")).strip(): str(x.get("name", "")).strip()
-        for x in pool
-        if str(x.get("code", "")).strip()
+        str(x.get("code", "")).strip(): str(x.get("name", "")).strip() for x in pool if str(x.get("code", "")).strip()
     }
     symbols = [
-        s
-        for s in sorted(set(_normalize_symbols(list(name_map.keys()))))
-        if "ST" not in name_map.get(s, "").upper()
+        s for s in sorted(set(_normalize_symbols(list(name_map.keys())))) if "ST" not in name_map.get(s, "").upper()
     ]
     if sample_size > 0 and sample_size < len(symbols):
         random.seed(42)
@@ -202,7 +197,7 @@ def main() -> int:
         print("[snapshot] 严重错误: 没有成功拉取任何股票数据!")
         return 1
     if ok < len(symbols) * 0.1:
-        print(f"[snapshot] 严重错误: 成功率仅 {ok}/{len(symbols)} ({100*ok/len(symbols):.1f}%)，低于 10% 阈值")
+        print(f"[snapshot] 严重错误: 成功率仅 {ok}/{len(symbols)} ({100 * ok / len(symbols):.1f}%)，低于 10% 阈值")
         return 1
 
     full_df = pd.concat(all_frames, ignore_index=True)
@@ -246,7 +241,7 @@ def main() -> int:
         "allow_network_fallback": bool(args.allow_network_fallback),
     }
     (out_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-    print(f"[snapshot] Done! 成功率: {ok}/{len(symbols)} ({100*ok/len(symbols):.1f}%)")
+    print(f"[snapshot] Done! 成功率: {ok}/{len(symbols)} ({100 * ok / len(symbols):.1f}%)")
     return 0
 
 

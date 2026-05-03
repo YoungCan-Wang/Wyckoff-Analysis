@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """上下文压缩 — TUI 和 headless agent loop 共用。"""
+
 from __future__ import annotations
 
 import json
@@ -52,6 +52,7 @@ def get_compact_threshold(model_name: str) -> int:
 # Token 估算
 # ---------------------------------------------------------------------------
 
+
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
     total = 0
     for m in messages:
@@ -67,6 +68,7 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
 # ---------------------------------------------------------------------------
 # 分层消息序列化（保留工具结果中的关键数据）
 # ---------------------------------------------------------------------------
+
 
 def _summarize_tool_result(name: str, content: str, max_len: int = 400) -> str:
     """从工具返回结果中提取关键信息而不是粗暴截断。"""
@@ -88,8 +90,17 @@ def _summarize_tool_result(name: str, content: str, max_len: int = 400) -> str:
             kept["data"] = data["data"][-5:]
             return json.dumps(kept, ensure_ascii=False)[:max_len]
         kept = {}
-        for key in ("code", "name", "channel", "phase", "trigger_signals",
-                     "exit_signals", "health", "positions", "message"):
+        for key in (
+            "code",
+            "name",
+            "channel",
+            "phase",
+            "trigger_signals",
+            "exit_signals",
+            "health",
+            "positions",
+            "message",
+        ):
             if key in data:
                 kept[key] = data[key]
         if kept:
@@ -102,16 +113,21 @@ def _summarize_tool_result(name: str, content: str, max_len: int = 400) -> str:
     if name == "portfolio" and isinstance(data, dict):
         if "diagnostics" in data:
             kept = {}
-            for key in ("portfolio_id", "position_count", "successful_count",
-                         "failed_count", "free_cash", "diagnostics"):
+            for key in (
+                "portfolio_id",
+                "position_count",
+                "successful_count",
+                "failed_count",
+                "free_cash",
+                "diagnostics",
+            ):
                 if key in data:
                     kept[key] = data[key]
             if kept:
                 return json.dumps(kept, ensure_ascii=False)[:max_len]
         else:
             kept = {}
-            for key in ("portfolio_id", "free_cash", "position_count",
-                         "positions", "message"):
+            for key in ("portfolio_id", "free_cash", "position_count", "positions", "message"):
                 if key in data:
                     kept[key] = data[key]
             if kept:
@@ -173,8 +189,8 @@ def flush_memory_before_compaction(
 ) -> None:
     """在压缩前，用 LLM 从待压缩消息中提取 preference 存入记忆。"""
     try:
-        from integrations.local_db import save_memory
         from cli.memory import extract_stock_codes
+        from integrations.local_db import save_memory
     except ImportError:
         return
 
@@ -191,11 +207,13 @@ def flush_memory_before_compaction(
 
     text = "\n".join(lines[-20:])
     try:
-        chunks = list(provider.chat_stream(
-            [{"role": "user", "content": text}],
-            [],
-            _FLUSH_PROMPT,
-        ))
+        chunks = list(
+            provider.chat_stream(
+                [{"role": "user", "content": text}],
+                [],
+                _FLUSH_PROMPT,
+            )
+        )
         result = "".join(c.get("text", "") for c in chunks if c.get("type") == "text_delta")
         if not result or "无" in result.strip()[:5]:
             return
@@ -228,6 +246,7 @@ COMPACTION_PROMPT = """请将以下对话历史总结为简洁的上下文摘要
 # 执行压缩
 # ---------------------------------------------------------------------------
 
+
 def compact_messages(
     messages: list[dict[str, Any]],
     provider: Any,
@@ -250,14 +269,14 @@ def compact_messages(
     head_text = serialize_messages_for_compaction(head)
 
     try:
-        chunks = list(provider.chat_stream(
-            [{"role": "user", "content": head_text}],
-            [],
-            COMPACTION_PROMPT,
-        ))
-        summary = "".join(
-            c.get("text", "") for c in chunks if c.get("type") == "text_delta"
+        chunks = list(
+            provider.chat_stream(
+                [{"role": "user", "content": head_text}],
+                [],
+                COMPACTION_PROMPT,
+            )
         )
+        summary = "".join(c.get("text", "") for c in chunks if c.get("type") == "text_delta")
         if summary and len(summary) >= 20:
             compacted = [
                 {"role": "user", "content": f"[对话摘要]\n{summary}"},

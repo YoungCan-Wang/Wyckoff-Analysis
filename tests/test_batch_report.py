@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """core/batch_report.py re-export 桥接测试。"""
+
 from __future__ import annotations
 
 import pytest
@@ -14,6 +14,7 @@ def test_bridge_exports_are_importable():
         generate_stock_payload,
         run_step3,
     )
+
     assert callable(generate_stock_payload)
     assert callable(extract_operation_pool_codes)
     assert callable(run_step3)

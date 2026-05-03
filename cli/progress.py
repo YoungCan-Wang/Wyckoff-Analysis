@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """后台任务进度上报 — ContextVar + 全局便捷函数。"""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Callable
 
 # callback signature: (stage, detail, progress) -> None
 _reporter: ContextVar[Callable | None] = ContextVar("_reporter", default=None)

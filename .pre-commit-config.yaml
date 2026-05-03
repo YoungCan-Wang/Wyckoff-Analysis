@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.8
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: quality-gate
+        name: "Quality gate (function length)"
+        entry: python3 scripts/quality_gate.py --check-functions
+        language: system
+        pass_filenames: false
+        always_run: true

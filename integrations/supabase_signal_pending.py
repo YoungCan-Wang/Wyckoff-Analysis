@@ -1,8 +1,8 @@
-# -*- coding: utf-8 -*-
 """Supabase signal_pending 表读写，模式同 supabase_recommendation.py。"""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -27,7 +27,7 @@ def write_pending_signals(
         return 0
 
     name_map, sector_map = name_map or {}, sector_map or {}
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     payload: list[dict[str, Any]] = []
 
     for signal_type, hits in triggers.items():
@@ -37,15 +37,23 @@ def write_pending_signals(
             if df is None or df.empty:
                 continue
             snap = build_snap(signal_type, df, score, cfg)
-            payload.append({
-                "code": int(code) if code.isdigit() else 0,
-                "signal_type": signal_type, "signal_date": signal_date,
-                "signal_score": float(score), "status": "pending",
-                "ttl_days": ttl, "days_elapsed": 0, "regime": regime,
-                "name": name_map.get(code, code),
-                "industry": sector_map.get(code, ""),
-                "created_at": now_iso, "updated_at": now_iso, **snap,
-            })
+            payload.append(
+                {
+                    "code": int(code) if code.isdigit() else 0,
+                    "signal_type": signal_type,
+                    "signal_date": signal_date,
+                    "signal_score": float(score),
+                    "status": "pending",
+                    "ttl_days": ttl,
+                    "days_elapsed": 0,
+                    "regime": regime,
+                    "name": name_map.get(code, code),
+                    "industry": sector_map.get(code, ""),
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    **snap,
+                }
+            )
 
     if not payload:
         return 0
@@ -81,14 +89,16 @@ def batch_update_signals(updates: list[dict[str, Any]]) -> bool:
         return True
     try:
         client = _admin()
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         for upd in updates:
             row_id = upd.get("id")
             if row_id is None:
                 continue
             row: dict[str, Any] = {
-                "status": upd["status"], "days_elapsed": upd.get("days_elapsed", 0),
-                "confirm_reason": upd.get("confirm_reason", ""), "updated_at": now_iso,
+                "status": upd["status"],
+                "days_elapsed": upd.get("days_elapsed", 0),
+                "confirm_reason": upd.get("confirm_reason", ""),
+                "updated_at": now_iso,
             }
             if upd.get("confirm_date"):
                 row["confirm_date"] = upd["confirm_date"]

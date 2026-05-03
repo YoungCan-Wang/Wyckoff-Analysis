@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 独立持仓健康诊断 CLI 工具
 
@@ -15,37 +14,36 @@
     # 指定股票名称（可选，不传则自动查询为 "--"）
     python3 scripts/diagnose_holdings.py --codes 300813,600703 --costs 30.695,13.68 --names 菲沃泰,三安光电
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 import os
+import sys
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import datetime
 
+import pandas as pd
 
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
-from integrations.data_source import fetch_index_hist
-from core.wyckoff_engine import normalize_hist_from_fetch, FunnelConfig
 from core.holding_diagnostic import (
+    HoldingDiagnostic,
     diagnose_holdings,
     format_diagnostic_text,
-    HoldingDiagnostic,
 )
+from core.wyckoff_engine import FunnelConfig, normalize_hist_from_fetch
+from integrations.data_source import fetch_index_hist
+from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from utils.trading_clock import resolve_end_calendar_day
 
 TRADING_DAYS = 320
 
 
-def _fetch_stock_data(
-    code: str, window
-) -> tuple[str, "pd.DataFrame | None"]:
+def _fetch_stock_data(code: str, window) -> tuple[str, pd.DataFrame | None]:
     """拉取单只股票 OHLCV 数据，返回 (code, df_or_None)。"""
-    import pandas as pd
 
     symbol = f"{code}.SH" if code.startswith("6") else f"{code}.SZ"
     try:
@@ -59,9 +57,8 @@ def _fetch_stock_data(
         return code, None
 
 
-def _fetch_benchmark(window) -> "pd.DataFrame | None":
+def _fetch_benchmark(window) -> pd.DataFrame | None:
     """拉取上证指数作为基准。"""
-    import pandas as pd
 
     try:
         bench_raw = fetch_index_hist("000001", window.start_trade_date, window.end_trade_date)
@@ -77,7 +74,7 @@ def _fetch_benchmark(window) -> "pd.DataFrame | None":
 def _load_from_supabase(portfolio_id: str) -> list[tuple[str, str, float]]:
     """从 Supabase 读取实盘持仓，返回 [(code, name, cost), ...]。"""
     try:
-        from integrations.supabase_portfolio import load_portfolio_state, is_supabase_configured
+        from integrations.supabase_portfolio import is_supabase_configured, load_portfolio_state
 
         if not is_supabase_configured():
             print("  ✘ Supabase 未配置（缺少 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY）", file=sys.stderr)
@@ -162,27 +159,41 @@ def main():
         """,
     )
     parser.add_argument(
-        "--codes", type=str, default="",
+        "--codes",
+        type=str,
+        default="",
         help="逗号分隔的股票代码，如 300813,600703,300014",
     )
     parser.add_argument(
-        "--costs", type=str, default="",
+        "--costs",
+        type=str,
+        default="",
         help="逗号分隔的持仓成本，与 --codes 一一对应",
     )
     parser.add_argument(
-        "--names", type=str, default="",
+        "--names",
+        type=str,
+        default="",
         help="逗号分隔的股票名称（可选），与 --codes 一一对应",
     )
     parser.add_argument(
-        "--from-portfolio", type=str, default="",
+        "--from-portfolio",
+        type=str,
+        default="",
         help="从 Supabase 读取持仓，格式 USER_LIVE:<user_id>",
     )
     parser.add_argument(
-        "--format", type=str, choices=["text", "markdown", "json"], default="text",
+        "--format",
+        type=str,
+        choices=["text", "markdown", "json"],
+        default="text",
         help="输出格式：text（默认）、markdown、json",
     )
     parser.add_argument(
-        "--output", "-o", type=str, default="",
+        "--output",
+        "-o",
+        type=str,
+        default="",
         help="输出到文件（不指定则输出到终端）",
     )
 
@@ -231,10 +242,8 @@ def main():
     bench_df = _fetch_benchmark(window)
 
     # ── 拉取个股数据 ──
-    import pandas as pd
-
     df_map: dict[str, pd.DataFrame] = {}
-    for code, name, cost in holdings:
+    for code, name, _cost in holdings:
         print(f"  拉取 {code} {name}...")
         _, df = _fetch_stock_data(code, window)
         if df is not None:

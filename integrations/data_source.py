@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2024-2026 youngcan. All Rights Reserved.
 # 本代码仅供个人学习研究使用，未经授权不得用于商业目的。
 # 商业授权请联系作者支付授权费用。
@@ -18,12 +17,13 @@ import re
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta, timezone
+from http.client import RemoteDisconnected
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Literal
-from http.client import RemoteDisconnected
 
 import pandas as pd
 
@@ -33,15 +33,12 @@ from integrations.tickflow_notice import (
     record_tickflow_limit_event,
 )
 
-
 _BAOSTOCK_LOGGED = False
 _BAOSTOCK_EXIT_HOOKED = False
 _BAOSTOCK_MODULE = None
 _BAOSTOCK_LOCK = threading.RLock()
 _SPOT_SNAPSHOT_TTL_SECONDS = int(os.getenv("SPOT_SNAPSHOT_TTL_SECONDS", "20"))
-_SPOT_SNAPSHOT_TIMEOUT_SECONDS = float(
-    os.getenv("SPOT_SNAPSHOT_TIMEOUT_SECONDS", "8.0")
-)
+_SPOT_SNAPSHOT_TIMEOUT_SECONDS = float(os.getenv("SPOT_SNAPSHOT_TIMEOUT_SECONDS", "8.0"))
 _SPOT_SNAPSHOT_TS = 0.0
 _SPOT_SNAPSHOT_MAP: dict[str, dict[str, float | None]] = {}
 _SPOT_SNAPSHOT_LOCK = threading.RLock()
@@ -93,14 +90,9 @@ def _baostock_mark_failure(reason: str) -> None:
             and _BAOSTOCK_CONSEC_FAILS >= _BAOSTOCK_CIRCUIT_THRESHOLD
         ):
             _BAOSTOCK_CIRCUIT_OPEN = True
-            _BAOSTOCK_CIRCUIT_NOTE = (
-                f"consecutive_failures={_BAOSTOCK_CONSEC_FAILS}, reason={reason}"
-            )
+            _BAOSTOCK_CIRCUIT_NOTE = f"consecutive_failures={_BAOSTOCK_CONSEC_FAILS}, reason={reason}"
             if _DATA_SOURCE_DEBUG:
-                print(
-                    "[data_source] baostock circuit opened: "
-                    f"{_BAOSTOCK_CIRCUIT_NOTE}"
-                )
+                print(f"[data_source] baostock circuit opened: {_BAOSTOCK_CIRCUIT_NOTE}")
 
 
 def _compact_error(err: Exception, max_len: int = 120) -> str:
@@ -338,9 +330,7 @@ def _load_spot_snapshot_map(force_refresh: bool = False) -> dict[str, dict[str, 
                 symbol = _normalize_spot_symbol(row.get(code_col))
                 if not symbol:
                     continue
-                close_v = _to_float_or_none(
-                    _pick_first(row, ("最新价", "最新", "现价", "收盘"))
-                )
+                close_v = _to_float_or_none(_pick_first(row, ("最新价", "最新", "现价", "收盘")))
                 if close_v is None or close_v <= 0:
                     continue
                 open_v = _to_float_or_none(_pick_first(row, ("今开", "开盘")))
@@ -374,9 +364,7 @@ def _load_spot_snapshot_map(force_refresh: bool = False) -> dict[str, dict[str, 
         except FuturesTimeoutError:
             _debug_source_fail(
                 "spot_snapshot",
-                TimeoutError(
-                    f"timeout>{_SPOT_SNAPSHOT_TIMEOUT_SECONDS:.1f}s"
-                ),
+                TimeoutError(f"timeout>{_SPOT_SNAPSHOT_TIMEOUT_SECONDS:.1f}s"),
             )
             return _SPOT_SNAPSHOT_MAP
         except Exception as e:
@@ -403,9 +391,7 @@ def fetch_stock_spot_snapshot(
 # --- 个股 ---
 
 
-def _fetch_stock_akshare(
-    symbol: str, start: str, end: str, adjust: str
-) -> pd.DataFrame:
+def _fetch_stock_akshare(symbol: str, start: str, end: str, adjust: str) -> pd.DataFrame:
     import akshare as ak
 
     df = ak.stock_zh_a_hist(
@@ -449,13 +435,8 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
                 raise RuntimeError(f"baostock: {rs.error_msg}")
             rows: list[list[str]] = []
             while rs.next():
-                if (
-                    _BAOSTOCK_MAX_SECONDS > 0
-                    and (time.monotonic() - started) > _BAOSTOCK_MAX_SECONDS
-                ):
-                    raise TimeoutError(
-                        f"baostock hard timeout > {_BAOSTOCK_MAX_SECONDS:.2f}s"
-                    )
+                if _BAOSTOCK_MAX_SECONDS > 0 and (time.monotonic() - started) > _BAOSTOCK_MAX_SECONDS:
+                    raise TimeoutError(f"baostock hard timeout > {_BAOSTOCK_MAX_SECONDS:.2f}s")
                 rows.append(rs.get_row_data())
         finally:
             socket.setdefaulttimeout(old_sock_timeout)
@@ -542,8 +523,8 @@ def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
     try:
         import efinance as ef
         import efinance.config as ef_cfg
+
         # 预触发内部检查，某些版本在此处会尝试读取 data 目录
-        from efinance.common.sh_stock_check import is_sh_stock
     except (PermissionError, FileNotFoundError) as e:
         _debug_source_fail("efinance_patch", e)
     finally:
@@ -556,7 +537,7 @@ def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
         pass
     ef_cfg.DATA_DIR = cache_dir
     ef_cfg.SEARCH_RESULT_CACHE_PATH = str(cache_dir / "search-cache.json")
-    
+
     # 额外抑制 efinance 内部对 site-packages 下 data 目录的硬编码访问尝试导致的 FileNotFoundError
     # 这种错误通常发生在 Python 3.13 + Streamlit Cloud 环境下
 
@@ -623,10 +604,9 @@ def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
     return df[out_cols].copy()
 
 
-def _fetch_stock_tushare(
-    symbol: str, start: str, end: str, adjust: str
-) -> pd.DataFrame:
+def _fetch_stock_tushare(symbol: str, start: str, end: str, adjust: str) -> pd.DataFrame:
     import tushare as ts
+
     from integrations.tushare_client import get_pro
 
     pro = get_pro()
@@ -637,9 +617,10 @@ def _fetch_stock_tushare(
     adj_val = "qfq"
     # ts.pro_bar 绕过了 pro 对象，直接使用全局 token，需要显式限流
     from integrations.tushare_client import _wait_for_rate_limit
+
     _wait_for_rate_limit()
     df = ts.pro_bar(ts_code=ts_code, adj=adj_val, start_date=start, end_date=end)
-    
+
     if df is None or df.empty:
         # 诊断：尝试拉取不复权数据，看是否是权限问题（qfq 需要更高积分）
         try:
@@ -649,7 +630,7 @@ def _fetch_stock_tushare(
         except Exception:
             pass
         raise RuntimeError("tushare empty")
-    
+
     df = df.rename(
         columns={
             "trade_date": "日期",
@@ -667,11 +648,7 @@ def _fetch_stock_tushare(
     df["换手率"] = pd.NA
     df["振幅"] = pd.NA
     df["日期"] = (
-        df["日期"].astype(str).str[:4]
-        + "-"
-        + df["日期"].astype(str).str[4:6]
-        + "-"
-        + df["日期"].astype(str).str[6:8]
+        df["日期"].astype(str).str[:4] + "-" + df["日期"].astype(str).str[4:6] + "-" + df["日期"].astype(str).str[6:8]
     )
     return df[
         [
@@ -689,9 +666,7 @@ def _fetch_stock_tushare(
     ].copy()
 
 
-def _fetch_stock_tickflow(
-    symbol: str, start: str, end: str, adjust: str
-) -> pd.DataFrame:
+def _fetch_stock_tickflow(symbol: str, start: str, end: str, adjust: str) -> pd.DataFrame:
     """
     TickFlow 日线主链路（优先级最高）。
     输出列与主链路保持一致：日期, 开盘, 最高, 最低, 收盘, 成交量, 成交额, 涨跌幅, 换手率, 振幅
@@ -710,9 +685,7 @@ def _fetch_stock_tickflow(
 
     cn_tz = timezone(timedelta(hours=8))
     start_dt = datetime.combine(start_d, datetime.min.time(), tzinfo=cn_tz)
-    end_dt = datetime.combine(end_d + timedelta(days=1), datetime.min.time(), tzinfo=cn_tz) - timedelta(
-        milliseconds=1
-    )
+    end_dt = datetime.combine(end_d + timedelta(days=1), datetime.min.time(), tzinfo=cn_tz) - timedelta(milliseconds=1)
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
@@ -753,7 +726,11 @@ def _fetch_stock_tickflow(
     if prev_ref.notna().sum() == 0:
         prev_ref = close.shift(1)
     pct = (close / prev_ref - 1.0) * 100.0
-    amp = (pd.to_numeric(out.get("high"), errors="coerce") - pd.to_numeric(out.get("low"), errors="coerce")) / prev_ref * 100.0
+    amp = (
+        (pd.to_numeric(out.get("high"), errors="coerce") - pd.to_numeric(out.get("low"), errors="coerce"))
+        / prev_ref
+        * 100.0
+    )
 
     result = pd.DataFrame(
         {
@@ -800,14 +777,8 @@ def fetch_stock_hist(
     - DATA_SOURCE_DISABLE_EFINANCE=1
     返回列：日期, 开盘, 最高, 最低, 收盘, 成交量, 成交额, 涨跌幅, 换手率, 振幅
     """
-    start_s = (
-        start.strftime("%Y%m%d")
-        if isinstance(start, date)
-        else str(start).replace("-", "")
-    )
-    end_s = (
-        end.strftime("%Y%m%d") if isinstance(end, date) else str(end).replace("-", "")
-    )
+    start_s = start.strftime("%Y%m%d") if isinstance(start, date) else str(start).replace("-", "")
+    end_s = end.strftime("%Y%m%d") if isinstance(end, date) else str(end).replace("-", "")
 
     failed_sources: list[str] = []
     failed_details: list[str] = []
@@ -905,7 +876,6 @@ def fetch_stock_hist(
         failed_sources.append("akshare(disabled)")
         failed_details.append("akshare=disabled_by_env")
     else:
-        last_akshare_err: Exception | None = None
         for attempt in range(1, _AKSHARE_RETRY_TIMES + 1):
             try:
                 out = _tag_source(
@@ -926,10 +896,8 @@ def fetch_stock_hist(
                 _debug_source_fail("akshare", e)
                 failed_sources.append(f"akshare(缺少依赖 {e.name})")
                 failed_details.append(f"akshare={_compact_error(e)}")
-                last_akshare_err = e
                 break
             except Exception as e:
-                last_akshare_err = e
                 _debug_source_fail("akshare", e)
                 if attempt < _AKSHARE_RETRY_TIMES and _is_retryable_akshare_error(e):
                     time.sleep(max(_AKSHARE_RETRY_SLEEP_SECONDS, 0.0))
@@ -953,9 +921,7 @@ def fetch_stock_hist(
             df = _fetch_stock_baostock(symbol, start_s, end_s)
             elapsed = time.monotonic() - started
             if _BAOSTOCK_MAX_SECONDS > 0 and elapsed > _BAOSTOCK_MAX_SECONDS:
-                raise TimeoutError(
-                    f"baostock slow={elapsed:.2f}s > {_BAOSTOCK_MAX_SECONDS:.2f}s"
-                )
+                raise TimeoutError(f"baostock slow={elapsed:.2f}s > {_BAOSTOCK_MAX_SECONDS:.2f}s")
             _baostock_mark_success()
             out = _tag_source(
                 _attach_tickflow_limit_notices(df, tickflow_limit_notices),
@@ -1008,11 +974,7 @@ def fetch_stock_hist(
             failed_sources.append("efinance")
             failed_details.append(f"efinance={_compact_error(e)}")
 
-    detail_suffix = (
-        f" 失败详情：{'；'.join(failed_details[:4])}。"
-        if failed_details
-        else ""
-    )
+    detail_suffix = f" 失败详情：{'；'.join(failed_details[:4])}。" if failed_details else ""
     hint = _network_hint_from_details(failed_details)
     hint_suffix = f" 诊断提示：{hint}" if hint else ""
     raise RuntimeError(
@@ -1083,14 +1045,8 @@ def fetch_index_hist(code: str, start: str | date, end: str | date) -> pd.DataFr
     大盘指数日线：tushare 优先，失败时 fallback 到 akshare。
     返回列：date, open, high, low, close, volume, pct_chg（小写，供 step2 使用）
     """
-    start_s = (
-        start.strftime("%Y%m%d")
-        if isinstance(start, date)
-        else str(start).replace("-", "")
-    )
-    end_s = (
-        end.strftime("%Y%m%d") if isinstance(end, date) else str(end).replace("-", "")
-    )
+    start_s = start.strftime("%Y%m%d") if isinstance(start, date) else str(start).replace("-", "")
+    end_s = end.strftime("%Y%m%d") if isinstance(end, date) else str(end).replace("-", "")
 
     # 1) tushare 优先
     try:
@@ -1104,9 +1060,7 @@ def fetch_index_hist(code: str, start: str | date, end: str | date) -> pd.DataFr
     except Exception as e2:
         _debug_source_fail("akshare(index)", e2)
 
-    raise RuntimeError(
-        f"大盘指数 {code} 拉取全部失败（tushare + akshare），请检查 TUSHARE_TOKEN 或网络连通性。"
-    )
+    raise RuntimeError(f"大盘指数 {code} 拉取全部失败（tushare + akshare），请检查 TUSHARE_TOKEN 或网络连通性。")
 
 
 # --- 行业 & 市值批量获取（tushare） ---
@@ -1153,11 +1107,8 @@ def fetch_sector_map() -> dict[str, str]:
     全市场 code->行业映射。优先用缓存，过期后通过 tushare stock_basic 刷新。
     """
     try:
-        if (
-            _SECTOR_CACHE.exists()
-            and (time.time() - _SECTOR_CACHE.stat().st_mtime) < _CACHE_TTL
-        ):
-            with open(_SECTOR_CACHE, "r", encoding="utf-8") as f:
+        if _SECTOR_CACHE.exists() and (time.time() - _SECTOR_CACHE.stat().st_mtime) < _CACHE_TTL:
+            with open(_SECTOR_CACHE, encoding="utf-8") as f:
                 return json.load(f)
     except Exception as e:
         _debug_source_fail("sector_cache_read", e)
@@ -1168,7 +1119,7 @@ def fetch_sector_map() -> dict[str, str]:
     if pro is None:
         try:
             if _SECTOR_CACHE.exists():
-                with open(_SECTOR_CACHE, "r", encoding="utf-8") as f:
+                with open(_SECTOR_CACHE, encoding="utf-8") as f:
                     return json.load(f)
         except Exception as e:
             _debug_source_fail("sector_cache_fallback_read", e)
@@ -1181,7 +1132,7 @@ def fetch_sector_map() -> dict[str, str]:
         # tushare 短时抖动时，退回本地缓存，避免上游任务整体失败
         try:
             if _SECTOR_CACHE.exists():
-                with open(_SECTOR_CACHE, "r", encoding="utf-8") as f:
+                with open(_SECTOR_CACHE, encoding="utf-8") as f:
                     return json.load(f)
         except Exception as cache_e:
             _debug_source_fail("sector_cache_error_fallback_read", cache_e)
@@ -1190,7 +1141,7 @@ def fetch_sector_map() -> dict[str, str]:
     if df is None or df.empty:
         try:
             if _SECTOR_CACHE.exists():
-                with open(_SECTOR_CACHE, "r", encoding="utf-8") as f:
+                with open(_SECTOR_CACHE, encoding="utf-8") as f:
                     return json.load(f)
         except Exception as e:
             _debug_source_fail("sector_cache_empty_fallback_read", e)
@@ -1216,11 +1167,8 @@ def fetch_market_cap_map() -> dict[str, float]:
     全市场 code->总市值(亿元)。通过 tushare daily_basic 获取最新交易日数据。
     """
     try:
-        if (
-            _MARKET_CAP_CACHE.exists()
-            and (time.time() - _MARKET_CAP_CACHE.stat().st_mtime) < _CACHE_TTL
-        ):
-            with open(_MARKET_CAP_CACHE, "r", encoding="utf-8") as f:
+        if _MARKET_CAP_CACHE.exists() and (time.time() - _MARKET_CAP_CACHE.stat().st_mtime) < _CACHE_TTL:
+            with open(_MARKET_CAP_CACHE, encoding="utf-8") as f:
                 return {k: float(v) for k, v in json.load(f).items()}
     except Exception as e:
         _debug_source_fail("market_cap_cache_read", e)
@@ -1231,13 +1179,14 @@ def fetch_market_cap_map() -> dict[str, float]:
     if pro is None:
         try:
             if _MARKET_CAP_CACHE.exists():
-                with open(_MARKET_CAP_CACHE, "r", encoding="utf-8") as f:
+                with open(_MARKET_CAP_CACHE, encoding="utf-8") as f:
                     return {k: float(v) for k, v in json.load(f).items()}
         except Exception as e:
             _debug_source_fail("market_cap_cache_fallback_read", e)
         return {}
 
-    from datetime import date as _date, timedelta as _td
+    from datetime import date as _date
+    from datetime import timedelta as _td
 
     # 尝试最近几个交易日
     mapping: dict[str, float] = {}

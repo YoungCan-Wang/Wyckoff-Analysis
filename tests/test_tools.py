@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """tools/ 层单元测试 — 测试 Phase 2 提取的纯逻辑 Tool 函数。"""
+
 from __future__ import annotations
 
 import pandas as pd
-import pytest
-
 
 # ── tools/funnel_config ──
 
@@ -93,11 +91,7 @@ class TestReportBuilder:
     def test_extract_operation_pool_codes_deduplicates(self):
         from tools.report_builder import extract_operation_pool_codes
 
-        report = (
-            "# \u5904\u4e8e\u8d77\u8df3\u677f\n"
-            "- 600056 A\n"
-            "- 600056 B\n"
-        )
+        report = "# \u5904\u4e8e\u8d77\u8df3\u677f\n- 600056 A\n- 600056 B\n"
         codes = extract_operation_pool_codes(report, ["600056"])
         assert codes == ["600056"]
 
@@ -172,8 +166,9 @@ class TestDataFetcher:
         assert latest_trade_date_from_hist(df) is None
 
     def test_latest_trade_date_from_hist_valid(self):
-        from tools.data_fetcher import latest_trade_date_from_hist
         from datetime import date
+
+        from tools.data_fetcher import latest_trade_date_from_hist
 
         df = pd.DataFrame({"date": ["2025-01-01", "2025-01-02"]})
         result = latest_trade_date_from_hist(df)

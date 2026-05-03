@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 定时任务主入口：Wyckoff Funnel（Step2） → 批量研报（Step3） → 私人再平衡（Step4）
 
@@ -10,6 +9,7 @@ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY(可选), SUPABASE_USER_ID,
 TG_BOT_TOKEN, TG_CHAT_ID, MY_PORTFOLIO_STATE(可选兜底),
 STEP3_SKIP_LLM(可选), DAILY_JOB_SKIP_STEP4(可选), LOGS_DIR(可选)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,7 +18,6 @@ import sys
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
@@ -166,13 +165,11 @@ def main() -> int:
     provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
     api_key = (os.getenv(f"{provider.upper()}_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
     model_env_key = f"{provider.upper()}_MODEL"
-    model = (os.getenv(model_env_key) or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)).strip() or DEFAULT_GEMINI_MODEL
+    model = (
+        os.getenv(model_env_key) or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    ).strip() or DEFAULT_GEMINI_MODEL
     base_url_env_key = f"{provider.upper()}_BASE_URL"
-    llm_base_url = (
-        os.getenv(base_url_env_key)
-        or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "")
-        or ""
-    ).strip()
+    llm_base_url = (os.getenv(base_url_env_key) or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "") or "").strip()
     step3_skip_llm = os.getenv("STEP3_SKIP_LLM", "").strip().lower() in {"1", "true", "yes", "on"}
     skip_step4 = os.getenv("DAILY_JOB_SKIP_STEP4", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -204,11 +201,11 @@ def main() -> int:
     # 数据源口径在 integrations/data_source.py 中固定为：
     # tickflow 优先（前复权 qfq），失败按 tushare→akshare→baostock→efinance 回退。
 
-    from core.funnel_pipeline import run_funnel as run_step2
     from core.batch_report import (
         extract_operation_pool_codes,
         run_step3,
     )
+    from core.funnel_pipeline import run_funnel as run_step2
     from core.strategy import run_step4
 
     summary: list[dict] = []
@@ -232,14 +229,19 @@ def main() -> int:
     except Exception as e:
         step2_err = str(e)
     elapsed2 = (datetime.now(TZ) - t0).total_seconds()
-    summary.append({
-        "step": "Wyckoff Funnel",
-        "ok": step2_ok and step2_err is None,
-        "err": step2_err,
-        "elapsed_s": round(elapsed2, 1),
-        "output": f"{len(symbols_info)} symbols",
-    })
-    _log(f"Step2 Wyckoff Funnel: ok={step2_ok}, symbols={len(symbols_info)}, elapsed={elapsed2:.1f}s, err={step2_err}", logs_path)
+    summary.append(
+        {
+            "step": "Wyckoff Funnel",
+            "ok": step2_ok and step2_err is None,
+            "err": step2_err,
+            "elapsed_s": round(elapsed2, 1),
+            "output": f"{len(symbols_info)} symbols",
+        }
+    )
+    _log(
+        f"Step2 Wyckoff Funnel: ok={step2_ok}, symbols={len(symbols_info)}, elapsed={elapsed2:.1f}s, err={step2_err}",
+        logs_path,
+    )
     if step2_err:
         has_blocking_failure = True
     elif benchmark_context:
@@ -261,12 +263,14 @@ def main() -> int:
     if step2_ok and step2_details:
         try:
             from integrations.supabase_signal_pending import run_step2_5
+
             triggers_raw = step2_details.get("triggers", {})
             all_df_map = step2_details.get("all_df_map", {})
             if triggers_raw and all_df_map:
                 confirmed_extra = run_step2_5(
                     signal_date=_latest_trade_date_str(),
-                    triggers=triggers_raw, df_map=all_df_map,
+                    triggers=triggers_raw,
+                    df_map=all_df_map,
                     regime=(benchmark_context.get("regime") or "NEUTRAL").strip().upper(),
                     name_map=step2_details.get("name_map", {}),
                     sector_map=step2_details.get("sector_map", {}),
@@ -304,11 +308,7 @@ def main() -> int:
             step3_ok = False
             step3_err = str(e)
         if step3_ok and step3_report_text:
-            allowed_codes = [
-                str(item.get("code", "")).strip()
-                for item in symbols_info
-                if isinstance(item, dict)
-            ]
+            allowed_codes = [str(item.get("code", "")).strip() for item in symbols_info if isinstance(item, dict)]
             try:
                 step3_springboard_codes = extract_operation_pool_codes(
                     report=step3_report_text,
@@ -318,13 +318,15 @@ def main() -> int:
                 step3_springboard_codes = []
                 _log(f"Step3 批量研报: 起跳板解析失败，已降级为空。err={e}", logs_path)
         elapsed3 = (datetime.now(TZ) - t0).total_seconds()
-        summary.append({
-            "step": "批量研报",
-            "ok": step3_ok and step3_err is None,
-            "err": step3_err,
-            "elapsed_s": round(elapsed3, 1),
-            "output": f"{len(symbols_info)} symbols",
-        })
+        summary.append(
+            {
+                "step": "批量研报",
+                "ok": step3_ok and step3_err is None,
+                "err": step3_err,
+                "elapsed_s": round(elapsed3, 1),
+                "output": f"{len(symbols_info)} symbols",
+            }
+        )
         _log(f"Step3 批量研报: ok={step3_ok}, elapsed={elapsed3:.1f}s, err={step3_err}", logs_path)
         preview_codes = ", ".join(step3_springboard_codes[:8]) if step3_springboard_codes else "无"
         _log(
@@ -350,37 +352,43 @@ def main() -> int:
 
     # Step4: 私人账户再平衡（按 SUPABASE_USER_ID 唯一执行）
     if skip_step4:
-        summary.append({
-            "step": "私人再平衡",
-            "ok": True,
-            "err": None,
-            "elapsed_s": 0,
-            "output": "skipped (DAILY_JOB_SKIP_STEP4=1)",
-        })
+        summary.append(
+            {
+                "step": "私人再平衡",
+                "ok": True,
+                "err": None,
+                "elapsed_s": 0,
+                "output": "skipped (DAILY_JOB_SKIP_STEP4=1)",
+            }
+        )
         _log("Step4 私人再平衡: 跳过（DAILY_JOB_SKIP_STEP4=1）", logs_path)
         step4_target = None
     else:
         step4_target, step4_target_reason = _load_step4_target()
     if not skip_step4 and not step4_target:
-        summary.append({
-            "step": "私人再平衡",
-            "ok": True,
-            "err": None,
-            "elapsed_s": 0,
-            "output": f"skipped ({step4_target_reason})",
-        })
+        summary.append(
+            {
+                "step": "私人再平衡",
+                "ok": True,
+                "err": None,
+                "elapsed_s": 0,
+                "output": f"skipped ({step4_target_reason})",
+            }
+        )
         _log(f"Step4 私人再平衡: 跳过（{step4_target_reason}）", logs_path)
     elif not skip_step4:
         tg_bot_token = os.getenv("TG_BOT_TOKEN", "").strip()
         tg_chat_id = os.getenv("TG_CHAT_ID", "").strip()
         if not tg_bot_token or not tg_chat_id:
-            summary.append({
-                "step": "私人再平衡",
-                "ok": True,
-                "err": None,
-                "elapsed_s": 0,
-                "output": "skipped (TG_BOT_TOKEN/TG_CHAT_ID 未配置)",
-            })
+            summary.append(
+                {
+                    "step": "私人再平衡",
+                    "ok": True,
+                    "err": None,
+                    "elapsed_s": 0,
+                    "output": "skipped (TG_BOT_TOKEN/TG_CHAT_ID 未配置)",
+                }
+            )
             _log("Step4 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）", logs_path)
             step4_target = None
         if step4_target is None:
@@ -422,15 +430,15 @@ def main() -> int:
                 step4_reason = "unexpected_exception"
                 step4_err = str(e)
             elapsed4 = (datetime.now(TZ) - t0).total_seconds()
-            summary.append({
-                "step": "私人再平衡",
-                "ok": step4_ok and step4_err is None,
-                "err": step4_err,
-                "elapsed_s": round(elapsed4, 1),
-                "output": (
-                    f"user={user_id}, portfolio={portfolio_id}, reason={step4_reason}"
-                ),
-            })
+            summary.append(
+                {
+                    "step": "私人再平衡",
+                    "ok": step4_ok and step4_err is None,
+                    "err": step4_err,
+                    "elapsed_s": round(elapsed4, 1),
+                    "output": (f"user={user_id}, portfolio={portfolio_id}, reason={step4_reason}"),
+                }
+            )
             _log(
                 f"Step4 私人再平衡: user={user_id}, portfolio={portfolio_id}, "
                 f"ok={step4_ok}, reason={step4_reason}, elapsed={elapsed4:.1f}s, err={step4_err}",
@@ -443,7 +451,11 @@ def main() -> int:
     _log("=== 阶段汇总 ===", logs_path)
     for s in summary:
         status = "✅" if s["ok"] else "❌"
-        _log(f"  {status} {s['step']}: {s.get('elapsed_s', 0)}s, {s.get('output', '')}" + (f" | {s['err']}" if s.get("err") else ""), logs_path)
+        _log(
+            f"  {status} {s['step']}: {s.get('elapsed_s', 0)}s, {s.get('output', '')}"
+            + (f" | {s['err']}" if s.get("err") else ""),
+            logs_path,
+        )
     _log(f"总耗时: {total_elapsed:.1f}s", logs_path)
     _log("定时任务结束", logs_path)
 

@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """Wyckoff MCP Server — 将 Wyckoff 分析能力通过 MCP 协议对外暴露。"""
+
 from __future__ import annotations
 
 import os
@@ -13,13 +13,17 @@ mcp = FastMCP("wyckoff")
 # 全局 ToolContext — 从环境变量构建凭证
 # ---------------------------------------------------------------------------
 
+
 def _build_ctx():
     from cli.tools import ToolContext
-    return ToolContext(state={
-        "user_id": os.getenv("SUPABASE_USER_ID", ""),
-        "access_token": os.getenv("SUPABASE_ACCESS_TOKEN", ""),
-        "refresh_token": os.getenv("SUPABASE_REFRESH_TOKEN", ""),
-    })
+
+    return ToolContext(
+        state={
+            "user_id": os.getenv("SUPABASE_USER_ID", ""),
+            "access_token": os.getenv("SUPABASE_ACCESS_TOKEN", ""),
+            "refresh_token": os.getenv("SUPABASE_REFRESH_TOKEN", ""),
+        }
+    )
 
 
 _ctx = _build_ctx()
@@ -43,11 +47,19 @@ def query_history(source: str, status: str = "all", run_date: str = "", decision
 # ---------------------------------------------------------------------------
 
 from agents.chat_tools import (
-    search_stock_by_name as _search_stock_by_name,
     analyze_stock as _analyze_stock,
+)
+from agents.chat_tools import (
     get_market_overview as _get_market_overview,
-    screen_stocks as _screen_stocks,
+)
+from agents.chat_tools import (
     run_backtest as _run_backtest,
+)
+from agents.chat_tools import (
+    screen_stocks as _screen_stocks,
+)
+from agents.chat_tools import (
+    search_stock_by_name as _search_stock_by_name,
 )
 
 
@@ -87,8 +99,13 @@ def run_backtest(
 ) -> dict:
     """回测威科夫五层漏斗策略的历史表现。耗时较长（3-10分钟）。"""
     return _run_backtest(
-        start=start, end=end, hold_days=hold_days, top_n=top_n,
-        board=board, stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
+        start=start,
+        end=end,
+        hold_days=hold_days,
+        top_n=top_n,
+        board=board,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
         tool_context=_ctx,
     )
 
@@ -98,10 +115,16 @@ def run_backtest(
 # ---------------------------------------------------------------------------
 
 from agents.chat_tools import (
-    portfolio as _portfolio,
-    update_portfolio as _update_portfolio,
     generate_ai_report as _generate_ai_report,
+)
+from agents.chat_tools import (
     generate_strategy_decision as _generate_strategy_decision,
+)
+from agents.chat_tools import (
+    portfolio as _portfolio,
+)
+from agents.chat_tools import (
+    update_portfolio as _update_portfolio,
 )
 
 
@@ -125,9 +148,16 @@ def update_portfolio(
 ) -> dict:
     """管理持仓(add/update/remove/set_cash)或删除追踪记录(delete_records)。"""
     return _update_portfolio(
-        action=action, code=code, name=name, shares=shares,
-        cost_price=cost_price, buy_dt=buy_dt, free_cash=free_cash,
-        table=table, codes=codes, tool_context=_ctx,
+        action=action,
+        code=code,
+        name=name,
+        shares=shares,
+        cost_price=cost_price,
+        buy_dt=buy_dt,
+        free_cash=free_cash,
+        table=table,
+        codes=codes,
+        tool_context=_ctx,
     )
 
 
@@ -147,8 +177,10 @@ def generate_strategy_decision() -> dict:
 # 入口
 # ---------------------------------------------------------------------------
 
+
 def main():
     from integrations.local_db import init_db
+
     init_db()
     mcp.run()
 

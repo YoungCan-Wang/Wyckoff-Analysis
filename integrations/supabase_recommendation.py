@@ -1,17 +1,17 @@
-# -*- coding: utf-8 -*-
 """
 Supabase 推荐跟踪数据存取模块
 """
+
 from __future__ import annotations
 
 import os
 from bisect import bisect_right
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from supabase import Client
+
 from core.constants import TABLE_RECOMMENDATION_TRACKING
 from integrations.supabase_base import create_admin_client as _get_supabase_admin_client
 from integrations.supabase_base import is_admin_configured as is_supabase_configured
@@ -89,6 +89,7 @@ def _resolve_initial_price_from_history(code_str: str, rec_date: date) -> float:
     except Exception:
         return 0.0
 
+
 def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any]]) -> bool:
     """
     将每日选出的股票存入推荐跟踪表
@@ -104,11 +105,7 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
         existing_counts: dict[int, int] = {}
         existing_code_dates: dict[int, set[int]] = {}
         try:
-            resp = (
-                client.table(TABLE_RECOMMENDATION_TRACKING)
-                .select("code,recommend_count,recommend_date")
-                .execute()
-            )
+            resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("code,recommend_count,recommend_date").execute()
             for row in resp.data or []:
                 try:
                     code_int = int(row.get("code"))
@@ -135,7 +132,7 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
             code_str = "".join(filter(str.isdigit, raw_code))
             if not code_str:
                 continue
-            
+
             # price 优先使用 step2 传入的 initial_price，并做多字段兜底
             price = 0.0
             for key in ("initial_price", "current_price", "price", "latest_price", "close"):
@@ -160,7 +157,7 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
                     break
                 except Exception:
                     continue
-            
+
             code_int = int(code_str)
             old_cnt = existing_counts.get(code_int, 0)
             seen_dates = existing_code_dates.get(code_int, set())
@@ -171,29 +168,29 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
             else:
                 new_cnt = old_cnt + 1
 
-            payload.append({
-                "code": code_int,  # 存为 INT，首位0会消失
-                "name": str(s.get("name", "")).strip(),
-                "recommend_reason": str(s.get("tag", "")).strip(),
-                "recommend_date": recommend_date,
-                "initial_price": price,
-                "current_price": price, # 初始时当前价等于加入价
-                "change_pct": 0.0,      # 初始涨跌幅为 0
-                "recommend_count": new_cnt,
-                "funnel_score": score_val,
-                "is_ai_recommended": False,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            })
-        
+            payload.append(
+                {
+                    "code": code_int,  # 存为 INT，首位0会消失
+                    "name": str(s.get("name", "")).strip(),
+                    "recommend_reason": str(s.get("tag", "")).strip(),
+                    "recommend_date": recommend_date,
+                    "initial_price": price,
+                    "current_price": price,  # 初始时当前价等于加入价
+                    "change_pct": 0.0,  # 初始涨跌幅为 0
+                    "recommend_count": new_cnt,
+                    "funnel_score": score_val,
+                    "is_ai_recommended": False,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            )
+
         if payload:
             # 使用 upsert，基于 (code, recommend_date) 唯一约束：
             # - 同一只股票在同一天重跑会覆盖更新；
             # - 跨天会新增一条记录；
             # - recommend_count 按 code 维度累计。
             try:
-                client.table(TABLE_RECOMMENDATION_TRACKING).upsert(
-                    payload, on_conflict="code,recommend_date"
-                ).execute()
+                client.table(TABLE_RECOMMENDATION_TRACKING).upsert(payload, on_conflict="code,recommend_date").execute()
             except Exception as e:
                 msg = str(e).lower()
                 optional_cols = ("is_ai_recommended", "funnel_score", "recommend_count")
@@ -224,11 +221,11 @@ def mark_ai_recommendations(recommend_date: int, ai_codes: list[str]) -> bool:
         return False
     try:
         client = _get_supabase_admin_client()
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         # 先全量置 false，再对白名单置 true，避免前一次残留。
-        client.table(TABLE_RECOMMENDATION_TRACKING).update(
-            {"is_ai_recommended": False, "updated_at": now_iso}
-        ).eq("recommend_date", recommend_date).execute()
+        client.table(TABLE_RECOMMENDATION_TRACKING).update({"is_ai_recommended": False, "updated_at": now_iso}).eq(
+            "recommend_date", recommend_date
+        ).execute()
 
         code_ints: list[int] = []
         for code in ai_codes or []:
@@ -241,9 +238,9 @@ def mark_ai_recommendations(recommend_date: int, ai_codes: list[str]) -> bool:
                 continue
         code_ints = sorted(set(code_ints))
         if code_ints:
-            client.table(TABLE_RECOMMENDATION_TRACKING).update(
-                {"is_ai_recommended": True, "updated_at": now_iso}
-            ).eq("recommend_date", recommend_date).in_("code", code_ints).execute()
+            client.table(TABLE_RECOMMENDATION_TRACKING).update({"is_ai_recommended": True, "updated_at": now_iso}).eq(
+                "recommend_date", recommend_date
+            ).in_("code", code_ints).execute()
         return True
     except Exception as e:
         msg = str(e)
@@ -255,6 +252,7 @@ def mark_ai_recommendations(recommend_date: int, ai_codes: list[str]) -> bool:
             return False
         print(f"[supabase_recommendation] mark_ai_recommendations failed: {e}")
         return False
+
 
 def sync_all_tracking_prices(
     price_map: dict[str, float] | None = None,
@@ -271,10 +269,12 @@ def sync_all_tracking_prices(
 
     try:
         client = _get_supabase_admin_client()
-        allow_spot_fallback = (
-            os.getenv("RECOMMENDATION_PRICE_ALLOW_SPOT_FALLBACK", "").strip().lower()
-            in {"1", "true", "yes", "on"}
-        )
+        allow_spot_fallback = os.getenv("RECOMMENDATION_PRICE_ALLOW_SPOT_FALLBACK", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
         # 获取需要跟踪的股票代码（去重）
         resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("code").execute()
@@ -366,7 +366,7 @@ def sync_all_tracking_prices(
                 new_current_price = _price_from_spot(code_str)
             if new_current_price is None:
                 continue
-            
+
             # 该股票可能有多条推荐记录（不同日期），逐条更新价格与涨跌幅
             rec_resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("*").eq("code", code_int).execute()
             for record in rec_resp.data:
@@ -374,17 +374,13 @@ def sync_all_tracking_prices(
                 rec_date = _parse_recommend_date(record.get("recommend_date"))
                 update_payload = {
                     "current_price": new_current_price,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 }
                 if initial_price > 0:
                     change_pct = (new_current_price - initial_price) / initial_price * 100.0
                     update_payload["change_pct"] = round(change_pct, 2)
                 else:
-                    backfill_price = (
-                        _resolve_initial_price_from_history(code_str, rec_date)
-                        if rec_date
-                        else 0.0
-                    )
+                    backfill_price = _resolve_initial_price_from_history(code_str, rec_date) if rec_date else 0.0
                     if backfill_price <= 0:
                         backfill_price = new_current_price
                     update_payload["initial_price"] = backfill_price
@@ -401,8 +397,8 @@ def sync_all_tracking_prices(
 
         if unique_codes and updated_count == 0:
             print(
-                "[supabase_recommendation] sync_all_tracking_prices: 推荐表有 {} 只股票但 0 条更新，"
-                "可能是 price_map 为空且历史/实时行情均不可用".format(len(unique_codes))
+                f"[supabase_recommendation] sync_all_tracking_prices: 推荐表有 {len(unique_codes)} 只股票但 0 条更新，"
+                "可能是 price_map 为空且历史/实时行情均不可用"
             )
         return updated_count
     except Exception as e:
@@ -445,11 +441,13 @@ def correct_tracking_initial_prices() -> int:
             if initial_from_hist <= 0:
                 continue
             change_pct = round((current_price - initial_from_hist) / initial_from_hist * 100.0, 2)
-            client.table(TABLE_RECOMMENDATION_TRACKING).update({
-                "initial_price": initial_from_hist,
-                "change_pct": change_pct,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", record["id"]).execute()
+            client.table(TABLE_RECOMMENDATION_TRACKING).update(
+                {
+                    "initial_price": initial_from_hist,
+                    "change_pct": change_pct,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            ).eq("id", record["id"]).execute()
             updated += 1
         return updated
     except Exception as e:
@@ -516,11 +514,7 @@ def refresh_tracking_prices_with_tushare_unadjusted() -> dict[str, Any]:
         raise ValueError("TUSHARE_TOKEN 未配置或 tushare 不可用")
 
     client = _get_supabase_admin_client()
-    resp = (
-        client.table(TABLE_RECOMMENDATION_TRACKING)
-        .select("id,code,recommend_date")
-        .execute()
-    )
+    resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("id,code,recommend_date").execute()
     records = resp.data or []
     if not records:
         return {
@@ -548,10 +542,7 @@ def refresh_tracking_prices_with_tushare_unadjusted() -> dict[str, Any]:
     latest_trade_date_global = ""
 
     for code6, rows in grouped.items():
-        rec_dates = [
-            _recommend_date_to_yyyymmdd(r.get("recommend_date"))
-            for r in rows
-        ]
+        rec_dates = [_recommend_date_to_yyyymmdd(r.get("recommend_date")) for r in rows]
         rec_dates = [d for d in rec_dates if d]
         if not rec_dates:
             continue
@@ -581,10 +572,7 @@ def refresh_tracking_prices_with_tushare_unadjusted() -> dict[str, Any]:
             codes_no_data += 1
             continue
 
-        close_map = {
-            str(td): float(px)
-            for td, px in zip(work["trade_date"].tolist(), work["close"].tolist())
-        }
+        close_map = {str(td): float(px) for td, px in zip(work["trade_date"].tolist(), work["close"].tolist())}
         trade_dates = sorted(close_map.keys())
         current_trade_date = trade_dates[-1]
         current_close = float(close_map[current_trade_date])
@@ -609,7 +597,7 @@ def refresh_tracking_prices_with_tushare_unadjusted() -> dict[str, Any]:
                     "initial_price": round(initial_close, 4),
                     "current_price": round(current_close, 4),
                     "change_pct": change_pct,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 }
             )
 

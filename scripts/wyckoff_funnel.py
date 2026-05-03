@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Wyckoff Funnel 定时任务：5 层漏斗筛选 → 多渠道推送
 
@@ -10,6 +9,7 @@ Layer 4: 威科夫狙击（Spring / SOS / LPS / Effort vs Result）
 """
 
 from __future__ import annotations
+
 import json
 import os
 import sys
@@ -19,46 +19,47 @@ from pathlib import Path
 
 import pandas as pd
 
-
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from integrations.fetch_a_share_csv import (
-    _resolve_trading_window,
-)
-from core.wyckoff_engine import (
-    FunnelConfig,
-    layer1_filter,
-    layer2_strength_detailed,
-    layer3_sector_resonance,
-    layer4_triggers,
-    detect_markup_stage,
-    detect_accum_stage,
-    layer5_exit_signals,
-    FunnelResult,
-    allocate_ai_candidates,
-    resolve_ai_candidate_policy,
-)
 from core.sector_rotation import (
     SECTOR_STATE_LABELS,
     analyze_sector_rotation,
 )
+from core.wyckoff_engine import (
+    FunnelConfig,
+    FunnelResult,
+    allocate_ai_candidates,
+    detect_accum_stage,
+    detect_markup_stage,
+    layer1_filter,
+    layer2_strength_detailed,
+    layer3_sector_resonance,
+    layer4_triggers,
+    layer5_exit_signals,
+    resolve_ai_candidate_policy,
+)
 from integrations.data_source import (
     fetch_index_hist,
-    fetch_sector_map,
     fetch_market_cap_map,
+    fetch_sector_map,
 )
-from utils.feishu import send_feishu_notification
-from utils.trading_clock import CN_TZ, resolve_end_calendar_day
+from integrations.fetch_a_share_csv import (
+    _resolve_trading_window,
+)
 
 # ── tools/ 层导入 ──
 from tools.candidate_ranker import (
-    TRIGGER_LABELS,
-    TRIGGER_SHORT_LABELS,
     TRIGGER_GROUP_ORDER,
     TRIGGER_GROUP_TITLES,
+    TRIGGER_LABELS,
+    TRIGGER_SHORT_LABELS,
+)
+from tools.candidate_ranker import (
     rank_l3_candidates as _rank_l3_candidates,
 )
+from utils.feishu import send_feishu_notification
+from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 TRADING_DAYS = int(os.getenv("FUNNEL_TRADING_DAYS", "320"))
 MAX_RETRIES = int(os.getenv("FUNNEL_FETCH_RETRIES", "2"))
@@ -83,30 +84,18 @@ CRASH_MAIN_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_MAIN_DAY_DROP_PCT", "-1.
 CRASH_SMALL_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_SMALL_DAY_DROP_PCT", "-2.5"))
 CRASH_BREADTH_RATIO_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_RATIO_PCT", "15.0"))
 CRASH_BREADTH_DELTA_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_DELTA_PCT", "-20.0"))
-PANIC_REPAIR_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_PANIC_REPAIR_MIN_AVG_AMOUNT_WAN", "7000.0")
-)
-RISK_OFF_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_RISK_OFF_MIN_AVG_AMOUNT_WAN", "8000.0")
-)
-RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN", "10000.0")
-)
-CRASH_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_CRASH_MIN_AVG_AMOUNT_WAN", "12000.0")
-)
+PANIC_REPAIR_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_PANIC_REPAIR_MIN_AVG_AMOUNT_WAN", "7000.0"))
+RISK_OFF_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_RISK_OFF_MIN_AVG_AMOUNT_WAN", "8000.0"))
+RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN", "10000.0"))
+CRASH_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_CRASH_MIN_AVG_AMOUNT_WAN", "12000.0"))
 PANIC_REPAIR_ENABLE = os.getenv("FUNNEL_PANIC_REPAIR_ENABLE", "1").strip().lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
-PANIC_REPAIR_MAIN_REBOUND_PCT = float(
-    os.getenv("FUNNEL_PANIC_REPAIR_MAIN_REBOUND_PCT", "0.8")
-)
-PANIC_REPAIR_SMALL_REBOUND_PCT = float(
-    os.getenv("FUNNEL_PANIC_REPAIR_SMALL_REBOUND_PCT", "1.5")
-)
+PANIC_REPAIR_MAIN_REBOUND_PCT = float(os.getenv("FUNNEL_PANIC_REPAIR_MAIN_REBOUND_PCT", "0.8"))
+PANIC_REPAIR_SMALL_REBOUND_PCT = float(os.getenv("FUNNEL_PANIC_REPAIR_SMALL_REBOUND_PCT", "1.5"))
 FUNNEL_EXPORT_FULL_FETCH = os.getenv("FUNNEL_EXPORT_FULL_FETCH", "0").strip().lower() in {
     "1",
     "true",
@@ -114,9 +103,7 @@ FUNNEL_EXPORT_FULL_FETCH = os.getenv("FUNNEL_EXPORT_FULL_FETCH", "0").strip().lo
     "on",
 }
 FUNNEL_EXPORT_DIR = os.getenv("FUNNEL_EXPORT_DIR", "data/funnel_snapshots").strip() or "data/funnel_snapshots"
-FUNNEL_AI_SELECTION_MODE = (
-    os.getenv("FUNNEL_AI_SELECTION_MODE", "legacy_full_hits").strip().lower()
-)
+FUNNEL_AI_SELECTION_MODE = os.getenv("FUNNEL_AI_SELECTION_MODE", "legacy_full_hits").strip().lower()
 FUNNEL_CARD_STYLE = os.getenv("FUNNEL_CARD_STYLE", "legacy_compact").strip().lower()
 FUNNEL_EVR_POLICY = os.getenv("FUNNEL_EVR_POLICY", "all_regimes").strip().lower()
 
@@ -132,22 +119,26 @@ def _resolve_funnel_end_calendar_day() -> date:
     return resolve_end_calendar_day()
 
 
-from tools.funnel_config import (    apply_funnel_cfg_overrides as _apply_funnel_cfg_overrides,
-)
-
-
-from tools.symbol_pool import (    resolve_symbol_pool_from_env as _resolve_symbol_pool_from_env,
-    _stock_name_map,
-)
-
-
-from tools.data_fetcher import (    latest_trade_date_from_hist as _latest_trade_date_from_hist,
+from tools.data_fetcher import (
     fetch_all_ohlcv,
 )
-
-
-from tools.market_regime import (    analyze_benchmark_and_tune_cfg as _analyze_benchmark_and_tune_cfg,
+from tools.data_fetcher import (
+    latest_trade_date_from_hist as _latest_trade_date_from_hist,
+)
+from tools.funnel_config import (
+    apply_funnel_cfg_overrides as _apply_funnel_cfg_overrides,
+)
+from tools.market_regime import (
+    analyze_benchmark_and_tune_cfg as _analyze_benchmark_and_tune_cfg,
+)
+from tools.market_regime import (
     calc_market_breadth as _calc_market_breadth,
+)
+from tools.symbol_pool import (
+    _stock_name_map,
+)
+from tools.symbol_pool import (
+    resolve_symbol_pool_from_env as _resolve_symbol_pool_from_env,
 )
 
 
@@ -273,7 +264,6 @@ def _dump_full_fetch_snapshot(
         return None
 
 
-
 def run_funnel_job(
     include_debug_context: bool = False,
 ) -> tuple[dict[str, list[tuple[str, float]]], dict]:
@@ -292,9 +282,7 @@ def run_funnel_job(
     chinext_items = [None] * int(pool_stats.get("pool_chinext", 0) or 0)
     merged_symbols = list(pool_name_map.keys())
     st_symbols = [None] * int(pool_stats.get("pool_st_excluded", 0) or 0)
-    total_batches = (
-        (len(all_symbols) + BATCH_SIZE - 1) // BATCH_SIZE if all_symbols else 0
-    )
+    total_batches = (len(all_symbols) + BATCH_SIZE - 1) // BATCH_SIZE if all_symbols else 0
     print(
         "[funnel] 股票池统计: "
         f"mode={pool_stats.get('pool_mode')}, main={len(main_items)}, chinext={len(chinext_items)}, "
@@ -302,31 +290,31 @@ def run_funnel_job(
         f"final={len(all_symbols)}, limit={pool_stats.get('pool_limit', 0)}, batches={total_batches} (batch_size={BATCH_SIZE})"
     )
     from cli.progress import report_progress
+
     report_progress("股票池加载", f"共{len(all_symbols)}只", 0.05)
 
     # 批量元数据
-    print(f"[funnel] 加载行业映射...")
+    print("[funnel] 加载行业映射...")
     try:
         sector_map = fetch_sector_map()
     except Exception as e:
         print(f"[funnel] 行业映射加载失败，降级为空映射: {e}")
         sector_map = {}
-    print(f"[funnel] 加载市值数据...")
+    print("[funnel] 加载市值数据...")
     try:
         market_cap_map = fetch_market_cap_map()
     except Exception as e:
         print(f"[funnel] 市值数据加载失败，降级为空映射: {e}")
         market_cap_map = {}
     if not market_cap_map:
-        print(
-            "[funnel] ⚠️ 市值数据为空（TUSHARE_TOKEN 可能缺失/失效），Layer1 将跳过市值过滤"
-        )
+        print("[funnel] ⚠️ 市值数据为空（TUSHARE_TOKEN 可能缺失/失效），Layer1 将跳过市值过滤")
     # TickFlow 财务指标
     financial_map: dict[str, dict] = {}
     tickflow_api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
     if tickflow_api_key:
         try:
-            from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
+            from integrations.tickflow_client import TickFlowClient
+
             _tf = TickFlowClient(api_key=tickflow_api_key)
             print(f"[funnel] TickFlow 财务指标请求: symbols={len(all_symbols)}")
             raw_fin = _tf.get_financial_metrics(all_symbols, latest=True)
@@ -341,7 +329,7 @@ def run_funnel_job(
             )
         except Exception as e:
             print(f"[funnel] TickFlow 财务指标加载失败，跳过财务过滤: {e}")
-    print(f"[funnel] 加载股票名称...")
+    print("[funnel] 加载股票名称...")
     try:
         name_map = _stock_name_map()
     except Exception as e:
@@ -353,7 +341,7 @@ def run_funnel_job(
     smallcap_df = None
     try:
         bench_df = fetch_index_hist("000001", start_s, end_s)
-        print(f"[funnel] 大盘基准加载成功")
+        print("[funnel] 大盘基准加载成功")
     except Exception as e:
         print(f"[funnel] 大盘基准加载失败: {e}")
     try:
@@ -403,7 +391,7 @@ def run_funnel_job(
     )
 
     # 统一漏斗计算：L1 -> L2 -> L3 -> L4
-    print(f"[funnel] 开始执行全量漏斗筛选...")
+    print("[funnel] 开始执行全量漏斗筛选...")
     report_progress("漏斗筛选", "L1~L4 计算中", 0.85)
 
     # Layer 1
@@ -412,16 +400,19 @@ def run_funnel_job(
 
     # Layer 2
     l2_passed, l2_channel_map = layer2_strength_detailed(
-        l1_passed, all_df_map, bench_df, cfg,
+        l1_passed,
+        all_df_map,
+        bench_df,
+        cfg,
         rps_universe=l1_input,
     )
     # 通道标签现在是多标签用 + 拼接，因此用 in 判断包含关系
     l2_momentum = sum(1 for v in l2_channel_map.values() if "主升通道" in v)
-    l2_ambush   = sum(1 for v in l2_channel_map.values() if "潜伏通道" in v)
-    l2_accum    = sum(1 for v in l2_channel_map.values() if "吸筹通道" in v)
-    l2_dry_vol  = sum(1 for v in l2_channel_map.values() if "地量蓄势" in v)
-    l2_rs_div   = sum(1 for v in l2_channel_map.values() if "暗中护盘" in v)
-    l2_sos      = sum(1 for v in l2_channel_map.values() if "点火破局" in v)
+    l2_ambush = sum(1 for v in l2_channel_map.values() if "潜伏通道" in v)
+    l2_accum = sum(1 for v in l2_channel_map.values() if "吸筹通道" in v)
+    l2_dry_vol = sum(1 for v in l2_channel_map.values() if "地量蓄势" in v)
+    l2_rs_div = sum(1 for v in l2_channel_map.values() if "暗中护盘" in v)
+    l2_sos = sum(1 for v in l2_channel_map.values() if "点火破局" in v)
 
     # Layer 3 (Sector Resonance)
     l3_passed, top_sectors = layer3_sector_resonance(
@@ -446,10 +437,9 @@ def run_funnel_job(
 
     # L2 旁路观察池：L1通过 + L2被拒 + 在热门板块 + 有L4原始触发
     l2_rejected = [s for s in l1_passed if s not in set(l2_passed)]
-    l2_bypass_in_sector = [
-        s for s in l2_rejected
-        if str(sector_map.get(s, "")).strip() in set(top_sectors)
-    ] if top_sectors else []
+    l2_bypass_in_sector = (
+        [s for s in l2_rejected if str(sector_map.get(s, "")).strip() in set(top_sectors)] if top_sectors else []
+    )
     bypass_triggers: dict[str, list[tuple[str, float]]] = {}
     l2_bypass_pool: list[str] = []
     if l2_bypass_in_sector:
@@ -615,11 +605,7 @@ def run(
         "classic",
         "v1",
     }
-    l3_ranked_symbols = [
-        str(c).strip()
-        for c in (metrics.get("layer3_symbols", []) or [])
-        if str(c).strip()
-    ]
+    l3_ranked_symbols = [str(c).strip() for c in (metrics.get("layer3_symbols", []) or []) if str(c).strip()]
     l2_channel_map = metrics.get("layer2_channel_map", {}) or {}
     # 提前取出，供后面的闭包函数引用
     markup_symbols = metrics.get("markup_symbols", []) or []
@@ -647,9 +633,7 @@ def run(
             "max_accum_l3_fill": 0,
         }
         selected_for_ai = list(sorted_codes)
-        print(
-            f"[funnel] AI候选分配完成(legacy_full_hits): total={len(selected_for_ai)}"
-        )
+        print(f"[funnel] AI候选分配完成(legacy_full_hits): total={len(selected_for_ai)}")
     else:
         mock_result = FunnelResult(
             layer1_symbols=[],
@@ -700,9 +684,7 @@ def run(
                 f"近3日 {float(_cum3):+.2f}%"
             )
             pv_line = str(
-                benchmark_context.get("market_pv_outlook")
-                or benchmark_context.get("market_pv_summary")
-                or pv_line
+                benchmark_context.get("market_pv_outlook") or benchmark_context.get("market_pv_summary") or pv_line
             )
 
         lines = [
@@ -727,7 +709,7 @@ def run(
                 return "★ "
             return "  "
 
-        selected_set = set(selected_for_ai)
+        set(selected_for_ai)
 
         # 1) 多信号共振组（置顶）
         multi_signal = [c for c in selected_for_ai if len(code_to_trigger_keys.get(c, [])) > 1]
@@ -770,7 +752,7 @@ def run(
             for code in l2_bypass_pool:
                 name = name_map.get(code, code)
                 bp_reasons = []
-                for key, label in TRIGGER_LABELS.items():
+                for key, _label in TRIGGER_LABELS.items():
                     for c, _ in bypass_triggers.get(key, []):
                         if c == code:
                             bp_reasons.append(TRIGGER_SHORT_LABELS.get(key, key))
@@ -825,9 +807,7 @@ def run(
                     (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get("note", "")
                 ).strip(),
                 "sector_guidance": str(
-                    (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get(
-                        "guidance", ""
-                    )
+                    (sector_rotation_map.get(str(sector_map.get(c, "") or "未知行业"), {}) or {}).get("guidance", "")
                 ).strip(),
                 "exit_signal": str((exit_signals.get(c, {}) or {}).get("signal", "")).strip(),
                 "exit_price": (exit_signals.get(c, {}) or {}).get("price"),
@@ -852,7 +832,7 @@ def run(
             }
             return (ok, symbols_for_report, benchmark_context, details)
         return (ok, symbols_for_report, benchmark_context)
-    
+
     def _channel_tags(code: str) -> set[str]:
         raw = str(l2_channel_map.get(code, "")).strip()
         if not raw:
@@ -887,32 +867,29 @@ def run(
     }
     for code in selected_for_ai:
         tags = _channel_tags(code)
-        for key in channel_counts.keys():
+        for key in channel_counts:
             if key in tags:
                 channel_counts[key] += 1
     l3_score_map = metrics.get("layer3_score_map", {}) or {}
     by_trigger = metrics.get("by_trigger", {}) or {}
     l2_momentum = int(metrics.get("layer2_momentum", 0) or 0)
-    l2_ambush   = int(metrics.get("layer2_ambush", 0) or 0)
-    l2_accum    = int(metrics.get("layer2_accum", 0) or 0)
-    l2_dry_vol  = int(metrics.get("layer2_dry_vol", 0) or 0)
-    l2_rs_div   = int(metrics.get("layer2_rs_div", 0) or 0)
-    l2_sos      = int(metrics.get("layer2_sos", 0) or 0)
+    l2_ambush = int(metrics.get("layer2_ambush", 0) or 0)
+    l2_accum = int(metrics.get("layer2_accum", 0) or 0)
+    l2_dry_vol = int(metrics.get("layer2_dry_vol", 0) or 0)
+    l2_rs_div = int(metrics.get("layer2_rs_div", 0) or 0)
+    l2_sos = int(metrics.get("layer2_sos", 0) or 0)
     sector_rotation = metrics.get("sector_rotation", {}) or {}
     sector_rotation_map = sector_rotation.get("state_map", {}) or {}
     markup_count = len(markup_symbols)
     accum_a_count = sum(1 for v in accum_stage_map.values() if v == "Accum_A")
     accum_b_count = sum(1 for v in accum_stage_map.values() if v == "Accum_B")
     accum_c_count = sum(1 for v in accum_stage_map.values() if v == "Accum_C")
-    stop_loss_count = sum(
-        1 for sig in exit_signals.values() if sig.get("signal") == "stop_loss"
-    )
-    dist_warning_count = sum(
-        1 for sig in exit_signals.values() if sig.get("signal") == "distribution_warning"
-    )
+    stop_loss_count = sum(1 for sig in exit_signals.values() if sig.get("signal") == "stop_loss")
+    dist_warning_count = sum(1 for sig in exit_signals.values() if sig.get("signal") == "distribution_warning")
     blocked_exit_signals_set = {"stop_loss", "distribution_warning"}
     blocked_exit_codes = [
-        code for code in l3_ranked_symbols
+        code
+        for code in l3_ranked_symbols
         if str((exit_signals.get(code, {}) or {}).get("signal", "")).strip() in blocked_exit_signals_set
     ]
 
@@ -964,22 +941,23 @@ def run(
             f"{breadth_text}{repair_text}"
         )
         pv_line = str(
-            benchmark_context.get("market_pv_outlook")
-            or benchmark_context.get("market_pv_summary")
-            or pv_line
+            benchmark_context.get("market_pv_outlook") or benchmark_context.get("market_pv_summary") or pv_line
         )
 
     data_quality_line = (
         f"成功拉取 {metrics['fetch_ok']} 只"
-        + (f"，失败 {metrics['fetch_fail']} 只" if metrics['fetch_fail'] else "，无失败")
-        + (f"，日期不对齐跳过 {metrics.get('fetch_date_mismatch', 0)} 只" if metrics.get('fetch_date_mismatch') else "")
-        + (f"，实时快照补偿 {metrics.get('fetch_spot_patched', 0)} 只" if metrics.get('fetch_spot_patched') else "")
+        + (f"，失败 {metrics['fetch_fail']} 只" if metrics["fetch_fail"] else "，无失败")
+        + (f"，日期不对齐跳过 {metrics.get('fetch_date_mismatch', 0)} 只" if metrics.get("fetch_date_mismatch") else "")
+        + (f"，实时快照补偿 {metrics.get('fetch_spot_patched', 0)} 只" if metrics.get("fetch_spot_patched") else "")
     )
-    ai_channel_summary = " | ".join(
-        f"{k}{channel_counts[k]}"
-        for k in ["主升通道", "潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘", "点火破局"]
-        if channel_counts[k] > 0
-    ) or "无"
+    ai_channel_summary = (
+        " | ".join(
+            f"{k}{channel_counts[k]}"
+            for k in ["主升通道", "潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘", "点火破局"]
+            if channel_counts[k] > 0
+        )
+        or "无"
+    )
     l4_non_hit_count = max(int(metrics["layer3"]) - int(unique_hit_count), 0)
     top_priority_count = sum(
         1 for c in selected_for_ai if c in markup_symbols or c in sos_hit_set or c in spring_hit_set
@@ -1035,9 +1013,7 @@ def run(
         lines.extend(["", "## 板块轮动水温计"])
         lines.extend([f"- {x}" for x in rotation_overview_lines])
 
-    def _append_ai_section(
-        lines_obj: list[str], section_title: str, section_desc: str, codes: list[str]
-    ) -> None:
+    def _append_ai_section(lines_obj: list[str], section_title: str, section_desc: str, codes: list[str]) -> None:
         lines_obj.extend(
             [
                 "",
@@ -1104,7 +1080,9 @@ def run(
                 f"• 触发信号: SOS={int(by_trigger.get('sos', 0))}, Spring={int(by_trigger.get('spring', 0))}, LPS={int(by_trigger.get('lps', 0))}, EVR={int(by_trigger.get('evr', 0))}",
                 f"• 阶段分布: Markup={markup_count}, Accum_A={accum_a_count}, Accum_B={accum_b_count}, Accum_C={accum_c_count}",
                 f"• 水温判断: {regime} | 当前配额: Trend={trend_quota}, Accum={accum_quota}, 总上限={total_cap}",
-                "• 分析：候选股票尚未达到日线级别的威科夫触发信号（SOS/Spring/LPS）或阶段转折特征。" if total_cap > 0 else "• 当前大盘水温，AI配额已关闭（total_cap=0）。",
+                "• 分析：候选股票尚未达到日线级别的威科夫触发信号（SOS/Spring/LPS）或阶段转折特征。"
+                if total_cap > 0
+                else "• 当前大盘水温，AI配额已关闭（total_cap=0）。",
             ]
         )
 
@@ -1140,14 +1118,9 @@ def run(
             "code": c,
             "name": name_map.get(c, c),
             "tag": (
-                f"{str(l2_channel_map.get(c, '')).strip()} | "
-                f"{'、'.join(code_to_reasons.get(c, [])) or '威科夫候选'}"
+                f"{str(l2_channel_map.get(c, '')).strip()} | {'、'.join(code_to_reasons.get(c, [])) or '威科夫候选'}"
             ).strip(" |"),
-            "track": (
-                "Trend"
-                if c in trend_selected
-                else "Accum" if c in accum_selected else ""
-            ),
+            "track": ("Trend" if c in trend_selected else "Accum" if c in accum_selected else ""),
             "stage": _stage_name(c),
             "score": float(l3_score_map.get(c, 0.0)),
             "priority_score": float(score_map.get(c, 0.0)),

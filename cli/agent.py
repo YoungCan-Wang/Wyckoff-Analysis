@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 Headless agent loop — 无 UI 依赖的 agent 循环。
 
 TUI 使用内联版本（与 Textual 渲染深度耦合），此模块为测试和非交互场景
 提供可独立运行的 agent loop，支持 Rich Live 流式渲染。
 """
+
 from __future__ import annotations
 
 import json
@@ -35,18 +35,22 @@ logger = logging.getLogger(__name__)
 _THINKING_TEXT = Text.from_markup("  [dim]思考中…[/dim]")
 
 # 只读工具 — 可安全并行执行
-_READ_ONLY_TOOLS = frozenset({
-    "search_stock_by_name",
-    "analyze_stock",
-    "portfolio",
-    "get_market_overview",
-    "query_history",
-})
+_READ_ONLY_TOOLS = frozenset(
+    {
+        "search_stock_by_name",
+        "analyze_stock",
+        "portfolio",
+        "get_market_overview",
+        "query_history",
+    }
+)
 
 
 class _DoomFlag:
     """Mutable flag for doom-loop detection in concurrent batch."""
+
     __slots__ = ("val",)
+
     def __init__(self) -> None:
         self.val = False
 
@@ -101,10 +105,14 @@ def _execute_concurrent_batch(
 
             if check_doom_loop(recent_calls, name, args, recent_args_texts=recent_args_texts):
                 logger.warning("doom-loop detected: %s", name)
-                messages.append({
-                    "role": "tool", "tool_call_id": call_id, "name": name,
-                    "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
+                    }
+                )
                 on_doom()
                 return
 
@@ -114,12 +122,14 @@ def _execute_concurrent_batch(
             except Exception as exc:
                 result = {"error": str(exc)}
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "name": name,
-                "content": json.dumps(result, ensure_ascii=False, default=str),
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                }
+            )
 
 
 def run(
@@ -149,7 +159,7 @@ def run(
 
     _model_name = getattr(provider, "name", "")
 
-    for round_idx in range(MAX_TOOL_ROUNDS):
+    for _round_idx in range(MAX_TOOL_ROUNDS):
         messages, _ = compact_messages(messages, provider, _model_name)
 
         text_buf = ""
@@ -197,9 +207,7 @@ def run(
                         live.stop()
                         if in_thinking and console:
                             # thinking 结束，打印耗时
-                            console.print(
-                                f"  [dim]💭 推理完成 ({len(thinking_buf)} 字)[/dim]"
-                            )
+                            console.print(f"  [dim]💭 推理完成 ({len(thinking_buf)} 字)[/dim]")
                         live = Live(
                             Markdown(chunk["text"]),
                             console=console,
@@ -218,9 +226,7 @@ def run(
                     if in_thinking and live:
                         live.stop()
                         if console:
-                            console.print(
-                                f"  [dim]💭 推理完成 ({len(thinking_buf)} 字)[/dim]"
-                            )
+                            console.print(f"  [dim]💭 推理完成 ({len(thinking_buf)} 字)[/dim]")
                         live = None
                         in_thinking = False
                     tool_calls = chunk["tool_calls"]
@@ -260,11 +266,15 @@ def run(
                 if batch["concurrent"] and len(batch["calls"]) > 1:
                     # 并行执行只读工具
                     _execute_concurrent_batch(
-                        batch["calls"], tools, messages,
-                        _recent_calls, _recent_args_texts,
-                        on_tool_call, on_tool_result,
+                        batch["calls"],
+                        tools,
+                        messages,
+                        _recent_calls,
+                        _recent_args_texts,
+                        on_tool_call,
+                        on_tool_result,
                         used_tools_this_turn,
-                        lambda: doom_flag.__setattr__("val", True),
+                        lambda _df=doom_flag: _df.__setattr__("val", True),
                     )
                     if doom_flag.val:
                         tool_calls = None
@@ -278,10 +288,16 @@ def run(
 
                         if check_doom_loop(_recent_calls, name, args, recent_args_texts=_recent_args_texts):
                             logger.warning("doom-loop detected: %s", name)
-                            messages.append({
-                                "role": "tool", "tool_call_id": call_id, "name": name,
-                                "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
-                            })
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": call_id,
+                                    "name": name,
+                                    "content": json.dumps(
+                                        {"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False
+                                    ),
+                                }
+                            )
                             tool_calls = None
                             doom_break = True
                             break
@@ -291,10 +307,14 @@ def run(
                         result = tools.execute(name, args)
                         if on_tool_result:
                             on_tool_result(name, result)
-                        messages.append({
-                            "role": "tool", "tool_call_id": call_id, "name": name,
-                            "content": json.dumps(result, ensure_ascii=False, default=str),
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "name": name,
+                                "content": json.dumps(result, ensure_ascii=False, default=str),
+                            }
+                        )
             # 继续下一轮
             continue
 

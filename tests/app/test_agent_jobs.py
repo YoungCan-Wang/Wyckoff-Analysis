@@ -1,14 +1,12 @@
-# -*- coding: utf-8 -*-
 """app/agent_jobs.py 的单元测试。
 
 Streamlit 在测试环境中不可用，使用 sys.modules mock 替代。
 """
+
 from __future__ import annotations
 
-import importlib
 import os
 import sys
-from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,26 +39,31 @@ class TestAgentModeEnabled:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("AGENT_MODE", None)
             from app.agent_jobs import agent_mode_enabled
+
             assert agent_mode_enabled() is False
 
     def test_enabled_with_1(self):
         with patch.dict(os.environ, {"AGENT_MODE": "1"}):
             from app.agent_jobs import agent_mode_enabled
+
             assert agent_mode_enabled() is True
 
     def test_enabled_with_true(self):
         with patch.dict(os.environ, {"AGENT_MODE": "true"}):
             from app.agent_jobs import agent_mode_enabled
+
             assert agent_mode_enabled() is True
 
     def test_enabled_with_yes(self):
         with patch.dict(os.environ, {"AGENT_MODE": "yes"}):
             from app.agent_jobs import agent_mode_enabled
+
             assert agent_mode_enabled() is True
 
     def test_disabled_with_0(self):
         with patch.dict(os.environ, {"AGENT_MODE": "0"}):
             from app.agent_jobs import agent_mode_enabled
+
             assert agent_mode_enabled() is False
 
 
@@ -69,6 +72,7 @@ class TestJobStore:
 
     def test_store_update_and_get(self):
         from app.agent_jobs import _store_get, _store_update
+
         run_id = "test_store_001"
         _store_update(run_id, {"status": "queued"})
         result = _store_get(run_id)
@@ -82,6 +86,7 @@ class TestJobStore:
 
     def test_store_get_missing(self):
         from app.agent_jobs import _store_get
+
         assert _store_get("nonexistent_run_id_xyz") is None
 
 
@@ -126,12 +131,14 @@ class TestRunJob:
     def test_exception_handling(self):
         from app.agent_jobs import _run_job, _store_get
 
-        with patch(
-            "scripts.web_background_job._run_funnel_screen",
-            side_effect=RuntimeError("data fetch timeout"),
+        with (
+            patch(
+                "scripts.web_background_job._run_funnel_screen",
+                side_effect=RuntimeError("data fetch timeout"),
+            ),
+            patch("scripts.web_background_job._apply_funnel_env"),
         ):
-            with patch("scripts.web_background_job._apply_funnel_env"):
-                _run_job("funnel_screen", "test_rj_004", {})
+            _run_job("funnel_screen", "test_rj_004", {})
 
         job = _store_get("test_rj_004")
         assert job is not None
@@ -195,10 +202,13 @@ class TestSyncAgentJobState:
         from app.agent_jobs import _store_update, sync_agent_job_state
 
         run_id = "sync_test_001"
-        _store_update(run_id, {
-            "status": "completed",
-            "result": {"ok": True, "report_text": "done"},
-        })
+        _store_update(
+            run_id,
+            {
+                "status": "completed",
+                "result": {"ok": True, "report_text": "done"},
+            },
+        )
 
         _mock_st.session_state["sync_test_key"] = {
             "job_kind": "batch_ai_report",
@@ -237,10 +247,13 @@ class TestSyncAgentJobState:
         from app.agent_jobs import _store_update, sync_agent_job_state
 
         run_id = "sync_test_003"
-        _store_update(run_id, {
-            "status": "failed",
-            "result": {"ok": False, "error": "boom"},
-        })
+        _store_update(
+            run_id,
+            {
+                "status": "failed",
+                "result": {"ok": False, "error": "boom"},
+            },
+        )
 
         _mock_st.session_state["sync_test_key3"] = {
             "job_kind": "funnel_screen",
@@ -258,5 +271,6 @@ class TestSyncAgentJobState:
 
     def test_sync_no_state_returns_none(self):
         from app.agent_jobs import sync_agent_job_state
+
         result = sync_agent_job_state(state_key="nonexistent_key_xyz")
         assert result is None

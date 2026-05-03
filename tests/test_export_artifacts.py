@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """core/export_artifacts.py 冒烟测试。"""
+
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from core.export_artifacts import file_loader, write_dataframe_csv
 
@@ -12,6 +11,7 @@ class TestWriteDataframeCsv:
     def test_roundtrip(self, tmp_path, monkeypatch):
         """写出 CSV 后应能重新读回相同数据。"""
         import core.export_artifacts as _mod
+
         monkeypatch.setattr(_mod, "_EXPORT_ROOT", tmp_path)
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         path = write_dataframe_csv(df, prefix="test")

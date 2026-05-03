@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -20,6 +19,7 @@ def is_a_share_trading_day(d: date | None = None) -> bool:
         return False
     try:
         from integrations.fetch_a_share_csv import _trade_dates_cached
+
         return d in set(_trade_dates_cached())
     except Exception:
         return d.weekday() < 5

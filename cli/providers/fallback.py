@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """FallbackProvider — 多模型自动降级。"""
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Generator
+from typing import Any
 
 from cli.providers.base import LLMProvider
 
@@ -28,6 +28,7 @@ def _is_retriable(exc: Exception) -> bool:
     # google-genai ServerError
     try:
         from google.genai import errors as genai_errors
+
         if isinstance(exc, genai_errors.ServerError):
             return True
     except ImportError:
@@ -38,6 +39,7 @@ def _is_retriable(exc: Exception) -> bool:
     # httpx（openai/anthropic 底层）
     try:
         import httpx
+
         if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
             return True
     except ImportError:
@@ -78,9 +80,12 @@ class FallbackProvider(LLMProvider):
         if model_id not in self._providers:
             cfg = next(c for c in self._configs if c["id"] == model_id)
             from cli.__main__ import _create_provider
+
             provider, err = _create_provider(
-                cfg["provider_name"], cfg["api_key"],
-                cfg.get("model", ""), cfg.get("base_url", ""),
+                cfg["provider_name"],
+                cfg["api_key"],
+                cfg.get("model", ""),
+                cfg.get("base_url", ""),
             )
             if err:
                 raise RuntimeError(err)

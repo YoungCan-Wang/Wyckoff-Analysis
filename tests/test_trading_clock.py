@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """utils/trading_clock.py 冒烟测试。"""
+
 from __future__ import annotations
 
 from datetime import date, datetime

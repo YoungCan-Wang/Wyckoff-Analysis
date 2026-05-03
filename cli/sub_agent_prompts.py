@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Sub-agent 专用 system prompt。"""
 
 RESEARCH_AGENT_PROMPT = """\

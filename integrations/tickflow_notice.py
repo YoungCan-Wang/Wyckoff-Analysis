@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 """
 TickFlow 限流提示：统一文案、错误识别、进程内短期事件记录。
 """
+
 from __future__ import annotations
 
 import os

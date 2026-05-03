@@ -1,27 +1,27 @@
-# -*- coding: utf-8 -*-
 """
 Wyckoff Dashboard — 本地可视化面板。
 
 stdlib http.server 提供 JSON API + 嵌入式 HTML/CSS/JS SPA。
 金融终端风格（Bloomberg 深色主题）。
 """
+
 from __future__ import annotations
 
 import json
-import os
 import threading
 import webbrowser
-from functools import partial
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
 
 # ---------------------------------------------------------------------------
 # Data access layer (thin wrappers over local_db)
 # ---------------------------------------------------------------------------
 
+
 def _get_config() -> dict:
     try:
-        from cli.auth import load_config, load_model_configs, load_default_model_id, load_fallback_model_id
+        from cli.auth import load_config, load_default_model_id, load_fallback_model_id, load_model_configs
+
         cfg = load_config()
         models = load_model_configs()
         default_id = load_default_model_id()
@@ -50,6 +50,7 @@ def _get_config() -> dict:
 def _get_memory() -> list[dict]:
     try:
         from integrations.local_db import get_recent_memories
+
         return get_recent_memories(limit=50)
     except Exception:
         return []
@@ -58,6 +59,7 @@ def _get_memory() -> list[dict]:
 def _delete_memory(mem_id: int) -> bool:
     try:
         from integrations.local_db import get_db
+
         conn = get_db()
         with conn:
             conn.execute("DELETE FROM agent_memory WHERE id=?", (mem_id,))
@@ -69,6 +71,7 @@ def _delete_memory(mem_id: int) -> bool:
 def _delete_recommendation(code: str) -> int:
     try:
         from integrations.local_db import delete_recommendations
+
         return delete_recommendations([code])
     except Exception:
         return 0
@@ -77,6 +80,7 @@ def _delete_recommendation(code: str) -> int:
 def _delete_signal(code: str) -> int:
     try:
         from integrations.local_db import delete_signals
+
         return delete_signals([code])
     except Exception:
         return 0
@@ -85,6 +89,7 @@ def _delete_signal(code: str) -> int:
 def _delete_chat_session(session_id: str) -> int:
     try:
         from integrations.local_db import delete_chat_session
+
         return delete_chat_session(session_id)
     except Exception:
         return 0
@@ -93,6 +98,7 @@ def _delete_chat_session(session_id: str) -> int:
 def _get_recommendations() -> list[dict]:
     try:
         from integrations.local_db import load_recommendations
+
         return load_recommendations(limit=100)
     except Exception:
         return []
@@ -101,6 +107,7 @@ def _get_recommendations() -> list[dict]:
 def _get_signals() -> list[dict]:
     try:
         from integrations.local_db import load_signals
+
         return load_signals(limit=200)
     except Exception:
         return []
@@ -109,9 +116,11 @@ def _get_signals() -> list[dict]:
 def _get_tail_buy() -> list[dict]:
     try:
         from integrations.local_db import load_tail_buy_history
+
         records = load_tail_buy_history(limit=100)
         if not records:
             from integrations.supabase_tail_buy import load_tail_buy_from_supabase
+
             records = load_tail_buy_from_supabase(limit=100)
         return records
     except Exception:
@@ -121,6 +130,7 @@ def _get_tail_buy() -> list[dict]:
 def _delete_tail_buy(code: str, run_date: str) -> int:
     try:
         from integrations.local_db import get_db
+
         conn = get_db()
         with conn:
             cur = conn.execute(
@@ -135,6 +145,7 @@ def _delete_tail_buy(code: str, run_date: str) -> int:
 def _get_portfolio() -> dict | None:
     try:
         from integrations.local_db import load_portfolio
+
         return load_portfolio("USER_LIVE")
     except Exception:
         return None
@@ -143,6 +154,7 @@ def _get_portfolio() -> dict | None:
 def _get_sync_status() -> list[dict]:
     try:
         from integrations.local_db import get_sync_meta
+
         tables = ["recommendation_tracking", "signal_pending", "market_signal_daily", "portfolio"]
         result = []
         for t in tables:
@@ -156,6 +168,7 @@ def _get_sync_status() -> list[dict]:
 def _get_chat_sessions() -> list[dict]:
     try:
         from integrations.local_db import list_chat_sessions
+
         return list_chat_sessions(limit=50)
     except Exception:
         return []
@@ -164,6 +177,7 @@ def _get_chat_sessions() -> list[dict]:
 def _get_chat_log(session_id: str) -> list[dict]:
     try:
         from integrations.local_db import load_chat_logs
+
         return load_chat_logs(session_id=session_id)
     except Exception:
         return []
@@ -172,6 +186,7 @@ def _get_chat_log(session_id: str) -> list[dict]:
 def _get_background_tasks() -> list[dict]:
     try:
         from integrations.local_db import load_background_task_results
+
         return load_background_task_results(limit=100)
     except Exception:
         return []
@@ -180,16 +195,16 @@ def _get_background_tasks() -> list[dict]:
 def _get_background_task(task_id: str) -> dict:
     try:
         from integrations.local_db import load_background_task_result
+
         return load_background_task_result(task_id) or {}
     except Exception:
         return {}
 
 
-
-
 # ---------------------------------------------------------------------------
 # HTTP Handler
 # ---------------------------------------------------------------------------
+
 
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):  # noqa: A002
@@ -255,6 +270,7 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 body = self._read_body()
                 from cli.auth import save_model_entry
+
                 save_model_entry(body)
                 self._json({"ok": True})
             except Exception as e:
@@ -269,6 +285,7 @@ class _Handler(BaseHTTPRequestHandler):
             model_id = path.split("/")[-2]
             try:
                 from cli.auth import set_default_model
+
                 set_default_model(model_id)
                 self._json({"ok": True})
             except Exception as e:
@@ -277,6 +294,7 @@ class _Handler(BaseHTTPRequestHandler):
             model_id = path.split("/")[-2]
             try:
                 from cli.auth import set_fallback_model
+
                 set_fallback_model(model_id)
                 self._json({"ok": True})
             except Exception as e:
@@ -288,11 +306,13 @@ class _Handler(BaseHTTPRequestHandler):
                 body["id"] = model_id
                 if not body.get("api_key"):
                     from cli.auth import load_model_configs
+
                     for m in load_model_configs():
                         if m["id"] == model_id:
                             body["api_key"] = m["api_key"]
                             break
                 from cli.auth import save_model_entry
+
                 save_model_entry(body)
                 self._json({"ok": True})
             except Exception as e:
@@ -302,6 +322,7 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 body = self._read_body()
                 from cli.auth import save_config_key
+
                 save_config_key(key, body.get("value", ""))
                 self._json({"ok": True})
             except Exception as e:
@@ -316,6 +337,7 @@ class _Handler(BaseHTTPRequestHandler):
             model_id = path.split("/")[-1]
             try:
                 from cli.auth import remove_model_entry
+
                 ok = remove_model_entry(model_id)
                 self._json({"ok": ok, "error": "" if ok else "cannot delete last model"})
             except Exception as e:
@@ -352,9 +374,11 @@ class _Handler(BaseHTTPRequestHandler):
 # Server start
 # ---------------------------------------------------------------------------
 
+
 def start_dashboard(port: int = 8765):
     """启动 dashboard HTTP 服务并打开浏览器。"""
     from integrations.local_db import init_db
+
     init_db()
 
     server = HTTPServer(("127.0.0.1", port), _Handler)

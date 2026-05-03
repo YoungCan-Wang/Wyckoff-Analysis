@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 ADK Session & Runner 管理 — 为 Streamlit Chat 页面提供会话管理。
 
@@ -15,13 +14,15 @@ ADK Session & Runner 管理 — 为 Streamlit Chat 页面提供会话管理。
         # event_type: "thinking" | "tool_call" | "tool_result" | "text_chunk" | "done" | "error"
         ...
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import queue
 import threading
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 from uuid import uuid4
 
 from google.adk.agents import LlmAgent
@@ -187,17 +188,29 @@ class ChatSessionManager:
                         func_calls = event.get_function_calls() if hasattr(event, "get_function_calls") else []
                         if func_calls:
                             for fc in func_calls:
-                                q.put(("tool_call", {
-                                    "name": getattr(fc, "name", "unknown"),
-                                    "args": dict(getattr(fc, "args", {}) or {}),
-                                }))
-                        func_responses = event.get_function_responses() if hasattr(event, "get_function_responses") else []
+                                q.put(
+                                    (
+                                        "tool_call",
+                                        {
+                                            "name": getattr(fc, "name", "unknown"),
+                                            "args": dict(getattr(fc, "args", {}) or {}),
+                                        },
+                                    )
+                                )
+                        func_responses = (
+                            event.get_function_responses() if hasattr(event, "get_function_responses") else []
+                        )
                         if func_responses:
                             for fr in func_responses:
-                                q.put(("tool_result", {
-                                    "name": getattr(fr, "name", "unknown"),
-                                    "response": getattr(fr, "response", {}),
-                                }))
+                                q.put(
+                                    (
+                                        "tool_result",
+                                        {
+                                            "name": getattr(fr, "name", "unknown"),
+                                            "response": getattr(fr, "response", {}),
+                                        },
+                                    )
+                                )
                         continue
 
                     parts = event.content.parts
@@ -211,30 +224,35 @@ class ChatSessionManager:
                     for part in parts:
                         if part.function_call:
                             fc = part.function_call
-                            q.put(("tool_call", {
-                                "name": getattr(fc, "name", "unknown"),
-                                "args": dict(getattr(fc, "args", {}) or {}),
-                            }))
+                            q.put(
+                                (
+                                    "tool_call",
+                                    {
+                                        "name": getattr(fc, "name", "unknown"),
+                                        "args": dict(getattr(fc, "args", {}) or {}),
+                                    },
+                                )
+                            )
 
                     # 3) Function responses (embedded in parts)
                     for part in parts:
                         if part.function_response:
                             fr = part.function_response
-                            q.put(("tool_result", {
-                                "name": getattr(fr, "name", "unknown"),
-                                "response": getattr(fr, "response", {}),
-                            }))
+                            q.put(
+                                (
+                                    "tool_result",
+                                    {
+                                        "name": getattr(fr, "name", "unknown"),
+                                        "response": getattr(fr, "response", {}),
+                                    },
+                                )
+                            )
 
                     # 4) Text chunks (non-thought, partial event)
                     if event.partial:
                         text_bits = []
                         for p in parts:
-                            if (
-                                p.text
-                                and p.thought is not True
-                                and not p.function_call
-                                and not p.function_response
-                            ):
+                            if p.text and p.thought is not True and not p.function_call and not p.function_response:
                                 text_bits.append(p.text)
                         if text_bits:
                             q.put(("text_chunk", "".join(text_bits)))
@@ -242,22 +260,22 @@ class ChatSessionManager:
                     # 5) Usage metadata
                     um = getattr(event, "usage_metadata", None)
                     if um:
-                        q.put(("usage", {
-                            "input_tokens": getattr(um, "prompt_token_count", 0) or 0,
-                            "output_tokens": getattr(um, "candidates_token_count", 0) or 0,
-                            "total_tokens": getattr(um, "total_token_count", 0) or 0,
-                        }))
+                        q.put(
+                            (
+                                "usage",
+                                {
+                                    "input_tokens": getattr(um, "prompt_token_count", 0) or 0,
+                                    "output_tokens": getattr(um, "candidates_token_count", 0) or 0,
+                                    "total_tokens": getattr(um, "total_token_count", 0) or 0,
+                                },
+                            )
+                        )
 
                     # 6) Final response
                     if event.is_final_response():
                         final_parts = []
                         for p in parts:
-                            if (
-                                p.text
-                                and p.thought is not True
-                                and not p.function_call
-                                and not p.function_response
-                            ):
+                            if p.text and p.thought is not True and not p.function_call and not p.function_response:
                                 final_parts.append(p.text)
                         q.put(("done", "".join(final_parts)))
                         return
@@ -312,10 +330,7 @@ class ChatSessionManager:
             messages = []
             for event in session.events:
                 if event.content and event.content.parts:
-                    text = "\n".join(
-                        p.text for p in event.content.parts
-                        if hasattr(p, "text") and p.text
-                    )
+                    text = "\n".join(p.text for p in event.content.parts if hasattr(p, "text") and p.text)
                     if text:
                         role = "user" if event.content.role == "user" else "assistant"
                         messages.append({"role": role, "content": text})

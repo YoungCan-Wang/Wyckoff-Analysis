@@ -1,12 +1,13 @@
-# -*- coding: utf-8 -*-
 """后台任务管理器 — 长任务非阻塞执行。"""
+
 from __future__ import annotations
 
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 class BackgroundTask:
     id: str
     tool_name: str
-    status: str = "pending"          # pending → running → completed | failed
+    status: str = "pending"  # pending → running → completed | failed
     result: Any = None
     error: str = ""
     submitted_at: float = field(default_factory=time.monotonic)
@@ -23,7 +24,7 @@ class BackgroundTask:
     # progress fields
     current_stage: str = ""
     current_detail: str = ""
-    current_progress: float = -1.0   # 0.0~1.0, -1 = indeterminate
+    current_progress: float = -1.0  # 0.0~1.0, -1 = indeterminate
 
 
 class BackgroundTaskManager:
@@ -55,6 +56,7 @@ class BackgroundTaskManager:
 
         def _run():
             from cli.progress import set_reporter
+
             def _on_progress(stage, detail, progress):
                 with self._lock:
                     task.current_stage = stage
@@ -62,6 +64,7 @@ class BackgroundTaskManager:
                     task.current_progress = progress
                 if self._progress_callback:
                     self._progress_callback(task)
+
             set_reporter(_on_progress)
             try:
                 result = fn(**args)

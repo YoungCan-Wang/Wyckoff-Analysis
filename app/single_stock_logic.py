@@ -1,23 +1,24 @@
-# -*- coding: utf-8 -*-
 import ast
+import os
+import platform
 import re
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+
+import matplotlib.font_manager as fm
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-import platform
-import os
 
-from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window, _stock_name_from_code
-from utils import extract_symbols_from_text, stock_sector_em
-from integrations.llm_client import call_llm
-from core.prompts import WYCKOFF_SINGLE_SYSTEM_PROMPT
 from app.layout import is_data_source_failure_message
 from app.ui_helpers import show_page_loading
+from core.prompts import WYCKOFF_SINGLE_SYSTEM_PROMPT
+from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window, _stock_name_from_code
+from integrations.llm_client import call_llm
+from utils import extract_symbols_from_text, stock_sector_em
 
 TRADING_DAYS_OHLCV = 320  # 单股分析窗口：240~320 交易日，默认取上沿以保证 MA200 稳定
 ADJUST = "qfq"
@@ -114,6 +115,7 @@ DISALLOWED_AST_NODES = (
     ast.AsyncFunctionDef,
 )
 
+
 def get_chinese_font_path():
     """获取系统中文字体路径"""
     system = platform.system()
@@ -132,12 +134,13 @@ def get_chinese_font_path():
             "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         ]
         for p in paths:
             if os.path.exists(p):
                 return p
     return None
+
 
 def extract_python_code(text: str) -> str | None:
     """从 LLM 回复中提取 Python 代码块"""
@@ -255,10 +258,7 @@ def _validate_plot_code(code_block: str) -> tuple[bool, str]:
     except Exception as e:
         return (False, f"代码语法错误: {e}")
 
-    if not any(
-        isinstance(node, ast.FunctionDef) and node.name == "create_plot"
-        for node in tree.body
-    ):
+    if not any(isinstance(node, ast.FunctionDef) and node.name == "create_plot" for node in tree.body):
         return (False, "缺少 create_plot(df) 函数")
 
     allowed_top_level = (ast.FunctionDef, ast.Assign, ast.AnnAssign, ast.Expr)
@@ -280,9 +280,7 @@ def _validate_plot_code(code_block: str) -> tuple[bool, str]:
             fn = node.func
             if isinstance(fn, ast.Name) and fn.id in DISALLOWED_NAMES:
                 return (False, f"不允许的函数调用: {fn.id}")
-            if isinstance(fn, ast.Attribute) and (
-                fn.attr in DISALLOWED_NAMES or fn.attr in DISALLOWED_ATTRS
-            ):
+            if isinstance(fn, ast.Attribute) and (fn.attr in DISALLOWED_NAMES or fn.attr in DISALLOWED_ATTRS):
                 return (False, f"不允许的方法调用: {fn.attr}")
     return (True, "")
 
@@ -364,10 +362,7 @@ def _build_safe_structure_plot(df_hist: pd.DataFrame, symbol: str, name: str):
 
     has_real_open = "open" in df_hist.columns or "open_price" in df_hist.columns
     if has_real_open and df_plot["open"].notna().any():
-        vol_colors = [
-            "#d14343" if c >= o else "#1f8f55"
-            for c, o in zip(df_plot["close"], df_plot["open"])
-        ]
+        vol_colors = ["#d14343" if c >= o else "#1f8f55" for c, o in zip(df_plot["close"], df_plot["open"])]
     else:
         vol_colors = "#9ca3af"
     ax_vol.bar(df_plot["date"], df_plot["volume"], color=vol_colors, width=1.0, alpha=0.85)
@@ -377,6 +372,7 @@ def _build_safe_structure_plot(df_hist: pd.DataFrame, symbol: str, name: str):
     fig.autofmt_xdate()
     fig.tight_layout()
     return fig
+
 
 def render_single_stock_page(
     provider,
@@ -393,17 +389,14 @@ def render_single_stock_page(
     col1, col2 = st.columns([1, 1])
     with col1:
         stock_input = st.text_input(
-            "股票代码",
-            placeholder="例如：600519",
-            help="请输入单个 A 股代码",
-            key="single_stock_code"
+            "股票代码", placeholder="例如：600519", help="请输入单个 A 股代码", key="single_stock_code"
         )
     with col2:
         uploaded_file = st.file_uploader(
             "上传今日盘面截图 (可选)",
             type=["png", "jpg", "jpeg"],
             help="上传分时图或 K 线图，辅助判断当日微观结构",
-            key="single_stock_image"
+            key="single_stock_image",
         )
 
     # 提取代码
@@ -425,6 +418,7 @@ def render_single_stock_page(
             base_url=base_url,
             feishu_webhook=feishu_webhook,
         )
+
 
 def _run_analysis(
     symbol,
@@ -472,11 +466,10 @@ def _run_analysis(
         # 计算该股票的威科夫阶段信息
         from core.wyckoff_engine import (
             FunnelConfig,
-            detect_markup_stage,
             detect_accum_stage,
+            detect_markup_stage,
             layer5_exit_signals,
             normalize_hist_from_fetch,
-            _sorted_if_needed,
         )
 
         df_normalized = normalize_hist_from_fetch(df_hist)
@@ -492,7 +485,11 @@ def _run_analysis(
             stage_info = "✓ **当前阶段**: Markup（上升期）- 已从积累期成功进入上升趋势\n"
         elif symbol in accum_map:
             stage = accum_map.get(symbol, "")
-            stage_cn = {"Accum_A": "积累A（下跌停止）", "Accum_B": "积累B（底部振荡）", "Accum_C": "积累C（最后洗盘）"}.get(stage, stage)
+            stage_cn = {
+                "Accum_A": "积累A（下跌停止）",
+                "Accum_B": "积累B（底部振荡）",
+                "Accum_C": "积累C（最后洗盘）",
+            }.get(stage, stage)
             stage_info = f"✓ **当前阶段**: {stage_cn} - {stage}阶段\n"
 
         # Exit 信号
@@ -516,7 +513,11 @@ def _run_analysis(
         # 准备 Prompt
         current_time = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
         font_path = get_chinese_font_path()
-        font_hint = f"\n【系统检测】当前环境建议中文字体路径：'{font_path}'" if font_path else "\n【系统检测】未检测到常见中文字体，请尝试自动查找。"
+        font_hint = (
+            f"\n【系统检测】当前环境建议中文字体路径：'{font_path}'"
+            if font_path
+            else "\n【系统检测】未检测到常见中文字体，请尝试自动查找。"
+        )
 
         final_system_prompt = WYCKOFF_SINGLE_SYSTEM_PROMPT + font_hint
 
@@ -535,6 +536,7 @@ def _run_analysis(
         if image_file:
             # 读取图片 bytes
             from PIL import Image
+
             img = Image.open(image_file)
             images.append(img)
             user_msg += "\n\n【用户已上传今日盘面截图，请结合分析】"
@@ -561,9 +563,10 @@ def _run_analysis(
 
         try:
             from utils.notify import send_all_webhooks
-            effective_feishu_webhook = str(feishu_webhook or "").strip() or str(
-                st.session_state.get("feishu_webhook") or ""
-            ).strip()
+
+            effective_feishu_webhook = (
+                str(feishu_webhook or "").strip() or str(st.session_state.get("feishu_webhook") or "").strip()
+            )
             send_all_webhooks(
                 effective_feishu_webhook,
                 st.session_state.get("wecom_webhook") or "",

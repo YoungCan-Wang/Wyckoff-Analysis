@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Optional wbt integration for Wyckoff backtests.
 
 The local ``wbt`` project is a weight-based Rust backtesting engine.  This
@@ -6,6 +5,7 @@ adapter keeps it as an optional analytics backend: Wyckoff still owns signal
 generation, execution constraints, and trade replay; wbt can consume the
 resulting NAV/weight data for a second, high-performance metric view.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +14,6 @@ from importlib.util import find_spec
 from typing import Any
 
 import pandas as pd
-
 
 SUPPORTED_WBT_ENGINES = {"legacy", "auto", "both", "wbt"}
 
@@ -125,11 +124,7 @@ def build_position_weight_frame(
 
     close_maps: dict[str, dict[date, float]] = {}
     for code in symbols:
-        from_cache = {
-            d: float(v[3])
-            for d, v in (ohlc_cache.get(code) or {}).items()
-            if v is not None and len(v) >= 4
-        }
+        from_cache = {d: float(v[3]) for d, v in (ohlc_cache.get(code) or {}).items() if v is not None and len(v) >= 4}
         close_maps[code] = from_cache or _close_map_from_df(all_df_map.get(code))
 
     rows: list[dict[str, Any]] = []
@@ -262,9 +257,7 @@ def wbt_summary_fields(evaluation: WbtEvaluation) -> dict[str, Any]:
                 "wbt_sharpe_ratio": _float_or_none(stats.get("夏普比率")),
                 "wbt_calmar_ratio": calmar_ratio,
                 "wbt_max_drawdown_pct": (
-                    daily_mdd_pct
-                    if daily_mdd_pct is not None
-                    else _negative_pct(stats.get("最大回撤"))
+                    daily_mdd_pct if daily_mdd_pct is not None else _negative_pct(stats.get("最大回撤"))
                 ),
                 "wbt_daily_win_rate_pct": _pct(stats.get("日胜率")),
                 "wbt_trade_count": stats.get("交易次数"),

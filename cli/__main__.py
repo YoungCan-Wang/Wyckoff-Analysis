@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 威科夫终端读盘室 — 入口。
 
@@ -20,6 +19,7 @@
     wyckoff recommend               # AI 推荐跟踪
     wyckoff sync                    # 同步 Supabase → SQLite
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,6 +55,7 @@ _silence_streamlit()
 
 # CLI 环境：只显示 CRITICAL，不泄漏 traceback 给用户
 import warnings as _warnings
+
 _warnings.filterwarnings("ignore", category=DeprecationWarning)
 _warnings.filterwarnings("ignore", category=ResourceWarning)
 _logging.basicConfig(level=_logging.CRITICAL)
@@ -64,9 +65,11 @@ _logging.basicConfig(level=_logging.CRITICAL)
 # Provider 工厂
 # ---------------------------------------------------------------------------
 
+
 def _create_provider(provider_name: str, api_key: str, model: str = "", base_url: str = ""):
-    from cli.providers import PROVIDERS
     import inspect
+
+    from cli.providers import PROVIDERS
 
     cls = PROVIDERS.get(provider_name)
     if cls is None:
@@ -93,6 +96,7 @@ def _create_provider(provider_name: str, api_key: str, model: str = "", base_url
 def _get_version() -> str:
     try:
         from importlib.metadata import version
+
         return version("youngcan-wyckoff-analysis")
     except Exception:
         return "dev"
@@ -105,6 +109,7 @@ def _check_update_async() -> None:
     def _check():
         try:
             import urllib.request
+
             local_ver = _get_version()
             if local_ver == "dev":
                 return
@@ -118,10 +123,7 @@ def _check_update_async() -> None:
             local_parts = tuple(int(x) for x in local_ver.split("."))
             latest_parts = tuple(int(x) for x in latest.split("."))
             if latest_parts > local_parts:
-                print(
-                    f"\033[33m⬆ 新版本可用: {latest}（当前 {local_ver}），"
-                    f"运行 wyckoff update 升级\033[0m"
-                )
+                print(f"\033[33m⬆ 新版本可用: {latest}（当前 {local_ver}），运行 wyckoff update 升级\033[0m")
         except Exception:
             pass
 
@@ -138,8 +140,10 @@ def _mask(val: str) -> str:
 # 子命令实现
 # ---------------------------------------------------------------------------
 
+
 def _cmd_update(_args):
     import shutil
+
     print("正在升级 youngcan-wyckoff-analysis ...")
     pkg = "youngcan-wyckoff-analysis"
     uv = shutil.which("uv")
@@ -164,7 +168,7 @@ def _cmd_update(_args):
 
 
 def _cmd_auth(args):
-    from cli.auth import login, logout, restore_session, _load_session
+    from cli.auth import _load_session, login, logout, restore_session
 
     sub = args.auth_cmd
 
@@ -191,6 +195,7 @@ def _cmd_auth(args):
     password = args.password
     if not password:
         import getpass
+
         password = getpass.getpass("密码: ")
     try:
         session = login(email, password)
@@ -207,8 +212,11 @@ def _cmd_auth(args):
 
 def _cmd_model(args):
     from cli.auth import (
-        load_model_configs, load_default_model_id,
-        save_model_entry, remove_model_entry, set_default_model,
+        load_default_model_id,
+        load_model_configs,
+        remove_model_entry,
+        save_model_entry,
+        set_default_model,
     )
 
     sub = args.model_cmd or "list"
@@ -217,6 +225,7 @@ def _cmd_model(args):
         configs = load_model_configs()
         default_id = load_default_model_id()
         from cli.auth import load_fallback_model_id
+
         fallback_id = load_fallback_model_id()
         if not configs:
             print("尚无模型配置，使用 wyckoff model add 添加")
@@ -227,9 +236,11 @@ def _cmd_model(args):
                 marks += " *"
             if c["id"] == fallback_id:
                 marks += " ⚡"
-            print(f"  {c['id']}{marks}  provider={c.get('provider_name','')}  model={c.get('model','')}  base_url={c.get('base_url','') or '(default)'}")
+            print(
+                f"  {c['id']}{marks}  provider={c.get('provider_name', '')}  model={c.get('model', '')}  base_url={c.get('base_url', '') or '(default)'}"
+            )
         if fallback_id:
-            print(f"\n  * = 默认  ⚡ = fallback")
+            print("\n  * = 默认  ⚡ = fallback")
         return
 
     if sub == "add":
@@ -243,6 +254,7 @@ def _cmd_model(args):
             print(f"✗ 不支持: {provider}")
             sys.exit(1)
         import getpass
+
         api_key = getpass.getpass("API Key (购买: https://www.1route.dev/register?aff=359904261): ").strip()
         if not api_key:
             print("已取消")
@@ -308,6 +320,7 @@ def _cmd_model(args):
 
     if sub == "fallback":
         from cli.auth import load_fallback_model_id, set_fallback_model
+
         model_id = args.model_id
         if not model_id:
             current = load_fallback_model_id()
@@ -345,7 +358,7 @@ def _cmd_config(args):
         cfg = load_config()
         print("数据源配置 (~/.wyckoff/wyckoff.json)")
         print()
-        for alias, (key, label, _) in CONFIG_KEYS.items():
+        for _alias, (key, label, _) in CONFIG_KEYS.items():
             val = str(cfg.get(key, "") or "").strip()
             status = f"\033[32m{_mask(val)}\033[0m" if val else "\033[90m未配置\033[0m"
             print(f"  {label}: {status}")
@@ -362,6 +375,7 @@ def _cmd_config(args):
     value = args.value
     if not value:
         import getpass
+
         value = getpass.getpass(f"{label}: ").strip()
     if not value:
         print("已取消")
@@ -375,15 +389,18 @@ def _cmd_config(args):
 # 持仓 helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_session_client():
     """从 session.json 获取 user client，返回 (client, user_id, portfolio_id) 或退出。"""
     from cli.auth import restore_session
+
     session = restore_session()
     if not session or not session.get("access_token"):
         print("✗ 未登录，请先执行 wyckoff auth <email> <password>")
         sys.exit(1)
     from integrations.supabase_base import create_user_client
     from integrations.supabase_portfolio import build_user_live_portfolio_id
+
     client = create_user_client(session["access_token"], session["refresh_token"])
     uid = session["user_id"]
     pid = build_user_live_portfolio_id(uid)
@@ -396,6 +413,7 @@ def _cmd_portfolio(args):
     if sub == "list":
         client, uid, pid = _get_session_client()
         from integrations.supabase_portfolio import load_portfolio_state
+
         state = load_portfolio_state(pid, client=client)
         if not state or not state.get("positions"):
             print("暂无持仓记录")
@@ -407,7 +425,9 @@ def _cmd_portfolio(args):
         print("-" * 60)
         for p in state["positions"]:
             sl = f"{p.get('stop_loss', 0):.2f}" if p.get("stop_loss") else "-"
-            print(f"{p['code']:<8} {p.get('name',''):<10} {p.get('shares',0):>6} {p.get('cost',0):>8.3f} {p.get('buy_dt',''):<10} {sl:>8}")
+            print(
+                f"{p['code']:<8} {p.get('name', ''):<10} {p.get('shares', 0):>6} {p.get('cost', 0):>8.3f} {p.get('buy_dt', ''):<10} {sl:>8}"
+            )
         return
 
     if sub == "add":
@@ -417,6 +437,7 @@ def _cmd_portfolio(args):
             print("用法: wyckoff portfolio add <code> --name X --shares N --cost N [--buy-dt YYYYMMDD]")
             sys.exit(1)
         from integrations.supabase_portfolio import upsert_position
+
         position = {
             "code": code,
             "name": args.name or "",
@@ -435,6 +456,7 @@ def _cmd_portfolio(args):
             print("用法: wyckoff portfolio rm <code>")
             sys.exit(1)
         from integrations.supabase_portfolio import delete_position
+
         ok, msg = delete_position(pid, code, client=client)
         print(f"{'✓' if ok else '✗'} {msg}")
         return
@@ -445,10 +467,12 @@ def _cmd_portfolio(args):
         if amount is None:
             # 查看
             from integrations.supabase_portfolio import load_portfolio_state
+
             state = load_portfolio_state(pid, client=client)
             print(f"可用资金: {state.get('free_cash', 0):,.2f}" if state else "暂无记录")
             return
         from integrations.supabase_portfolio import update_free_cash
+
         ok, msg = update_free_cash(pid, float(amount), client=client)
         print(f"{'✓' if ok else '✗'} {msg}")
         return
@@ -462,6 +486,7 @@ def _cmd_signal(args):
     status = args.status or "all"
     limit = args.limit or 30
     from agents.chat_tools import query_history
+
     result = query_history(source="signal", status=status, limit=limit)
     if result.get("error"):
         print(f"✗ {result['error']}")
@@ -479,14 +504,15 @@ def _cmd_signal(args):
         score_s = f"{score:.2f}" if isinstance(score, float) else str(score)
         print(
             f"{r['code']:<8} {r['name']:<8} {r['signal_type']:<6} {r['status']:<10} "
-            f"{r['signal_date']:<10} {r.get('days_elapsed',0):>4} {score_s:>6} "
-            f"{r.get('industry',''):<10}"
+            f"{r['signal_date']:<10} {r.get('days_elapsed', 0):>4} {score_s:>6} "
+            f"{r.get('industry', ''):<10}"
         )
 
 
 def _cmd_recommend(args):
     limit = args.limit or 20
     from agents.chat_tools import query_history
+
     result = query_history(source="recommendation", limit=limit)
     if result.get("error"):
         print(f"✗ {result['error']}")
@@ -496,7 +522,9 @@ def _cmd_recommend(args):
         print(result.get("message", "暂无推荐记录"))
         return
     print(f"AI 推荐跟踪 ({result.get('total', 0)} 条)")
-    print(f"{'代码':<8} {'名称':<8} {'阵营':<8} {'推荐日':<10} {'推荐价':>8} {'现价':>8} {'盈亏%':>7} {'最高%':>7} {'状态':<8}")
+    print(
+        f"{'代码':<8} {'名称':<8} {'阵营':<8} {'推荐日':<10} {'推荐价':>8} {'现价':>8} {'盈亏%':>7} {'最高%':>7} {'状态':<8}"
+    )
     print("-" * 85)
     for r in records:
         code = str(r.get("code", "")).strip().zfill(6)
@@ -505,8 +533,8 @@ def _cmd_recommend(args):
         pnl = f"{r['pnl_pct']:.1f}" if r.get("pnl_pct") is not None else "-"
         max_pnl = f"{r['max_pnl_pct']:.1f}" if r.get("max_pnl_pct") is not None else "-"
         print(
-            f"{code:<8} {r['name']:<8} {r.get('camp',''):<8} {r['recommend_date']:<10} "
-            f"{rec_p:>8} {cur_p:>8} {pnl:>7} {max_pnl:>7} {r.get('status',''):<8}"
+            f"{code:<8} {r['name']:<8} {r.get('camp', ''):<8} {r['recommend_date']:<10} "
+            f"{rec_p:>8} {cur_p:>8} {pnl:>7} {max_pnl:>7} {r.get('status', ''):<8}"
         )
 
 
@@ -514,12 +542,15 @@ def _cmd_recommend(args):
 # wyckoff screen — 漏斗筛选
 # ---------------------------------------------------------------------------
 
+
 def _cmd_screen(args):
     from integrations.local_db import init_db
+
     init_db()
     board = args.board or "all"
     print(f"正在执行全市场漏斗筛选 (board={board}) ...")
     from scripts.wyckoff_funnel import run_funnel_job
+
     try:
         triggers, metrics = run_funnel_job()
     except Exception as e:
@@ -540,16 +571,19 @@ def _cmd_screen(args):
 # wyckoff backtest — 策略回测
 # ---------------------------------------------------------------------------
 
+
 def _cmd_backtest(args):
     from datetime import date, timedelta
-    from pathlib import Path
+
     from integrations.local_db import init_db
+
     init_db()
 
     end_dt = date.today() - timedelta(days=1)
     start_dt = end_dt - timedelta(days=args.months * 30)
     print(f"正在回测 {start_dt} → {end_dt}  hold_days={args.hold_days} ...")
     from scripts.backtest_runner import run_backtest
+
     try:
         df, summary = run_backtest(
             start_dt=start_dt,
@@ -576,15 +610,18 @@ def _cmd_backtest(args):
 # wyckoff report — AI 研报
 # ---------------------------------------------------------------------------
 
+
 def _cmd_report(args):
     codes = [c.strip() for c in args.codes.split(",") if c.strip()]
     if not codes:
         print("用法: wyckoff report 000001,600519")
         sys.exit(1)
     from integrations.local_db import init_db
+
     init_db()
     # 需要 LLM
-    from cli.auth import load_model_configs, load_default_model_id, load_fallback_model_id
+    from cli.auth import load_default_model_id, load_model_configs
+
     configs = load_model_configs()
     default_id = load_default_model_id()
     if not configs:
@@ -600,6 +637,7 @@ def _cmd_report(args):
     symbols_info = [{"code": c, "name": "", "tag": ""} for c in codes]
     print(f"正在生成 AI 研报 ({len(codes)} 只) ...")
     from scripts.step3_batch_report import run as run_report
+
     try:
         result = run_report(
             symbols_info=symbols_info,
@@ -626,10 +664,12 @@ def _cmd_report(args):
 # wyckoff mcp — 启动 MCP Server
 # ---------------------------------------------------------------------------
 
+
 def _cmd_mcp(_args):
     print("启动 Wyckoff MCP Server ...")
     print("按 Ctrl+C 停止\n")
     from mcp_server import main as mcp_main
+
     try:
         mcp_main()
     except KeyboardInterrupt:
@@ -640,8 +680,10 @@ def _cmd_mcp(_args):
 # wyckoff memory — 查看/清除 Agent 记忆
 # ---------------------------------------------------------------------------
 
+
 def _cmd_memory(args):
-    from integrations.local_db import init_db, get_recent_memories, prune_memories
+    from integrations.local_db import get_recent_memories, init_db, prune_memories
+
     init_db()
     sub = args.memory_cmd or "list"
 
@@ -658,7 +700,7 @@ def _cmd_memory(args):
             content = m.get("content", "")
             if len(content) > 60:
                 content = content[:60] + "..."
-            print(f"{m['id']:>5} {m.get('memory_type',''):<12} {m.get('created_at','')[:19]:<20} {content}")
+            print(f"{m['id']:>5} {m.get('memory_type', ''):<12} {m.get('created_at', '')[:19]:<20} {content}")
         return
 
     if sub == "search":
@@ -667,6 +709,7 @@ def _cmd_memory(args):
             print("用法: wyckoff memory search <关键词>")
             sys.exit(1)
         from integrations.local_db import search_memory
+
         results = search_memory(keyword=keyword, limit=args.limit)
         if not results:
             print(f"未找到包含 '{keyword}' 的记忆")
@@ -675,7 +718,7 @@ def _cmd_memory(args):
             content = m.get("content", "")
             if len(content) > 80:
                 content = content[:80] + "..."
-            print(f"  [{m['id']}] {m.get('memory_type','')} | {content}")
+            print(f"  [{m['id']}] {m.get('memory_type', '')} | {content}")
         return
 
     if sub == "clear":
@@ -689,6 +732,7 @@ def _cmd_memory(args):
             print("用法: wyckoff memory delete <id>")
             sys.exit(1)
         from integrations.local_db import get_db
+
         conn = get_db()
         with conn:
             cur = conn.execute("DELETE FROM agent_memory WHERE id=?", (mid,))
@@ -707,8 +751,10 @@ def _cmd_memory(args):
 # wyckoff log — 查看对话日志
 # ---------------------------------------------------------------------------
 
+
 def _cmd_log(args):
     from integrations.local_db import init_db, load_chat_logs
+
     init_db()
     session_id = args.session or None
     limit = args.limit
@@ -736,8 +782,10 @@ def _cmd_log(args):
 # wyckoff sync — 手动同步 Supabase → SQLite
 # ---------------------------------------------------------------------------
 
+
 def _cmd_sync(_args=None):
-    from integrations.local_db import init_db, get_sync_meta
+    from integrations.local_db import get_sync_meta, init_db
+
     init_db()
 
     if _args and getattr(_args, "sync_cmd", "") == "status":
@@ -750,6 +798,7 @@ def _cmd_sync(_args=None):
         return
 
     from integrations.sync import sync_all
+
     print("正在同步 Supabase → 本地...")
     result = sync_all()
     if not result:
@@ -762,7 +811,8 @@ def _cmd_sync(_args=None):
 
 
 def _cmd_cleanup(args):
-    from integrations.local_db import init_db, cleanup_old_records
+    from integrations.local_db import cleanup_old_records, init_db
+
     init_db()
     days = args.days
     print(f"清理 {days} 天前的本地数据...")
@@ -780,25 +830,31 @@ def _cmd_cleanup(args):
 # TUI 启动
 # ---------------------------------------------------------------------------
 
+
 def _cmd_tui(_args=None):
     _check_update_async()
 
     from cli.tools import ToolRegistry
+
     tools = ToolRegistry()
 
     session_expired = False
     try:
-        from cli.auth import restore_session, _load_session
+        from cli.auth import _load_session, restore_session
+
         had_session = _load_session() is not None
         session = restore_session()
         if session:
-            tools.state.update({
-                "user_id": session["user_id"],
-                "email": session["email"],
-                "access_token": session.get("access_token", ""),
-                "refresh_token": session.get("refresh_token", ""),
-            })
+            tools.state.update(
+                {
+                    "user_id": session["user_id"],
+                    "email": session["email"],
+                    "access_token": session.get("access_token", ""),
+                    "refresh_token": session.get("refresh_token", ""),
+                }
+            )
             from core.stock_cache import set_cli_tokens
+
             set_cli_tokens(session.get("access_token", ""), session.get("refresh_token", ""))
         elif had_session:
             session_expired = True
@@ -808,14 +864,17 @@ def _cmd_tui(_args=None):
     # 初始化本地 SQLite + 后台同步
     try:
         from integrations.local_db import init_db, prune_memories
+
         init_db()
         prune_memories()
         from integrations.sync import sync_all_background
+
         sync_all_background()
     except Exception:
         pass
 
     from core.prompts import CHAT_AGENT_SYSTEM_PROMPT
+
     system_prompt = CHAT_AGENT_SYSTEM_PROMPT
 
     state = {
@@ -829,6 +888,7 @@ def _cmd_tui(_args=None):
     # --- 从 wyckoff.json 注入数据源 token ---
     try:
         from cli.auth import load_config
+
         _cfg = load_config()
         for _k, _env in [("tushare_token", "TUSHARE_TOKEN"), ("tickflow_api_key", "TICKFLOW_API_KEY")]:
             _v = str(_cfg.get(_k, "") or "").strip()
@@ -838,7 +898,8 @@ def _cmd_tui(_args=None):
         pass
 
     try:
-        from cli.auth import load_model_configs, load_default_model_id
+        from cli.auth import load_default_model_id, load_model_configs
+
         configs = load_model_configs()
         default_id = load_default_model_id()
         if configs and default_id:
@@ -850,15 +911,18 @@ def _cmd_tui(_args=None):
             default_cfg = next((c for c in configs if c["id"] == default_id), configs[0])
             if len(configs) == 1:
                 provider, err = _create_provider(
-                    default_cfg["provider_name"], default_cfg["api_key"],
-                    default_cfg.get("model", ""), default_cfg.get("base_url", ""),
+                    default_cfg["provider_name"],
+                    default_cfg["api_key"],
+                    default_cfg.get("model", ""),
+                    default_cfg.get("base_url", ""),
                 )
                 if not err:
                     state.update(default_cfg)
                     state["provider"] = provider
             else:
-                from cli.providers.fallback import FallbackProvider
                 from cli.auth import load_fallback_model_id
+                from cli.providers.fallback import FallbackProvider
+
                 state.update(default_cfg)
                 state["provider"] = FallbackProvider(configs, default_id, fallback_id=load_fallback_model_id())
     except Exception:
@@ -868,18 +932,24 @@ def _cmd_tui(_args=None):
         tools.set_provider(state["provider"])
 
     # 后台启动 dashboard 并打开浏览器
-    import threading, webbrowser
+    import threading
+    import webbrowser
+
     def _dash_bg():
         try:
             from http.server import HTTPServer
+
             from cli.dashboard import _Handler
+
             HTTPServer(("127.0.0.1", 8765), _Handler).serve_forever()
         except Exception:
             pass
+
     threading.Thread(target=_dash_bg, daemon=True).start()
     webbrowser.open("http://127.0.0.1:8765")
 
     from cli.tui import WyckoffTUI
+
     app = WyckoffTUI(
         provider=state["provider"],
         tools=tools,
@@ -894,6 +964,7 @@ def _cmd_tui(_args=None):
     finally:
         try:
             import baostock as bs
+
             bs.logout()
         except (Exception, KeyboardInterrupt):
             pass
@@ -909,6 +980,7 @@ def _cmd_tui(_args=None):
 # ---------------------------------------------------------------------------
 # Argparse 主入口
 # ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1019,6 +1091,7 @@ def main():
         _cmd_recommend(args)
     elif args.cmd in ("dashboard", "dash"):
         from cli.dashboard import start_dashboard
+
         start_dashboard(port=args.port)
     elif args.cmd == "screen":
         _cmd_screen(args)

@@ -1,38 +1,33 @@
-# -*- coding: utf-8 -*-
 """
 Supabase → SQLite 同步引擎。
 
 CLI 启动时后台拉取 Supabase 数据到本地 SQLite，保证离线可用。
 """
+
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 def _get_admin_client():
     from integrations.supabase_base import create_admin_client, is_admin_configured
+
     if not is_admin_configured():
         return None
     return create_admin_client()
 
 
 def sync_recommendations(client=None) -> int:
-    from integrations.local_db import save_recommendations, update_sync_meta
     from core.constants import TABLE_RECOMMENDATION_TRACKING
+    from integrations.local_db import save_recommendations, update_sync_meta
+
     sb = client or _get_admin_client()
     if sb is None:
         return 0
-    resp = (
-        sb.table(TABLE_RECOMMENDATION_TRACKING)
-        .select("*")
-        .order("recommend_date", desc=True)
-        .limit(200)
-        .execute()
-    )
+    resp = sb.table(TABLE_RECOMMENDATION_TRACKING).select("*").order("recommend_date", desc=True).limit(200).execute()
     rows = resp.data or []
     n = save_recommendations(rows)
     update_sync_meta("recommendation_tracking", n)
@@ -40,18 +35,13 @@ def sync_recommendations(client=None) -> int:
 
 
 def sync_signals(client=None) -> int:
-    from integrations.local_db import save_signals, update_sync_meta
     from core.constants import TABLE_SIGNAL_PENDING
+    from integrations.local_db import save_signals, update_sync_meta
+
     sb = client or _get_admin_client()
     if sb is None:
         return 0
-    resp = (
-        sb.table(TABLE_SIGNAL_PENDING)
-        .select("*")
-        .order("signal_date", desc=True)
-        .limit(200)
-        .execute()
-    )
+    resp = sb.table(TABLE_SIGNAL_PENDING).select("*").order("signal_date", desc=True).limit(200).execute()
     rows = resp.data or []
     n = save_signals(rows)
     update_sync_meta("signal_pending", n)
@@ -59,18 +49,13 @@ def sync_signals(client=None) -> int:
 
 
 def sync_market_signals(client=None) -> int:
-    from integrations.local_db import save_market_signal, update_sync_meta
     from core.constants import TABLE_MARKET_SIGNAL_DAILY
+    from integrations.local_db import save_market_signal, update_sync_meta
+
     sb = client or _get_admin_client()
     if sb is None:
         return 0
-    resp = (
-        sb.table(TABLE_MARKET_SIGNAL_DAILY)
-        .select("*")
-        .order("trade_date", desc=True)
-        .limit(30)
-        .execute()
-    )
+    resp = sb.table(TABLE_MARKET_SIGNAL_DAILY).select("*").order("trade_date", desc=True).limit(30).execute()
     rows = resp.data or []
     for r in rows:
         td = str(r.get("trade_date", "")).strip()
@@ -83,6 +68,7 @@ def sync_market_signals(client=None) -> int:
 def sync_portfolio(portfolio_id: str = "USER_LIVE", client=None) -> int:
     from integrations.local_db import save_portfolio, update_sync_meta
     from integrations.supabase_portfolio import load_portfolio_state
+
     sb = client or _get_admin_client()
     if sb is None:
         return 0
@@ -109,18 +95,13 @@ def sync_portfolio(portfolio_id: str = "USER_LIVE", client=None) -> int:
 
 
 def sync_tail_buy(client=None) -> int:
-    from integrations.local_db import save_tail_buy_results, update_sync_meta
     from core.constants import TABLE_TAIL_BUY_HISTORY
+    from integrations.local_db import save_tail_buy_results, update_sync_meta
+
     sb = client or _get_admin_client()
     if sb is None:
         return 0
-    resp = (
-        sb.table(TABLE_TAIL_BUY_HISTORY)
-        .select("*")
-        .order("run_date", desc=True)
-        .limit(200)
-        .execute()
-    )
+    resp = sb.table(TABLE_TAIL_BUY_HISTORY).select("*").order("run_date", desc=True).limit(200).execute()
     rows = resp.data or []
     persistable = [
         {
@@ -147,6 +128,7 @@ def sync_tail_buy(client=None) -> int:
 def sync_all() -> dict[str, int]:
     """同步所有表。返回 {table_name: row_count}。"""
     from integrations.local_db import needs_sync
+
     result: dict[str, int] = {}
     sb = _get_admin_client()
     if sb is None:
@@ -171,9 +153,11 @@ def sync_all() -> dict[str, int]:
 
 def sync_all_background() -> None:
     """在后台线程中执行 sync_all，不阻塞主线程。"""
+
     def _run():
         try:
             from integrations.local_db import init_db
+
             init_db()
             result = sync_all()
             if result:

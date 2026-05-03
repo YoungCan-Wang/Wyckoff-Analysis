@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 """
 Agent 跨会话记忆 — 会话摘要提取 + 记忆注入。
 """
+
 from __future__ import annotations
 
 import re
@@ -19,8 +19,24 @@ _CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 _CJK_RE = re.compile(r"[一-鿿]{2,4}")
 _STOPWORDS = frozenset(
     list("的了吗呢啊哦呀吧嘛是不在有我你他它这那都也就要会")
-    + ["可以", "一个", "什么", "怎么", "如何", "看看", "一下", "帮我",
-       "请问", "能否", "可否", "这个", "那个", "我的", "你的", "现在"]
+    + [
+        "可以",
+        "一个",
+        "什么",
+        "怎么",
+        "如何",
+        "看看",
+        "一下",
+        "帮我",
+        "请问",
+        "能否",
+        "可否",
+        "这个",
+        "那个",
+        "我的",
+        "你的",
+        "现在",
+    ]
 )
 
 
@@ -62,11 +78,13 @@ def save_session_summary(messages: list[dict], provider: Any) -> None:
                 lines.append(f"[{role}] {content}")
         dialog_text = "\n".join(lines[-40:])
 
-        chunks = list(provider.chat_stream(
-            [{"role": "user", "content": dialog_text}],
-            [],
-            _SESSION_SUMMARY_PROMPT,
-        ))
+        chunks = list(
+            provider.chat_stream(
+                [{"role": "user", "content": dialog_text}],
+                [],
+                _SESSION_SUMMARY_PROMPT,
+            )
+        )
         summary = "".join(c.get("text", "") for c in chunks if c.get("type") == "text_delta")
         if not summary or len(summary) < 10:
             return

@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 """
 统一通知：飞书 + 企微 + 钉钉 + Telegram。按配置的 webhook 分别发送，互不影响。
 """
+
 from __future__ import annotations
 
 import os
@@ -9,6 +9,7 @@ import os
 import requests
 
 from integrations.tickflow_notice import append_tickflow_limit_hint
+
 # ── Telegram ──
 
 TELEGRAM_MAX_LEN = 3900
@@ -27,7 +28,7 @@ def _split_telegram_message(content: str, max_len: int = TELEGRAM_MAX_LEN) -> li
                 cur = ""
             start = 0
             while start < len(line):
-                chunks.append(line[start:start + max_len].rstrip("\n"))
+                chunks.append(line[start : start + max_len].rstrip("\n"))
                 start += max_len
             continue
         if len(cur) + len(line) <= max_len:
@@ -134,6 +135,7 @@ def send_all_webhooks(
     # 各渠道内部已做空值守卫，这里直接调用
     try:
         from utils.feishu import send_feishu_notification
+
         send_feishu_notification(feishu_url, title, content)
     except Exception as e:
         if feishu_url and feishu_url.strip():

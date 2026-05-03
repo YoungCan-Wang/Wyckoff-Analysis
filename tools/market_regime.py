@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """
 大盘水温 + 市场广度 + regime 分类工具。
 
 分析大盘指数走势，计算市场广度，输出 regime 分类并动态调整阈值。
 """
+
 from __future__ import annotations
 
 import os
@@ -24,27 +24,18 @@ CRASH_MAIN_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_MAIN_DAY_DROP_PCT", "-1.
 CRASH_SMALL_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_SMALL_DAY_DROP_PCT", "-2.5"))
 CRASH_BREADTH_RATIO_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_RATIO_PCT", "15.0"))
 CRASH_BREADTH_DELTA_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_DELTA_PCT", "-20.0"))
-PANIC_REPAIR_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_PANIC_REPAIR_MIN_AVG_AMOUNT_WAN", "7000.0")
-)
-RISK_OFF_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_RISK_OFF_MIN_AVG_AMOUNT_WAN", "8000.0")
-)
-RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN", "10000.0")
-)
-CRASH_MIN_AVG_AMOUNT_WAN = float(
-    os.getenv("FUNNEL_CRASH_MIN_AVG_AMOUNT_WAN", "12000.0")
-)
+PANIC_REPAIR_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_PANIC_REPAIR_MIN_AVG_AMOUNT_WAN", "7000.0"))
+RISK_OFF_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_RISK_OFF_MIN_AVG_AMOUNT_WAN", "8000.0"))
+RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN", "10000.0"))
+CRASH_MIN_AVG_AMOUNT_WAN = float(os.getenv("FUNNEL_CRASH_MIN_AVG_AMOUNT_WAN", "12000.0"))
 PANIC_REPAIR_ENABLE = os.getenv("FUNNEL_PANIC_REPAIR_ENABLE", "1").strip().lower() in {
-    "1", "true", "yes", "on",
+    "1",
+    "true",
+    "yes",
+    "on",
 }
-PANIC_REPAIR_MAIN_REBOUND_PCT = float(
-    os.getenv("FUNNEL_PANIC_REPAIR_MAIN_REBOUND_PCT", "0.8")
-)
-PANIC_REPAIR_SMALL_REBOUND_PCT = float(
-    os.getenv("FUNNEL_PANIC_REPAIR_SMALL_REBOUND_PCT", "1.5")
-)
+PANIC_REPAIR_MAIN_REBOUND_PCT = float(os.getenv("FUNNEL_PANIC_REPAIR_MAIN_REBOUND_PCT", "0.8"))
+PANIC_REPAIR_SMALL_REBOUND_PCT = float(os.getenv("FUNNEL_PANIC_REPAIR_SMALL_REBOUND_PCT", "1.5"))
 FUNNEL_EVR_POLICY = os.getenv("FUNNEL_EVR_POLICY", "all_regimes").strip().lower()
 
 
@@ -206,9 +197,7 @@ def analyze_benchmark_and_tune_cfg(
             s_recent3 = s["pct_chg"].dropna().tail(3)
             small_recent3_list = [float(x) for x in s_recent3.tolist()]
             if not s_recent3.empty:
-                small_recent3_cum = float(
-                    ((s_recent3 / 100.0 + 1.0).prod() - 1.0) * 100.0
-                )
+                small_recent3_cum = float(((s_recent3 / 100.0 + 1.0).prod() - 1.0) * 100.0)
             if small_recent3_list:
                 small_today_pct = float(small_recent3_list[-1])
                 if len(small_recent3_list) >= 2:
@@ -222,15 +211,8 @@ def analyze_benchmark_and_tune_cfg(
         and recent3_cum is not None
         and close is not None
     ):
-        risk_off = (
-            (close < ma200)
-            and (ma50 < ma200)
-            and (ma50_slope_5d < 0)
-            and (recent3_cum <= -2.0)
-        )
-        risk_on = (
-            (close > ma50 > ma200) and (ma50_slope_5d > 0) and (recent3_cum >= 0.0)
-        )
+        risk_off = (close < ma200) and (ma50 < ma200) and (ma50_slope_5d < 0) and (recent3_cum <= -2.0)
+        risk_on = (close > ma50 > ma200) and (ma50_slope_5d > 0) and (recent3_cum >= 0.0)
         if risk_off:
             regime = "RISK_OFF"
         elif risk_on:
@@ -258,39 +240,23 @@ def analyze_benchmark_and_tune_cfg(
 
     panic_reasons: list[str] = []
     if main_today_pct is not None and float(main_today_pct) <= float(CRASH_MAIN_DAY_DROP_PCT):
-        panic_reasons.append(
-            f"main_day_drop={main_today_pct:.2f}%<=阈值{CRASH_MAIN_DAY_DROP_PCT:.2f}%"
-        )
+        panic_reasons.append(f"main_day_drop={main_today_pct:.2f}%<=阈值{CRASH_MAIN_DAY_DROP_PCT:.2f}%")
     if small_today_pct is not None and float(small_today_pct) <= float(CRASH_SMALL_DAY_DROP_PCT):
-        panic_reasons.append(
-            f"smallcap_day_drop={small_today_pct:.2f}%<=阈值{CRASH_SMALL_DAY_DROP_PCT:.2f}%"
-        )
+        panic_reasons.append(f"smallcap_day_drop={small_today_pct:.2f}%<=阈值{CRASH_SMALL_DAY_DROP_PCT:.2f}%")
     if breadth_ratio is not None and float(breadth_ratio) <= float(CRASH_BREADTH_RATIO_PCT):
-        panic_reasons.append(
-            f"breadth_ratio={float(breadth_ratio):.2f}%<=阈值{CRASH_BREADTH_RATIO_PCT:.2f}%"
-        )
+        panic_reasons.append(f"breadth_ratio={float(breadth_ratio):.2f}%<=阈值{CRASH_BREADTH_RATIO_PCT:.2f}%")
     if breadth_delta is not None and float(breadth_delta) <= float(CRASH_BREADTH_DELTA_PCT):
-        panic_reasons.append(
-            f"breadth_delta={float(breadth_delta):.2f}%<=阈值{CRASH_BREADTH_DELTA_PCT:.2f}%"
-        )
+        panic_reasons.append(f"breadth_delta={float(breadth_delta):.2f}%<=阈值{CRASH_BREADTH_DELTA_PCT:.2f}%")
     repair_reasons: list[str] = []
     if panic_reasons:
         regime = "CRASH"
     elif PANIC_REPAIR_ENABLE:
         # 改进逻辑：支持连续反弹（前 1-2 天是 CRASH，最近 1-2 天反弹）
-        prev_panic = (
-            (main_prev_pct is not None and float(main_prev_pct) <= float(CRASH_MAIN_DAY_DROP_PCT))
-            or (
-                small_prev_pct is not None
-                and float(small_prev_pct) <= float(CRASH_SMALL_DAY_DROP_PCT)
-            )
+        prev_panic = (main_prev_pct is not None and float(main_prev_pct) <= float(CRASH_MAIN_DAY_DROP_PCT)) or (
+            small_prev_pct is not None and float(small_prev_pct) <= float(CRASH_SMALL_DAY_DROP_PCT)
         )
-        rebound_ok = (
-            (main_today_pct is not None and float(main_today_pct) >= float(PANIC_REPAIR_MAIN_REBOUND_PCT))
-            or (
-                small_today_pct is not None
-                and float(small_today_pct) >= float(PANIC_REPAIR_SMALL_REBOUND_PCT)
-            )
+        rebound_ok = (main_today_pct is not None and float(main_today_pct) >= float(PANIC_REPAIR_MAIN_REBOUND_PCT)) or (
+            small_today_pct is not None and float(small_today_pct) >= float(PANIC_REPAIR_SMALL_REBOUND_PCT)
         )
         # 连续反弹：最近 2 日都反弹
         continuous_rebound = False
@@ -366,34 +332,20 @@ def analyze_benchmark_and_tune_cfg(
             price_zone = "高位回撤区"
         else:
             price_zone = "震荡博弈区"
-    ratio_text = (
-        f"{main_vol_ratio_5_20:.2f}x"
-        if main_vol_ratio_5_20 is not None
-        else "未知"
-    )
-    market_pv_summary = (
-        f"沪深300近5日均量/20日均量={ratio_text}（{main_volume_state}），"
-        f"当前位于{price_zone}。"
-    )
+    ratio_text = f"{main_vol_ratio_5_20:.2f}x" if main_vol_ratio_5_20 is not None else "未知"
+    market_pv_summary = f"沪深300近5日均量/20日均量={ratio_text}（{main_volume_state}），当前位于{price_zone}。"
     if regime == "RISK_ON":
         market_pv_outlook = (
-            "次日推演：若量能维持在20日均量0.95x上方且不破MA50，"
-            "偏强震荡延续概率更高；若放量跌破MA50，需转入防守。"
+            "次日推演：若量能维持在20日均量0.95x上方且不破MA50，偏强震荡延续概率更高；若放量跌破MA50，需转入防守。"
         )
     elif regime == "PANIC_REPAIR":
-        market_pv_outlook = (
-            "次日推演：修复阶段以确认强度为先，若放量站稳MA50可继续修复；"
-            "若缩量冲高回落，按反抽处理。"
-        )
+        market_pv_outlook = "次日推演：修复阶段以确认强度为先，若放量站稳MA50可继续修复；若缩量冲高回落，按反抽处理。"
     elif regime == "NEUTRAL":
         market_pv_outlook = (
             "次日推演：中性震荡为主，等待\u201c放量突破近高\u201d或\u201c放量跌破MA50\u201d后再确认方向。"
         )
     elif regime in {"RISK_OFF", "CRASH"}:
-        market_pv_outlook = (
-            "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；"
-            "仅在缩量止跌后再评估试探。"
-        )
+        market_pv_outlook = "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；仅在缩量止跌后再评估试探。"
     else:
         market_pv_outlook = "次日推演：结构信息不足，先观察量能与MA50得失再定方向。"
 

@@ -1,17 +1,17 @@
 import os
-
-import streamlit as st
-from datetime import date, timedelta
 import time
+from datetime import date, timedelta
+
 import akshare as ak
 import pandas as pd
+import streamlit as st
+
+from app.layout import is_data_source_failure_message, setup_page, show_user_error
+from app.navigation import show_right_nav
+from app.ui_helpers import show_page_loading
 from core.export_artifacts import cleanup_export_artifacts, file_loader, write_dataframe_csv
 from integrations.fetch_a_share_csv import get_all_stocks
 from integrations.stock_hist_repository import get_stock_hist
-from app.layout import is_data_source_failure_message, setup_page, show_user_error
-from app.ui_helpers import show_page_loading
-from app.navigation import show_right_nav
-
 
 setup_page(page_title="自定义导出", page_icon="🧰")
 
@@ -76,9 +76,7 @@ with content_col:
 
     source_select_key = "custom_export::selected_label"
     prev_selected_label = st.session_state.get(source_select_key, "")
-    selected_label = st.selectbox(
-        "数据源", options=[s["label"] for s in SOURCES], key=source_select_key
-    )
+    selected_label = st.selectbox("数据源", options=[s["label"] for s in SOURCES], key=source_select_key)
     source = source_labels[selected_label]
     st.caption(source["help"])
 
@@ -87,7 +85,6 @@ with content_col:
         st.session_state.custom_export_source_id = ""
         st.session_state.custom_export_selected_signature = ""
         st.session_state.custom_export_selected_path = ""
-
 
     today = date.today()
 
@@ -101,7 +98,6 @@ with content_col:
         items = get_all_stocks()
         return {x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)}
 
-
     @st.cache_data(ttl=300, show_spinner=False, max_entries=1)
     def _etf_name_map() -> dict[str, str]:
         try:
@@ -109,7 +105,6 @@ with content_col:
             return {str(c): str(n) for c, n in zip(df["代码"], df["名称"])}
         except Exception:
             return {}
-
 
     INDEX_CHOICES = [
         {"label": "上证指数", "code": "000001"},
@@ -164,9 +159,7 @@ with content_col:
             adjust = st.selectbox(
                 "复权类型",
                 options=["", "qfq", "hfq"],
-                format_func=lambda x: "不复权"
-                if x == ""
-                else ("前复权" if x == "qfq" else "后复权"),
+                format_func=lambda x: "不复权" if x == "" else ("前复权" if x == "qfq" else "后复权"),
                 index=0,
             )
 
@@ -193,9 +186,7 @@ with content_col:
                             context="web",
                         )
                     elif source["id"] == "index_zh_a_hist":
-                        df = source["fn"](
-                            symbol=symbol, period="daily", start_date=sd, end_date=ed
-                        )
+                        df = source["fn"](symbol=symbol, period="daily", start_date=sd, end_date=ed)
                     else:
                         df = source["fn"](
                             symbol=symbol,
@@ -239,9 +230,7 @@ with content_col:
     total_rows = int((payload.get("shape") or [0, 0])[0])
     total_cols = int((payload.get("shape") or [0, 0])[1])
     preview_rows = payload.get("preview_rows") or []
-    preview_df = (
-        None if not preview_rows else pd.DataFrame(preview_rows, columns=payload.get("columns") or None)
-    )
+    preview_df = None if not preview_rows else pd.DataFrame(preview_rows, columns=payload.get("columns") or None)
     all_columns = [str(c) for c in (payload.get("columns") or [])]
     csv_path = str(payload.get("csv_path") or "")
     if not csv_path or not os.path.exists(csv_path):
@@ -255,7 +244,6 @@ with content_col:
     )
     if preview_df is not None:
         st.dataframe(preview_df, width="stretch", height=420)
-
 
     st.subheader("✅ 可选内容")
     filter_text = st.text_input("字段筛选", value="", placeholder="输入字段名关键词过滤")
@@ -284,9 +272,7 @@ with content_col:
         with cols[i % 4]:
             st.checkbox(str(c), key=state_key_prefix + str(c))
 
-    selected_cols = [
-        c for c in columns if st.session_state.get(state_key_prefix + str(c), False)
-    ]
+    selected_cols = [c for c in columns if st.session_state.get(state_key_prefix + str(c), False)]
     if not selected_cols:
         st.warning("请至少选择 1 个字段。")
         st.stop()
@@ -330,4 +316,3 @@ with content_col:
         mime="text/csv",
         width="stretch",
     )
-

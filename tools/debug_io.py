@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 模型输入/输出 debug 落盘工具。
 
 step3 / step4 共用的 _dump_model_input 统一提取至此。
 通过 DEBUG_MODEL_IO / DEBUG_MODEL_IO_FULL 环境变量启用。
 """
+
 from __future__ import annotations
 
 import os
@@ -12,10 +12,16 @@ import re
 from datetime import datetime
 
 DEBUG_MODEL_IO: bool = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {
-    "1", "true", "yes", "on",
+    "1",
+    "true",
+    "yes",
+    "on",
 }
 DEBUG_MODEL_IO_FULL: bool = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {
-    "1", "true", "yes", "on",
+    "1",
+    "true",
+    "yes",
+    "on",
 }
 
 
@@ -75,12 +81,7 @@ def dump_model_input(
         f"[{step_prefix}] user_message_len={len(user_message)}\n"
     )
     if DEBUG_MODEL_IO_FULL:
-        body += (
-            "\n===== SYSTEM PROMPT =====\n"
-            f"{system_prompt}\n"
-            "\n===== USER MESSAGE =====\n"
-            f"{user_message}\n"
-        )
+        body += f"\n===== SYSTEM PROMPT =====\n{system_prompt}\n\n===== USER MESSAGE =====\n{user_message}\n"
     with open(path, "w", encoding="utf-8") as f:
         f.write(body)
     print(f"[{step_prefix}] 模型输入已落盘: {path}")

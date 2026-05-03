@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """Deterministic harness for agent loop tests."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
@@ -8,7 +8,6 @@ from typing import Any
 
 from cli.agent import run
 from cli.providers.base import LLMProvider
-
 
 Chunk = dict[str, Any]
 RoundScript = list[Chunk] | Callable[[list[dict[str, Any]], list[dict[str, Any]], str], list[Chunk]]
@@ -62,13 +61,17 @@ class StubToolRegistry:
         schemas: list[dict[str, Any]] | None = None,
         tool_results: dict[str, Any] | None = None,
     ):
-        self._schemas = deepcopy(schemas) if schemas is not None else [
-            {
-                "name": "portfolio",
-                "description": "Mock portfolio tool",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        ]
+        self._schemas = (
+            deepcopy(schemas)
+            if schemas is not None
+            else [
+                {
+                    "name": "portfolio",
+                    "description": "Mock portfolio tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            ]
+        )
         self._tool_results = tool_results or {}
         self.calls: list[dict[str, Any]] = []
 
@@ -109,9 +112,7 @@ class AgentLoopHarness:
             tools=self.tools,
             messages=working_messages,
             system_prompt=system_prompt,
-            on_tool_call=lambda name, args: observed_tool_calls.append(
-                {"name": name, "args": deepcopy(args)}
-            ),
+            on_tool_call=lambda name, args: observed_tool_calls.append({"name": name, "args": deepcopy(args)}),
             on_tool_result=lambda name, result: observed_tool_results.append(
                 {"name": name, "result": deepcopy(result)}
             ),

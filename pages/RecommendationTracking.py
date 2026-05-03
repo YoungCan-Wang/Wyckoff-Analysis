@@ -1,21 +1,25 @@
-# -*- coding: utf-8 -*-
 """推荐跟踪页面。"""
+
 from datetime import date, datetime
+
 import pandas as pd
 import streamlit as st
 
 from app.layout import setup_page
 from app.navigation import show_right_nav
 from app.ui_helpers import show_page_loading
-from integrations.supabase_recommendation import load_recommendation_tracking
 from integrations.supabase_client import get_supabase_client
+from integrations.supabase_recommendation import load_recommendation_tracking
 
 setup_page(page_title="推荐跟踪", page_icon="🎯")
 
+
 def _format_pct(val):
-    if val is None: return "-"
+    if val is None:
+        return "-"
     color = "red" if val > 0 else "green" if val < 0 else "gray"
     return f":{color}[{val:+.2f}%]"
+
 
 content_col = show_right_nav()
 
@@ -53,9 +57,7 @@ with content_col:
     if "funnel_score" not in df.columns:
         df["funnel_score"] = pd.NA
     df["is_ai_recommended"] = (
-        df["is_ai_recommended"]
-        .apply(lambda x: str(x).strip().lower() in {"1", "true", "t", "yes", "y"})
-        .astype(bool)
+        df["is_ai_recommended"].apply(lambda x: str(x).strip().lower() in {"1", "true", "t", "yes", "y"}).astype(bool)
     )
     df["funnel_score"] = pd.to_numeric(df["funnel_score"], errors="coerce")
     df["initial_price"] = pd.to_numeric(df.get("initial_price"), errors="coerce")
@@ -65,7 +67,7 @@ with content_col:
         df["recommend_count"] = 1
     df["recommend_count"] = pd.to_numeric(df.get("recommend_count"), errors="coerce").fillna(1).astype(int)
     df["recommend_date"] = pd.to_numeric(df.get("recommend_date"), errors="coerce").fillna(0).astype(int)
-    
+
     # 格式化日期 (INT YYYYMMDD -> YYYY-MM-DD str)
     def _parse_date(v: int):
         s = str(int(v))
@@ -84,11 +86,11 @@ with content_col:
 
     today = date.today()
     df["recommend_date_dt"] = df["recommend_date"].apply(_parse_date)
-    df['recommend_date_str'] = df['recommend_date'].apply(_format_date)
+    df["recommend_date_str"] = df["recommend_date"].apply(_format_date)
 
     # 格式化代码 (INT -> 000001 str)
     df["code"] = pd.to_numeric(df.get("code"), errors="coerce").fillna(0).astype(int)
-    df['display_code'] = df['code'].apply(lambda x: f"{int(x):06d}")
+    df["display_code"] = df["code"].apply(lambda x: f"{int(x):06d}")
 
     # ── 同一只股票去重：按 code 聚合，只保留最新一条，推荐次数取最大值 ──
     df = df.sort_values("recommend_date", ascending=False)
@@ -100,8 +102,8 @@ with content_col:
         "initial_price": "first",
         "current_price": "first",
         "change_pct": "first",
-        "is_ai_recommended": "any",       # 任意一次被 AI 推荐过就标 True
-        "recommend_count": "max",          # 取最大推荐次数
+        "is_ai_recommended": "any",  # 任意一次被 AI 推荐过就标 True
+        "recommend_count": "max",  # 取最大推荐次数
         "recommend_reason": "first",
         "funnel_score": "first",
         "display_code": "first",
@@ -110,16 +112,14 @@ with content_col:
     agg_map = {k: v for k, v in agg_map.items() if k in df.columns}
     df = df.groupby("code", as_index=False).agg(agg_map)
 
-    df["days_since_recommend"] = df["recommend_date_dt"].apply(
-        lambda d: (today - d).days if d is not None else pd.NA
-    )
+    df["days_since_recommend"] = df["recommend_date_dt"].apply(lambda d: (today - d).days if d is not None else pd.NA)
 
     # 3. 统计指标 (KPIs)
     st.markdown("### 📊 表现摘要")
     col1, col2, col3, col4, col5 = st.columns(5)
-    avg_change = df['change_pct'].mean()
-    max_change = df['change_pct'].max()
-    min_change = df['change_pct'].min()
+    avg_change = df["change_pct"].mean()
+    max_change = df["change_pct"].max()
+    min_change = df["change_pct"].min()
     total_recommend_events = int(df["recommend_count"].sum())
 
     col1.metric("覆盖股票数", f"{len(df)} 支")
@@ -133,13 +133,13 @@ with content_col:
     # 4. 搜索与排序增强
     st.markdown("### 🔍 筛选与搜索")
     search_col, ai_col, sort_col, order_col = st.columns([2, 1, 1, 1])
-    
+
     with search_col:
         search_query = st.text_input("搜索代码或名字", placeholder="输入 000001 或 平安银行...", key="rec_search")
 
     with ai_col:
         only_ai = st.checkbox("只看AI推荐", value=False, key="rec_only_ai")
-    
+
     with sort_col:
         sort_by = st.selectbox(
             "排序",
@@ -157,7 +157,7 @@ with content_col:
             | (filtered_df["name"].astype(str).str.contains(search_query, na=False))
         ]
     if only_ai:
-        filtered_df = filtered_df[filtered_df["is_ai_recommended"] == True]
+        filtered_df = filtered_df[filtered_df["is_ai_recommended"]]
 
     # 排序：默认多级（涨幅高→低，同涨幅推荐次数高→低，同则 AI 在上，同则日期新→旧，同则分值高→低，同则现价高→低）
     if sort_by == "默认（涨幅→推荐次数→AI→日期→分值→现价）":
@@ -188,43 +188,60 @@ with content_col:
 
     # 5. 结果展示
     # 构建最终展示的列表
-    display_df = filtered_df[[
-        'display_code',
-        'name',
-        'change_pct',
-        'initial_price',
-        'current_price',
-        'is_ai_recommended',
-        'recommend_count',
-        'days_since_recommend',
-        'recommend_date_str',
-        'recommend_reason',
-        'funnel_score',
-    ]].copy()
+    display_df = filtered_df[
+        [
+            "display_code",
+            "name",
+            "change_pct",
+            "initial_price",
+            "current_price",
+            "is_ai_recommended",
+            "recommend_count",
+            "days_since_recommend",
+            "recommend_date_str",
+            "recommend_reason",
+            "funnel_score",
+        ]
+    ].copy()
     display_df["is_ai_recommended"] = display_df["is_ai_recommended"].map(lambda x: "是" if bool(x) else "否")
 
     display_df.columns = [
-        "代码", "名称", "累计涨跌幅", "加入价", "当前价", "AI推荐", "推荐次数", "加入推荐天数", "推荐日期", "推荐原因", "推荐分值"
+        "代码",
+        "名称",
+        "累计涨跌幅",
+        "加入价",
+        "当前价",
+        "AI推荐",
+        "推荐次数",
+        "加入推荐天数",
+        "推荐日期",
+        "推荐原因",
+        "推荐分值",
     ]
 
     # 使用 dataframe 渲染，增加一些样式建议
     st.dataframe(
-        display_df.style.format({
-            "加入推荐天数": lambda v: "-" if pd.isna(v) else f"{int(v)}",
-            "推荐分值": lambda v: "-" if pd.isna(v) else f"{float(v):.2f}",
-            "加入价": "{:.2f}",
-            "当前价": "{:.2f}",
-            "累计涨跌幅": "{:+.2f}%"
-        }).map(
-            lambda v: "color: red;" if isinstance(v, str) and "+" in v else ("color: green;" if isinstance(v, str) and "-" in v else ""),
-            subset=["累计涨跌幅"]
-        ).map(
-            lambda v: "color: #16a34a; font-weight: 700;" if v == "是" else "color: #6b7280;",
-            subset=["AI推荐"]
-        ),
+        display_df.style.format(
+            {
+                "加入推荐天数": lambda v: "-" if pd.isna(v) else f"{int(v)}",
+                "推荐分值": lambda v: "-" if pd.isna(v) else f"{float(v):.2f}",
+                "加入价": "{:.2f}",
+                "当前价": "{:.2f}",
+                "累计涨跌幅": "{:+.2f}%",
+            }
+        )
+        .map(
+            lambda v: (
+                "color: red;"
+                if isinstance(v, str) and "+" in v
+                else ("color: green;" if isinstance(v, str) and "-" in v else "")
+            ),
+            subset=["累计涨跌幅"],
+        )
+        .map(lambda v: "color: #16a34a; font-weight: 700;" if v == "是" else "color: #6b7280;", subset=["AI推荐"]),
         use_container_width=True,
         hide_index=True,
-        height=600
+        height=600,
     )
 
     if st.button("🔄 手动刷新数据"):

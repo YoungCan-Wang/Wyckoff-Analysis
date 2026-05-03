@@ -3,9 +3,10 @@ import html
 import streamlit as st
 
 from app.auth_component import check_auth, login_form
-from core.token_storage import restore_tokens_from_storage, persist_tokens_to_storage, ensure_query_params_synced
-from integrations.supabase_market_signal import compose_market_banner, load_latest_market_signal_daily
+from core.token_storage import ensure_query_params_synced, restore_tokens_from_storage
 from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
+from integrations.supabase_market_signal import compose_market_banner, load_latest_market_signal_daily
+
 
 def _set_default(key: str, value) -> None:
     if key not in st.session_state or st.session_state.get(key) is None:
@@ -28,14 +29,25 @@ def init_session_state() -> None:
 
     # 用户敏感配置不从环境变量兜底，避免跨账号污染
     for key in (
-        "feishu_webhook", "wecom_webhook", "dingtalk_webhook",
-        "gemini_api_key", "tushare_token", "tg_bot_token", "tg_chat_id",
-        "openai_api_key", "openai_model",
-        "zhipu_api_key", "zhipu_model",
-        "minimax_api_key", "minimax_model",
-        "deepseek_api_key", "deepseek_model",
-        "qwen_api_key", "qwen_model",
-        "volcengine_api_key", "volcengine_model",
+        "feishu_webhook",
+        "wecom_webhook",
+        "dingtalk_webhook",
+        "gemini_api_key",
+        "tushare_token",
+        "tg_bot_token",
+        "tg_chat_id",
+        "openai_api_key",
+        "openai_model",
+        "zhipu_api_key",
+        "zhipu_model",
+        "minimax_api_key",
+        "minimax_model",
+        "deepseek_api_key",
+        "deepseek_model",
+        "qwen_api_key",
+        "qwen_model",
+        "volcengine_api_key",
+        "volcengine_model",
     ):
         _set_default(key, "")
 

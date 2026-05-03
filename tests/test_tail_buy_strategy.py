@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from datetime import datetime
@@ -175,8 +174,18 @@ def test_merge_rule_and_llm_keeps_non_top_symbols_on_rule_decision():
     )
 
     llm_map = {
-        "002217": {"decision": DECISION_BUY, "reason": "尾盘再加速", "confidence": 0.76, "model_used": "nvidia-kimi:moonshot"},
-        "301090": {"decision": DECISION_WATCH, "reason": "高位波动扩大", "confidence": 0.64, "model_used": "gemini:flash"},
+        "002217": {
+            "decision": DECISION_BUY,
+            "reason": "尾盘再加速",
+            "confidence": 0.76,
+            "model_used": "nvidia-kimi:moonshot",
+        },
+        "301090": {
+            "decision": DECISION_WATCH,
+            "reason": "高位波动扩大",
+            "confidence": 0.64,
+            "model_used": "gemini:flash",
+        },
     }
     merged = merge_rule_and_llm([c1, c2, c3], llm_map)
     by_code = {x.code: x for x in merged}
@@ -351,12 +360,20 @@ def test_normalize_signal_score_sos_scales():
 def test_auto_style_selects_by_signal_type():
     strong_df = _make_intraday_df(start=10.0, end=10.9, tail_boost=0.8, tail_volume_mult=2.0)
     spring_c = TailBuyCandidate(
-        code="301090", name="T", signal_date="2026-04-20",
-        status="confirmed", signal_type="spring", signal_score=5.0,
+        code="301090",
+        name="T",
+        signal_date="2026-04-20",
+        status="confirmed",
+        signal_type="spring",
+        signal_score=5.0,
     )
     sos_c = TailBuyCandidate(
-        code="002217", name="T", signal_date="2026-04-20",
-        status="confirmed", signal_type="sos", signal_score=4.0,
+        code="002217",
+        name="T",
+        signal_date="2026-04-20",
+        status="confirmed",
+        signal_type="sos",
+        signal_score=4.0,
     )
     spring_out = evaluate_rule_decision(spring_c, strong_df)
     sos_out = evaluate_rule_decision(sos_c, strong_df)
@@ -400,27 +417,40 @@ def test_build_tail_buy_markdown_truncates_error_items_over_limit():
 def test_tail_buy_history_save_and_load(tmp_path, monkeypatch):
     monkeypatch.setattr("core.constants.LOCAL_DB_PATH", tmp_path / "test.db")
     from integrations import local_db
+
     local_db._conn = None  # reset singleton
     local_db.init_db()
 
-    from integrations.local_db import save_tail_buy_results, load_tail_buy_history
+    from integrations.local_db import load_tail_buy_history, save_tail_buy_results
 
     rows = [
         {
-            "code": "301090", "name": "华润材料",
-            "run_date": "2026-04-25", "signal_date": "2026-04-24",
-            "signal_type": "spring", "status": "confirmed",
-            "final_decision": "BUY", "rule_score": 78.5,
-            "priority_score": 90.5, "rule_reasons": '["尾盘走强"]',
-            "llm_decision": "BUY", "llm_reason": "强势回踩",
+            "code": "301090",
+            "name": "华润材料",
+            "run_date": "2026-04-25",
+            "signal_date": "2026-04-24",
+            "signal_type": "spring",
+            "status": "confirmed",
+            "final_decision": "BUY",
+            "rule_score": 78.5,
+            "priority_score": 90.5,
+            "rule_reasons": '["尾盘走强"]',
+            "llm_decision": "BUY",
+            "llm_reason": "强势回踩",
         },
         {
-            "code": "002217", "name": "合力泰",
-            "run_date": "2026-04-25", "signal_date": "2026-04-24",
-            "signal_type": "sos", "status": "pending",
-            "final_decision": "WATCH", "rule_score": 55.0,
-            "priority_score": 58.0, "rule_reasons": '["量能一般"]',
-            "llm_decision": "WATCH", "llm_reason": "",
+            "code": "002217",
+            "name": "合力泰",
+            "run_date": "2026-04-25",
+            "signal_date": "2026-04-24",
+            "signal_type": "sos",
+            "status": "pending",
+            "final_decision": "WATCH",
+            "rule_score": 55.0,
+            "priority_score": 58.0,
+            "rule_reasons": '["量能一般"]',
+            "llm_decision": "WATCH",
+            "llm_reason": "",
         },
     ]
     saved = save_tail_buy_results(rows)

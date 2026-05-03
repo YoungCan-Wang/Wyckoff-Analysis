@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 进程内 Agent 执行器 — 替代 GitHub Actions dispatch 的本地模式。
 
@@ -14,12 +13,13 @@
   - 本模式不适合 Community Cloud（内存受限），推荐本地或自建部署使用
   - GH Actions cron 定时任务不受影响，仍走 daily_job.py
 """
+
 from __future__ import annotations
 
 import logging
 import threading
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -66,39 +66,47 @@ def _store_append_stage(run_id: str, stage_dict: dict[str, Any]) -> None:
 
 def _run_job(job_kind: str, run_id: str, payload: dict[str, Any]) -> None:
     """在 daemon thread 中执行后台任务。"""
-    _store_update(run_id, {"status": "in_progress", "started_at": datetime.now(timezone.utc).isoformat()})
+    _store_update(run_id, {"status": "in_progress", "started_at": datetime.now(UTC).isoformat()})
 
     try:
         if job_kind == "funnel_screen":
-            from scripts.web_background_job import _run_funnel_screen, _apply_funnel_env
+            from scripts.web_background_job import _apply_funnel_env, _run_funnel_screen
+
             _apply_funnel_env(payload)
             result = _run_funnel_screen(run_id, payload)
         elif job_kind == "batch_ai_report":
             from scripts.web_background_job import _run_batch_ai_report
+
             result = _run_batch_ai_report(run_id, payload)
         else:
             raise ValueError(f"不支持的 job_kind: {job_kind}")
 
-        _store_update(run_id, {
-            "status": "completed",
-            "result": result,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
+        _store_update(
+            run_id,
+            {
+                "status": "completed",
+                "result": result,
+                "completed_at": datetime.now(UTC).isoformat(),
+            },
+        )
         logger.info("[agent_jobs] %s completed: run_id=%s", job_kind, run_id)
 
     except Exception as e:
         logger.exception("[agent_jobs] %s failed: run_id=%s", job_kind, run_id)
-        _store_update(run_id, {
-            "status": "failed",
-            "result": {
-                "request_id": run_id,
-                "job_kind": job_kind,
-                "ok": False,
-                "error": str(e),
-                "traceback": traceback.format_exc(),
+        _store_update(
+            run_id,
+            {
+                "status": "failed",
+                "result": {
+                    "request_id": run_id,
+                    "job_kind": job_kind,
+                    "ok": False,
+                    "error": str(e),
+                    "traceback": traceback.format_exc(),
+                },
+                "completed_at": datetime.now(UTC).isoformat(),
             },
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
+        )
 
 
 def submit_agent_job(job_kind: str, payload: dict[str, Any], *, state_key: str) -> str:
@@ -202,6 +210,7 @@ class _FakeRun:
 def agent_mode_enabled() -> bool:
     """检查是否启用了 AGENT_MODE（进程内执行模式）。"""
     import os
+
     return os.environ.get("AGENT_MODE", "").strip().lower() in ("1", "true", "yes")
 
 
@@ -218,5 +227,3 @@ def agent_mode_ready_for_current_user() -> tuple[bool, str]:
     if not user_id:
         return (False, "当前未登录")
     return (True, "")
-
-

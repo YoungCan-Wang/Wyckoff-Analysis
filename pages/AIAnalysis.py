@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI 分析页：单股大师模式（本地深度分析 + 图表生成）。"""
 
 import streamlit as st
@@ -7,7 +6,6 @@ from app.layout import setup_page
 from app.navigation import show_right_nav
 from app.single_stock_logic import render_single_stock_page
 from integrations.llm_client import (
-    DEFAULT_GEMINI_MODEL,
     GEMINI_MODELS,
     OPENAI_COMPATIBLE_BASE_URLS,
     PROVIDER_LABELS,
@@ -15,9 +13,7 @@ from integrations.llm_client import (
     get_provider_credentials,
 )
 
-AI_ANALYSIS_DEFAULT_FEISHU_WEBHOOK = (
-    "https://open.feishu.cn/open-apis/bot/v2/hook/4ef56ec3-fb84-4eb4-b4d9-775ae7de69ff"
-)
+AI_ANALYSIS_DEFAULT_FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/4ef56ec3-fb84-4eb4-b4d9-775ae7de69ff"
 
 
 def _resolve_ai_analysis_feishu_webhook() -> str:
@@ -80,8 +76,7 @@ content_col = show_right_nav()
 with content_col:
     st.title("🤖 大师模式")
     st.markdown(
-        "单股深度分析 — 七位虚拟投委会大师联合会诊（默认近 320 个交易日）。"
-        " 批量研报请到 [读盘室](/) 用对话触发。"
+        "单股深度分析 — 七位虚拟投委会大师联合会诊（默认近 320 个交易日）。 批量研报请到 [读盘室](/) 用对话触发。"
     )
 
     effective_feishu_webhook = _resolve_ai_analysis_feishu_webhook()
@@ -107,9 +102,7 @@ with content_col:
         ).strip()
         effective_single_base_url = single_base_url_input or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "")
     if not api_key:
-        st.warning(
-            f"需要 {PROVIDER_LABELS.get(provider, provider)} API Key，请先在设置页录入或配置环境变量。"
-        )
+        st.warning(f"需要 {PROVIDER_LABELS.get(provider, provider)} API Key，请先在设置页录入或配置环境变量。")
         st.page_link("pages/Settings.py", label="前往设置", icon="⚙️")
         st.stop()
     if provider == "gemini":

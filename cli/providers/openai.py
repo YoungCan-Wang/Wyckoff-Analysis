@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 """OpenAI Provider — openai SDK 实现。"""
+
 from __future__ import annotations
 
 import json
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 
 import httpx
 import openai
@@ -134,9 +135,11 @@ class OpenAIProvider(LLMProvider):
         # 兜底：某些模型（如 kimi-k2 via NVIDIA）会把 tool call 输出为文本标签
         if not tool_map and "<tool_call>" in text_buf:
             import re
+
             for m in re.finditer(
                 r"<tool_call>\s*\{.*?\"name\"\s*:\s*\"([^\"]+)\".*?\"arguments\"\s*:\s*(\{.*?\})\s*\}\s*</tool_call>",
-                text_buf, re.DOTALL,
+                text_buf,
+                re.DOTALL,
             ):
                 fname, fargs_str = m.group(1), m.group(2)
                 try:
@@ -201,11 +204,13 @@ class OpenAIProvider(LLMProvider):
                 result = msg["content"]
                 if not isinstance(result, str):
                     result = json.dumps(result, ensure_ascii=False)
-                oai_msgs.append({
-                    "role": "tool",
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                    "content": result,
-                })
+                oai_msgs.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.get("tool_call_id", ""),
+                        "content": result,
+                    }
+                )
 
         return oai_msgs
 
@@ -235,11 +240,13 @@ class OpenAIProvider(LLMProvider):
                     args = json.loads(tc.function.arguments)
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                tool_calls.append({
-                    "id": tc.id,
-                    "name": tc.function.name,
-                    "args": args,
-                })
+                tool_calls.append(
+                    {
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "args": args,
+                    }
+                )
             return {
                 "type": "tool_calls",
                 "tool_calls": tool_calls,

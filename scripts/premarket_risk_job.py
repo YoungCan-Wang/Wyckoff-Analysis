@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 盘前风控任务（周一到周五 07:00, Asia/Shanghai）：
 - 富时 A50（akshare）
@@ -6,6 +5,7 @@
 
 仅输出风控结论并通知飞书，不执行选股与下单。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +19,6 @@ from io import StringIO
 from zoneinfo import ZoneInfo
 
 import requests
-
 
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
@@ -151,9 +150,7 @@ def _ensure_vix_fresh(raw_date: object, source: str, now: datetime | None = None
         raise RuntimeError(f"{source} date invalid: {raw_date}")
     expected_date = _latest_expected_us_trade_date(now=now)
     if trade_date < expected_date:
-        raise RuntimeError(
-            f"{source} stale: latest={trade_date.isoformat()} < expected={expected_date.isoformat()}"
-        )
+        raise RuntimeError(f"{source} stale: latest={trade_date.isoformat()} < expected={expected_date.isoformat()}")
     return trade_date
 
 
@@ -167,8 +164,9 @@ def _fetch_a50() -> dict:
         "error": None,
     }
     try:
-        import akshare as ak
         import time
+
+        import akshare as ak
 
         last_err = None
         for _ in range(3):
@@ -318,16 +316,9 @@ def _fetch_vix_yahoo() -> dict:
         resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         payload = resp.json()
-        result = (
-            payload.get("chart", {})
-            .get("result", [{}])[0]
-        )
+        result = payload.get("chart", {}).get("result", [{}])[0]
         timestamps = result.get("timestamp") or []
-        closes = (
-            result.get("indicators", {})
-            .get("quote", [{}])[0]
-            .get("close", [])
-        )
+        closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
         valid = []
         for ts, c in zip(timestamps, closes):
             cv = _safe_float(c)
@@ -372,11 +363,7 @@ def _fetch_vix() -> dict:
         "date": None,
         "close": None,
         "pct_chg": None,
-        "error": (
-            f"cboe={s0.get('error')}; "
-            f"stooq={s1.get('error')}; "
-            f"yahoo={s2.get('error')}"
-        ),
+        "error": (f"cboe={s0.get('error')}; stooq={s1.get('error')}; yahoo={s2.get('error')}"),
     }
 
 
@@ -389,8 +376,7 @@ def _fetch_vix_until_ready(logs_path: str | None = None) -> dict:
         vix = _fetch_vix()
         if vix.get("ok"):
             _log(
-                "VIX可用，结束轮询: "
-                f"attempt={attempt}, source={vix.get('source')}, date={vix.get('date')}",
+                f"VIX可用，结束轮询: attempt={attempt}, source={vix.get('source')}, date={vix.get('date')}",
                 logs_path,
             )
             return vix
@@ -450,9 +436,7 @@ def _judge_regime(a50: dict, vix: dict) -> tuple[str, list[str]]:
         else:
             regime = _escalate(regime, "CAUTION")
             if vix_close is None:
-                reasons.append(
-                    f"VIX涨幅 {vix_pct:.2f}% >= {RISK_VIX_CRASH_PCT:.2f}%（绝对值缺失，按 CAUTION 处理）"
-                )
+                reasons.append(f"VIX涨幅 {vix_pct:.2f}% >= {RISK_VIX_CRASH_PCT:.2f}%（绝对值缺失，按 CAUTION 处理）")
             else:
                 reasons.append(
                     f"VIX涨幅 {vix_pct:.2f}% >= {RISK_VIX_CRASH_PCT:.2f}% 但绝对值 {vix_close:.2f} < {RISK_VIX_CRASH_CLOSE:.2f}，按 CAUTION 处理"
@@ -463,9 +447,8 @@ def _judge_regime(a50: dict, vix: dict) -> tuple[str, list[str]]:
             regime = _escalate(regime, "RISK_OFF")
             reasons.append(f"A50跌幅 {a50_pct:.2f}% <= {RISK_A50_OFF_PCT:.2f}%")
         if vix_pct is not None and vix_pct >= RISK_VIX_OFF_PCT:
-            is_vix_caution_case = (
-                vix_pct >= RISK_VIX_CRASH_PCT
-                and (vix_close is None or vix_close < RISK_VIX_CRASH_CLOSE)
+            is_vix_caution_case = vix_pct >= RISK_VIX_CRASH_PCT and (
+                vix_close is None or vix_close < RISK_VIX_CRASH_CLOSE
             )
             if not is_vix_caution_case:
                 regime = _escalate(regime, "RISK_OFF")
@@ -504,10 +487,8 @@ def main() -> int:
         f"**结论**: `{regime}`",
         f"**触发原因**: {'；'.join(reasons)}",
         "",
-        f"**A50** ({a50.get('source')}): "
-        f"date={a50.get('date')}, close={a50.get('close')}, pct={a50.get('pct_chg')}",
-        f"**VIX** ({vix.get('source')}): "
-        f"date={vix.get('date')}, close={vix.get('close')}, pct={vix.get('pct_chg')}",
+        f"**A50** ({a50.get('source')}): date={a50.get('date')}, close={a50.get('close')}, pct={a50.get('pct_chg')}",
+        f"**VIX** ({vix.get('source')}): date={vix.get('date')}, close={vix.get('close')}, pct={vix.get('pct_chg')}",
         "",
     ]
     if not a50.get("ok") and a50.get("error"):
@@ -561,9 +542,7 @@ def main() -> int:
         _log("FEISHU_WEBHOOK_URL 未配置，跳过飞书发送", logs_path)
         return 0
 
-    ok = send_feishu_notification(
-        webhook, f"⏰ 盘前风控 {datetime.now(TZ).strftime('%Y-%m-%d')}", content
-    )
+    ok = send_feishu_notification(webhook, f"⏰ 盘前风控 {datetime.now(TZ).strftime('%Y-%m-%d')}", content)
     if not ok:
         _log("飞书发送失败", logs_path)
         return 1

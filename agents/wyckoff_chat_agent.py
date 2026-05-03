@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Wyckoff 对话 Agent — 基于 Google ADK 的智能投研助手。
 
@@ -18,6 +17,7 @@ Wyckoff 对话 Agent — 基于 Google ADK 的智能投研助手。
         api_key="ak_xxx", base_url="https://api.longcat.chat/openai",
     )
 """
+
 from __future__ import annotations
 
 import logging
@@ -125,6 +125,10 @@ def create_agent(
     )
     logger.info(
         "Created Wyckoff chat agent: provider=%s, model=%s, tools=%d, key_injected=%s, base_url=%s",
-        provider, model, len(WYCKOFF_TOOLS), bool(api_key), base_url or "(default)",
+        provider,
+        model,
+        len(WYCKOFF_TOOLS),
+        bool(api_key),
+        base_url or "(default)",
     )
     return agent

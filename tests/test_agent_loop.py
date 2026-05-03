@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from cli.loop_guard import check_doom_loop, resolve_turn_expectation
@@ -208,6 +207,7 @@ def test_agent_loop_warns_after_retry_budget_is_exhausted():
 # Doom-loop detection
 # ---------------------------------------------------------------------------
 
+
 class TestCheckDoomLoop:
     def test_no_trigger_below_threshold(self):
         recent: list[tuple[str, int]] = []
@@ -280,6 +280,7 @@ class TestCheckDoomLoop:
 # Tool confirm callback
 # ---------------------------------------------------------------------------
 
+
 class TestToolConfirm:
     def test_confirm_tools_constant(self):
         assert "exec_command" in CONFIRM_TOOLS
@@ -296,9 +297,11 @@ class TestToolConfirm:
 
     def test_always_skips_subsequent_confirms(self):
         calls = []
+
         def _confirm(name, args):
             calls.append(name)
             return {"action": "always"}
+
         registry = ToolRegistry()
         registry.set_confirm_callback(_confirm)
         registry.execute("exec_command", {"command": "echo 1"})

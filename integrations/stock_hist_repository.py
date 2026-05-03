@@ -83,17 +83,10 @@ def _can_use_cache_when_tail_gap_fails(
     cached_norm: pd.DataFrame | None,
 ) -> bool:
     """Allow stale-but-current cache when only a future/non-trading tail gap fails."""
-    return (
-        meta is not None
-        and cached_norm is not None
-        and not cached_norm.empty
-        and gap_start > meta.end_date
-    )
+    return meta is not None and cached_norm is not None and not cached_norm.empty and gap_start > meta.end_date
 
 
-def _compute_gap_ranges(
-    requested_start: date, requested_end: date, meta: CacheMeta | None
-) -> list[tuple[date, date]]:
+def _compute_gap_ranges(requested_start: date, requested_end: date, meta: CacheMeta | None) -> list[tuple[date, date]]:
     if meta is None:
         return [(requested_start, requested_end)]
     gaps: list[tuple[date, date]] = []
@@ -190,8 +183,7 @@ def get_stock_hist(
             )
             return result
         print(
-            f"[stock_repo] cache_only symbol={symbol} adjust={cache_adjust} "
-            f"range={start_d}..{end_d} rows=0 (no cache)"
+            f"[stock_repo] cache_only symbol={symbol} adjust={cache_adjust} range={start_d}..{end_d} rows=0 (no cache)"
         )
         return pd.DataFrame()
 
@@ -227,9 +219,7 @@ def get_stock_hist(
             if hint not in tickflow_limit_hints:
                 tickflow_limit_hints.append(hint)
 
-    merged = _merge_norm_frames(
-        [cached_norm] + fetched_frames if cached_norm is not None else fetched_frames
-    )
+    merged = _merge_norm_frames([cached_norm] + fetched_frames if cached_norm is not None else fetched_frames)
 
     if merged.empty:
         # 缓存无可用数据且补拉失败时，按原行为抛错

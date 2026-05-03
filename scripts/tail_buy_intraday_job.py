@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 Tail Buy 任务（周一到周五 14:00）：
 - 输入：signal_pending（前一交易日 + pending/confirmed）
 - 判定：规则全量 + LLM TopN 二判
 - 输出：飞书 + Telegram 推送（不写交易表）
 """
+
 from __future__ import annotations
 
 import argparse
@@ -12,7 +12,8 @@ import json
 import os
 import sys
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -46,8 +47,8 @@ from integrations.supabase_market_signal import (
     load_market_signal_daily,
 )
 from integrations.supabase_portfolio import load_portfolio_state
-from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT, is_tickflow_rate_limited_error
 from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
+from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT, is_tickflow_rate_limited_error
 from utils.feishu import send_feishu_notification, send_tail_buy_card
 from utils.notify import send_to_telegram
 
@@ -322,11 +323,7 @@ def _discover_user_live_portfolios(logs_path: str | None = None, limit: int = 30
             .data
             or []
         )
-        ids = [
-            str(row.get("portfolio_id", "") or "").strip()
-            for row in rows
-            if isinstance(row, dict)
-        ]
+        ids = [str(row.get("portfolio_id", "") or "").strip() for row in rows if isinstance(row, dict)]
         ids = [x for x in ids if x]
         _log(f"持仓回退候选: USER_LIVE:* count={len(ids)}", logs_path)
         return ids
@@ -501,9 +498,7 @@ def _analyze_holdings_actions(
             if advice.current_price <= 0:
                 advice.current_price = _safe_float(features.get("last_close"), 0.0)
                 advice.pnl_pct = (
-                    (advice.current_price / cost - 1.0) * 100.0
-                    if advice.current_price > 0 and cost > 0
-                    else 0.0
+                    (advice.current_price / cost - 1.0) * 100.0 if advice.current_price > 0 and cost > 0 else 0.0
                 )
             advice.rule_score = score
             advice.rule_decision = decision
@@ -524,12 +519,7 @@ def _analyze_holdings_actions(
                     ],
                     limit=3,
                 )
-            elif (
-                decision == DECISION_BUY
-                and dist_vwap_pct >= 0.15
-                and close_pos >= 0.68
-                and last30_ret_pct >= 0.2
-            ):
+            elif decision == DECISION_BUY and dist_vwap_pct >= 0.15 and close_pos >= 0.68 and last30_ret_pct >= 0.2:
                 advice.action = HOLDING_ACTION_ADD
                 advice.reasons = _dedupe_texts(
                     [
@@ -538,9 +528,8 @@ def _analyze_holdings_actions(
                     ],
                     limit=3,
                 )
-            elif (
-                decision == DECISION_SKIP
-                and (dist_vwap_pct <= -0.6 or close_pos < 0.42 or last30_ret_pct <= -0.8 or drop_from_high_pct <= -2.2)
+            elif decision == DECISION_SKIP and (
+                dist_vwap_pct <= -0.6 or close_pos < 0.42 or last30_ret_pct <= -0.8 or drop_from_high_pct <= -2.2
             ):
                 advice.action = HOLDING_ACTION_TRIM
                 advice.reasons = _dedupe_texts(
@@ -574,7 +563,7 @@ def _analyze_holdings_actions(
     out.sort(key=lambda x: (rank.get(x.action, 9), -x.rule_score, x.code))
     _log(
         f"持仓动作分析完成: total={len(out)}, add={add_count}, trim={trim_count}, "
-        f"hold={len(out)-add_count-trim_count}, tickflow_limit_hit={tickflow_limit_hit}",
+        f"hold={len(out) - add_count - trim_count}, tickflow_limit_hit={tickflow_limit_hit}",
         logs_path,
     )
     meta = (
@@ -675,10 +664,7 @@ def _load_signal_pending_candidates(target_signal_date: str, logs_path: str | No
     )
     rows: list[dict] = []
     try:
-        rows = (
-            base_query.eq("signal_date", target_signal_date).limit(5000).execute().data
-            or []
-        )
+        rows = base_query.eq("signal_date", target_signal_date).limit(5000).execute().data or []
     except Exception as e:
         _log(f"按 signal_date 精确查询失败，尝试宽松查询: {e}", logs_path)
 
@@ -1181,7 +1167,7 @@ def _run_llm_overlay(
         top_err = " | ".join([f"{k} x{v}" for k, v in llm_error_counter.most_common(5)])
         _log(f"LLM二判失败汇总: {top_err}", logs_path)
     _log(
-        f"LLM二判汇总: total={total}, ok={ok}, fail={total-ok}, route_hits={route_hits}",
+        f"LLM二判汇总: total={total}, ok={ok}, fail={total - ok}, route_hits={route_hits}",
         logs_path,
     )
 
@@ -1318,11 +1304,11 @@ def main() -> int:
     tg_chat_id = os.getenv("TG_CHAT_ID", "").strip()
     provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
     api_key = (os.getenv(f"{provider.upper()}_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
-    model = (os.getenv(f"{provider.upper()}_MODEL") or os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+    model = (
+        os.getenv(f"{provider.upper()}_MODEL") or os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
+    ).strip() or DEFAULT_GEMINI_MODEL
     llm_base_url = (
-        os.getenv(f"{provider.upper()}_BASE_URL")
-        or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "")
-        or ""
+        os.getenv(f"{provider.upper()}_BASE_URL") or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "") or ""
     ).strip()
     llm_routes = _build_llm_routes(
         primary_provider=provider,
@@ -1430,9 +1416,7 @@ def main() -> int:
                 deadline_at=deadline_at,
                 logs_path=logs_path,
             )
-            hard_batch_fail = sum(
-                1 for x in scored if "TickFlow批量分时拉取失败" in str(x.fetch_error or "")
-            )
+            hard_batch_fail = sum(1 for x in scored if "TickFlow批量分时拉取失败" in str(x.fetch_error or ""))
             if scored and hard_batch_fail >= len(scored):
                 _log("批量接口全部失败，降级到单标的限流模式。", logs_path)
                 scored = []
@@ -1521,19 +1505,25 @@ def main() -> int:
     # 持久化 BUY/WATCH 到本地 SQLite
     try:
         from integrations.local_db import init_db, save_tail_buy_results
+
         init_db()
         persistable = [
             {
-                "code": c.code, "name": c.name,
+                "code": c.code,
+                "name": c.name,
                 "run_date": started_at.strftime("%Y-%m-%d"),
-                "signal_date": c.signal_date, "signal_type": c.signal_type,
-                "status": c.status, "final_decision": c.final_decision,
-                "rule_score": c.rule_score, "priority_score": c.priority_score,
+                "signal_date": c.signal_date,
+                "signal_type": c.signal_type,
+                "status": c.status,
+                "final_decision": c.final_decision,
+                "rule_score": c.rule_score,
+                "priority_score": c.priority_score,
                 "rule_reasons": json.dumps(c.rule_reasons, ensure_ascii=False),
                 "llm_decision": c.llm_decision or "",
                 "llm_reason": c.llm_reason,
             }
-            for c in merged if c.final_decision != "SKIP"
+            for c in merged
+            if c.final_decision != "SKIP"
         ]
         saved = save_tail_buy_results(persistable)
         _log(f"已写入 {saved} 条尾盘结果到本地 SQLite", logs_path)
@@ -1541,6 +1531,7 @@ def main() -> int:
         buy_rows = [r for r in persistable if r["final_decision"] == "BUY"]
         if buy_rows:
             from integrations.supabase_tail_buy import save_tail_buy_to_supabase
+
             n_sb = save_tail_buy_to_supabase(buy_rows)
             _log(f"已写入 {n_sb} 条 BUY 到 Supabase", logs_path)
     except Exception as e:

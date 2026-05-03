@@ -2,16 +2,15 @@ import streamlit as st
 
 from app.layout import setup_page
 from app.navigation import show_right_nav
-from integrations.supabase_client import save_user_settings
-from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS, SUPPORTED_PROVIDERS, PROVIDER_LABELS
 from app.ui_helpers import show_page_loading
+from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS, PROVIDER_LABELS, SUPPORTED_PROVIDERS
+from integrations.supabase_client import save_user_settings
 
 setup_page(page_title="设置", page_icon="⚙️")
 
 # Show Navigation
 content_col = show_right_nav()
 with content_col:
-
     st.title("⚙️ 设置 (Settings)")
     st.markdown("配置您的 API Key 和通知服务，让 Wyckoff 智能投研更加强大。")
 
@@ -32,10 +31,14 @@ with content_col:
     st.session_state.setdefault("volcengine_base_url", OPENAI_COMPATIBLE_BASE_URLS.get("volcengine", ""))
 
     for key in (
-        "zhipu_api_key", "zhipu_model",
-        "minimax_api_key", "minimax_model",
-        "qwen_api_key", "qwen_model",
-        "volcengine_api_key", "volcengine_model",
+        "zhipu_api_key",
+        "zhipu_model",
+        "minimax_api_key",
+        "minimax_model",
+        "qwen_api_key",
+        "qwen_model",
+        "volcengine_api_key",
+        "volcengine_model",
     ):
         st.session_state.setdefault(key, "")
 
@@ -46,7 +49,6 @@ with content_col:
     with st.expander("🔑 账户信息", expanded=True):
         st.info(f"当前用户 ID (SUPABASE_USER_ID): `{user_id}`")
         st.caption("请复制此 ID 并配置到 GitHub Secrets 的 SUPABASE_USER_ID 中，以便定时任务能识别您的账户。")
-
 
     def on_save_settings():
         """保存配置到云端"""
@@ -115,16 +117,13 @@ with content_col:
         finally:
             loading.empty()
 
-
     col1, col2 = st.columns([2, 1])
 
     with col1:
         # 1. 通知配置：飞书 / 企微 / 钉钉
         st.subheader("🔔 通知配置")
         with st.container(border=True):
-            st.markdown(
-                "配置群机器人的 **Webhook**，定时任务与批量操作完成后可自动推送到对应群。"
-            )
+            st.markdown("配置群机器人的 **Webhook**，定时任务与批量操作完成后可自动推送到对应群。")
 
             new_feishu_webhook = st.text_input(
                 "飞书 Webhook URL",
@@ -167,9 +166,9 @@ with content_col:
             new_chat_provider = st.selectbox(
                 "🗣️ 读盘室对话供应商",
                 options=list(SUPPORTED_PROVIDERS),
-                index=list(SUPPORTED_PROVIDERS).index(
-                    st.session_state.get("chat_provider", "1route")
-                ) if st.session_state.get("chat_provider", "1route") in SUPPORTED_PROVIDERS else 0,
+                index=list(SUPPORTED_PROVIDERS).index(st.session_state.get("chat_provider", "1route"))
+                if st.session_state.get("chat_provider", "1route") in SUPPORTED_PROVIDERS
+                else 0,
                 format_func=lambda x: PROVIDER_LABELS.get(x, x),
                 help="选择驱动读盘室对话的大模型供应商。默认 1Route，支持 GPT/Claude/Gemini 全系模型。",
             )
@@ -366,7 +365,9 @@ with content_col:
         # 3. 数据源
         st.subheader("📊 数据源配置")
         with st.container(border=True):
-            st.markdown("**TickFlow API Key**（推荐）解锁实时行情 + 分钟K线 + 盘中监控。[注册购买 →](https://tickflow.org/auth/register?ref=5N4NKTCPL4)")
+            st.markdown(
+                "**TickFlow API Key**（推荐）解锁实时行情 + 分钟K线 + 盘中监控。[注册购买 →](https://tickflow.org/auth/register?ref=5N4NKTCPL4)"
+            )
             new_tickflow = st.text_input(
                 "TickFlow API Key",
                 value=st.session_state.tickflow_api_key,
@@ -374,7 +375,9 @@ with content_col:
                 placeholder="tk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
                 key="tickflow_input",
             )
-            st.markdown("**Tushare Token**（可选）用于高级补充数据。日线主链路优先 TickFlow，不可用时回退 Tushare/akshare/baostock/efinance。")
+            st.markdown(
+                "**Tushare Token**（可选）用于高级补充数据。日线主链路优先 TickFlow，不可用时回退 Tushare/akshare/baostock/efinance。"
+            )
             new_tushare = st.text_input(
                 "Tushare Token",
                 value=st.session_state.tushare_token,
@@ -393,8 +396,12 @@ with content_col:
         st.subheader("🕶️ 私人决断")
         with st.container(border=True):
             st.markdown("可选，用于 Telegram 私密推送买卖建议。")
-            new_tg_bot = st.text_input("Telegram Bot Token", value=st.session_state.tg_bot_token, type="password", key="tg_bot")
-            new_tg_chat = st.text_input("Telegram Chat ID", value=st.session_state.tg_chat_id, type="password", key="tg_chat")
+            new_tg_bot = st.text_input(
+                "Telegram Bot Token", value=st.session_state.tg_bot_token, type="password", key="tg_bot"
+            )
+            new_tg_chat = st.text_input(
+                "Telegram Chat ID", value=st.session_state.tg_chat_id, type="password", key="tg_chat"
+            )
             if st.button("💾 保存 Step4 配置", key="save_step4"):
                 st.session_state.tg_bot_token = new_tg_bot
                 st.session_state.tg_chat_id = new_tg_chat

@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pandas as pd
 
@@ -45,15 +44,13 @@ def test_get_stock_hist_uses_cache_when_only_tail_non_trading_gap_fails(monkeypa
             source="cache",
             start_date=date(2026, 4, 29),
             end_date=date(2026, 4, 30),
-            updated_at=datetime(2026, 4, 30, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 4, 30, tzinfo=UTC),
         ),
     )
     monkeypatch.setattr(repo, "load_cached_history", lambda *args, **kwargs: cached)
 
     def fail_tail_gap(*args, **kwargs):
-        raise RuntimeError(
-            "数据拉取全线失败 [标:000001, 范围:20260501..20260501, 复权:qfq]"
-        )
+        raise RuntimeError("数据拉取全线失败 [标:000001, 范围:20260501..20260501, 复权:qfq]")
 
     monkeypatch.setattr(repo, "_fetch_gap", fail_tail_gap)
     monkeypatch.setattr(repo, "upsert_cache_data", lambda *args, **kwargs: None)
@@ -64,4 +61,3 @@ def test_get_stock_hist_uses_cache_when_only_tail_non_trading_gap_fails(monkeypa
     assert out.iloc[-1]["日期"] == "2026-04-30"
     assert out.attrs["cache_status"] == "hit_tail_gap_skipped"
     assert out.attrs["cached_until"] == "2026-04-30"
-

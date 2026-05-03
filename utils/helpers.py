@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """通用工具函数：文件名、行业、文本解析等"""
+
 import os
 import re
 
@@ -34,9 +34,7 @@ def stock_sector_em(symbol: str, *, timeout: float | None = None) -> str:
         return ""
 
 
-def extract_symbols_from_text(
-    text: str, *, valid_codes: set[str] | None = None
-) -> list[str]:
+def extract_symbols_from_text(text: str, *, valid_codes: set[str] | None = None) -> list[str]:
     if not text:
         return []
     digit_runs = re.findall(r"\d{6,}", text)

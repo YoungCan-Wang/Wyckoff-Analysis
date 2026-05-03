@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """
 L3 候选排名工具 + 触发器标签常量。
 
 综合动量、缩量、触发信号、板块共振等维度对候选股打分排名。
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -70,7 +70,7 @@ def rank_l3_candidates(
         return ([], {})
 
     trigger_score_map: dict[str, float] = {}
-    for key in TRIGGER_LABELS.keys():
+    for key in TRIGGER_LABELS:
         for code, score in triggers.get(key, []):
             trigger_score_map[code] = max(trigger_score_map.get(code, 0.0), float(score))
 
@@ -122,24 +122,16 @@ def rank_l3_candidates(
     rank_df["q20"] = rank_df["ret20"].rank(pct=True, ascending=True, method="average")
     rank_df["q5"] = rank_df["ret5"].rank(pct=True, ascending=True, method="average")
     rank_df["q3"] = rank_df["ret3"].rank(pct=True, ascending=True, method="average")
-    rank_df["dry_q"] = rank_df["min_vol_ratio_5d"].rank(
-        pct=True, ascending=False, method="average"
-    )
+    rank_df["dry_q"] = rank_df["min_vol_ratio_5d"].rank(pct=True, ascending=False, method="average")
     if rank_df["trigger_score"].nunique(dropna=False) > 1:
-        rank_df["trigger_q"] = rank_df["trigger_score"].rank(
-            pct=True, ascending=True, method="average"
-        )
+        rank_df["trigger_q"] = rank_df["trigger_score"].rank(pct=True, ascending=True, method="average")
     else:
-        rank_df["trigger_q"] = rank_df["trigger_score"].apply(
-            lambda x: 1.0 if float(x) > 0 else 0.0
-        )
+        rank_df["trigger_q"] = rank_df["trigger_score"].apply(lambda x: 1.0 if float(x) > 0 else 0.0)
 
     hot_sector_set = set(top_sectors or [])
     # 板块快速轮动期 hot_bonus 降低：Top3 板块次日有 49% 概率反转
     rank_df["hot_bonus"] = rank_df["industry"].isin(hot_sector_set).astype(float) * 0.02
-    rank_df["sector_bonus"] = rank_df["sector_state"].map(
-        lambda x: float(SECTOR_STATE_SCORE_BONUS.get(str(x), 0.0))
-    )
+    rank_df["sector_bonus"] = rank_df["sector_state"].map(lambda x: float(SECTOR_STATE_SCORE_BONUS.get(str(x), 0.0)))
     # 权重重新分配：降低滞后动量(q20)权重，提升 Wyckoff 触发(trigger_q)权重，
     # 加入 3 日短期动量(q3) 适配板块快速轮动。
     rank_df["watch_score"] = (
@@ -154,8 +146,5 @@ def rank_l3_candidates(
 
     rank_df = rank_df.sort_values("watch_score", ascending=False).reset_index(drop=True)
     ranked_symbols = rank_df["code"].astype(str).tolist()
-    score_map = {
-        str(r["code"]): float(r["watch_score"])
-        for _, r in rank_df.iterrows()
-    }
+    score_map = {str(r["code"]): float(r["watch_score"]) for _, r in rank_df.iterrows()}
     return (ranked_symbols, score_map)

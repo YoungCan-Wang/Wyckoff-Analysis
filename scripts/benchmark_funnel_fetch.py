@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Funnel 取数基准脚本
 
@@ -10,6 +9,7 @@ Funnel 取数基准脚本
 python -m scripts.benchmark_funnel_fetch --symbols 600519,000001,300750 --mode thread --workers 12
 python -m scripts.benchmark_funnel_fetch --sample 400 --mode process --workers 8
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,15 +17,14 @@ import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from datetime import date
-
 
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from integrations.fetch_a_share_csv import _normalize_symbols, _resolve_trading_window, get_stocks_by_board
 from core.wyckoff_engine import normalize_hist_from_fetch
+from integrations.fetch_a_share_csv import _normalize_symbols, _resolve_trading_window, get_stocks_by_board
 from utils.trading_clock import resolve_end_calendar_day
+
 
 def _fetch_one(symbol: str, window) -> tuple[str, bool]:
     from integrations.fetch_a_share_csv import _fetch_hist
@@ -111,10 +110,7 @@ def main() -> int:
 
     qps = ok / elapsed if elapsed > 0 else 0.0
     avg = elapsed / len(symbols) if symbols else 0.0
-    print(
-        f"[bench] done: ok={ok}, fail={fail}, elapsed={elapsed:.2f}s, "
-        f"avg_per_symbol={avg:.3f}s, qps={qps:.2f}"
-    )
+    print(f"[bench] done: ok={ok}, fail={fail}, elapsed={elapsed:.2f}s, avg_per_symbol={avg:.3f}s, qps={qps:.2f}")
     return 0
 
 

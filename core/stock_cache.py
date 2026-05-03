@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
-import os
-from typing import Optional
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 from postgrest.exceptions import APIError
@@ -94,6 +92,7 @@ def _get_cli_user_client() -> Client | None:
         return None
     try:
         from integrations.supabase_base import create_user_client
+
         _CLI_CLIENT = create_user_client(at, rt)
         return _CLI_CLIENT
     except Exception:
@@ -115,6 +114,7 @@ def _get_stock_cache_client(context: str = "auto") -> Client | None:
         # 1) Streamlit session client
         try:
             from integrations.supabase_client import get_supabase_client
+
             client = get_supabase_client()
             if client is not None:
                 return client
@@ -132,7 +132,7 @@ def _get_stock_cache_client(context: str = "auto") -> Client | None:
     return None
 
 
-def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> Optional[CacheMeta]:
+def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> CacheMeta | None:
     supabase = _get_stock_cache_client(context=context)
     if supabase is None:
         return None
@@ -163,7 +163,7 @@ def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> Option
     first_row = first_resp.data[0]
     last_row = last_resp.data[0]
     updated_raw = last_row.get("updated_at")
-    updated_at = _parse_iso_datetime(updated_raw) if updated_raw else datetime.now(timezone.utc)
+    updated_at = _parse_iso_datetime(updated_raw) if updated_raw else datetime.now(UTC)
     return CacheMeta(
         symbol=symbol,
         adjust=adjust,
@@ -182,7 +182,7 @@ def load_cached_history(
     end_date: date,
     *,
     context: str = "auto",
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     supabase = _get_stock_cache_client(context=context)
     if supabase is None:
         return None
@@ -224,7 +224,7 @@ def upsert_cache_data(
     payload["date"] = payload["date"].astype(str)
     payload["symbol"] = symbol
     payload["adjust"] = adjust
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    payload["updated_at"] = datetime.now(UTC).isoformat()
     records = payload.to_dict(orient="records")
 
     try:
@@ -262,11 +262,12 @@ def _trim_symbol_history_window(
     except Exception:
         pass
 
+
 def cleanup_cache(ttl_days: int = _STOCK_HIST_RETENTION_DAYS, *, context: str = "auto") -> None:
     supabase = _get_stock_cache_client(context=context)
     if supabase is None:
         return
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).date().isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=ttl_days)).date().isoformat()
     try:
         supabase.table(TABLE_STOCK_HIST_CACHE).delete().lt("date", cutoff).execute()
     except Exception:

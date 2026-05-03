@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """命令面板 Provider — 为 Ctrl+P 提供模糊搜索命令列表。"""
+
 from __future__ import annotations
 
 from textual.command import Hit, Hits, Provider
@@ -7,6 +7,7 @@ from textual.command import Hit, Hits, Provider
 
 def _skill_commands() -> list[tuple[str, str, str]]:
     from cli.skills import load_skills
+
     return [(f"/{s.name}", f"run_skill('{s.name}')", s.description) for s in load_skills().values()]
 
 

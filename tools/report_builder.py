@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """
 AI 研报 prompt 构建 + 报告解析工具。
 
 供 step3_batch_report 和 step4_rebalancer 使用的报告构建、解析与分流逻辑。
 """
+
 from __future__ import annotations
 
 import json
-import os
 import re
 
 import pandas as pd
@@ -46,6 +45,7 @@ def _normalize_structured_pool(
     code_name: dict[str, str],
 ) -> dict[str, list[dict[str, str]]]:
     """将结构化 JSON 报告规范化为 watch_pool / operation_pool 两个列表。"""
+
     def _collect_items(keys: tuple[str, ...]) -> list[dict]:
         out: list[dict] = []
         for key in keys:
@@ -510,9 +510,7 @@ def build_track_user_message(
         + regime_hint
         + f"{scope}\n\n"
         + (
-            (
-                f"[候选说明] 本轮候选已从 {raw_count} 只压缩到 {selected_count} 只。\n\n"
-            )
+            (f"[候选说明] 本轮候选已从 {raw_count} 只压缩到 {selected_count} 只。\n\n")
             if compressed and raw_count > selected_count
             else ""
         )

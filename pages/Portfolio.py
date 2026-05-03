@@ -1,5 +1,5 @@
 import re
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -10,12 +10,12 @@ from postgrest.exceptions import APIError
 from app.layout import setup_page
 from app.navigation import show_right_nav
 from app.ui_helpers import show_page_loading
+from core.constants import TABLE_PORTFOLIO_POSITIONS, TABLE_PORTFOLIOS, TABLE_TRADE_ORDERS
 from integrations.supabase_client import get_supabase_client
 from integrations.supabase_portfolio import (
     compute_portfolio_state_signature,
     extract_state_signature_from_run_id,
 )
-from core.constants import TABLE_PORTFOLIOS, TABLE_PORTFOLIO_POSITIONS, TABLE_TRADE_ORDERS
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 PORTFOLIO_SCOPE = "USER_LIVE"
@@ -114,7 +114,7 @@ def _parse_iso_ts(raw: Any) -> datetime | None:
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         return dt
     except Exception:
         return None
@@ -215,11 +215,7 @@ def _summarize_order_runs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             item["created_at"] = created_at
     return sorted(
         runs.values(),
-        key=lambda x: (
-            x.get("created_at").timestamp()
-            if isinstance(x.get("created_at"), datetime)
-            else float("-inf")
-        ),
+        key=lambda x: x.get("created_at").timestamp() if isinstance(x.get("created_at"), datetime) else float("-inf"),
         reverse=True,
     )
 
@@ -238,8 +234,7 @@ def _cancel_todays_orders(portfolio_id: str, trade_date: str) -> tuple[int, str]
         active_ids = [
             row.get("id")
             for row in rows
-            if str(row.get("status", "") or "").strip().upper() not in {"CANCELLED", "CANCELED"}
-            and row.get("id")
+            if str(row.get("status", "") or "").strip().upper() not in {"CANCELLED", "CANCELED"} and row.get("id")
         ]
         if not active_ids:
             return 0, ""
@@ -270,6 +265,7 @@ def _render_notice(kind: str, text: str) -> None:
     if tone not in {"info", "success", "warning", "danger"}:
         tone = "info"
     import html as _html
+
     safe_text = _html.escape(str(text))
     st.markdown(
         f"""
@@ -298,7 +294,7 @@ def _load_user_live(portfolio_id: str) -> tuple[dict[str, Any], list[dict[str, A
                 "name": "Real Portfolio",
                 "free_cash": 0.0,
                 "total_equity": None,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             },
             on_conflict="portfolio_id",
         ).execute()
@@ -396,7 +392,7 @@ def _save_user_live(
             "shares": shares,
             "cost_price": cost_price,
             "buy_dt": buy_dt,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
 
     if errors:
@@ -405,8 +401,7 @@ def _save_user_live(
     keep_codes = set(payload_by_code.keys())
     delete_codes = (existing_codes - keep_codes) | deleted_codes
     positions_cost_value = sum(
-        float(v.get("cost_price", 0.0) or 0.0) * int(v.get("shares", 0) or 0)
-        for v in payload_by_code.values()
+        float(v.get("cost_price", 0.0) or 0.0) * int(v.get("shares", 0) or 0) for v in payload_by_code.values()
     )
     computed_total_equity = float(free_cash) + float(positions_cost_value)
 
@@ -417,19 +412,13 @@ def _save_user_live(
                 "name": "Real Portfolio",
                 "free_cash": float(free_cash),
                 "total_equity": computed_total_equity,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             },
             on_conflict="portfolio_id",
         ).execute()
 
         for code in sorted(delete_codes):
-            (
-                supabase.table(TABLE_POSITIONS)
-                .delete()
-                .eq("portfolio_id", portfolio_id)
-                .eq("code", code)
-                .execute()
-            )
+            (supabase.table(TABLE_POSITIONS).delete().eq("portfolio_id", portfolio_id).eq("code", code).execute())
 
         if payload_by_code:
             supabase.table(TABLE_POSITIONS).upsert(
@@ -607,9 +596,7 @@ with content_col:
     latest_run = order_runs[0] if order_runs else None
     latest_active_run = next((run for run in order_runs if int(run.get("active_count", 0)) > 0), None)
     latest_active_sig = (
-        str(latest_active_run.get("state_signature", "") or "").strip().lower()
-        if latest_active_run
-        else ""
+        str(latest_active_run.get("state_signature", "") or "").strip().lower() if latest_active_run else ""
     )
     latest_active_created = (
         latest_active_run.get("created_at")
@@ -635,7 +622,9 @@ with content_col:
     with tab_edit:
         st.caption("当前页仅显示当前登录账号持仓。编辑过程中不会自动刷新，点击保存后才会提交并重载。")
         if edit_locked:
-            _render_notice("warning", f"当前处于编辑禁区：{edit_locked_reason}。为避免与定时任务冲突，暂时禁止修改持仓。")
+            _render_notice(
+                "warning", f"当前处于编辑禁区：{edit_locked_reason}。为避免与定时任务冲突，暂时禁止修改持仓。"
+            )
         elif latest_active_run and active_order_stale:
             _render_notice("warning", "检测到当前持仓已与最新 AI 建议脱节。保存持仓后，系统会自动作废当日旧建议。")
         elif latest_active_run:
@@ -788,12 +777,10 @@ with content_col:
             ref_rows = list(ref_run.get("rows", [])) if ref_run else list(order_rows)
             ref_df = pd.DataFrame(ref_rows).copy()
             if not ref_df.empty:
-                ref_df["持仓关联"] = ref_df["code"].astype(str).apply(
-                    lambda x: "当前持仓" if x in existing_codes else "已不在持仓"
+                ref_df["持仓关联"] = (
+                    ref_df["code"].astype(str).apply(lambda x: "当前持仓" if x in existing_codes else "已不在持仓")
                 )
-                ref_df["生成时间"] = ref_df["created_at"].apply(
-                    lambda x: _fmt_cn_dt_short(_parse_iso_ts(x))
-                )
+                ref_df["生成时间"] = ref_df["created_at"].apply(lambda x: _fmt_cn_dt_short(_parse_iso_ts(x)))
                 display_cols = [
                     "code",
                     "name",

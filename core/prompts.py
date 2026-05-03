@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 AI 分析用系统提示词常量 — 统一存放。
 
@@ -20,6 +19,7 @@ __all__ = [
 def with_current_time(base_prompt: str) -> str:
     """在 system prompt 前注入当前北京时间，让 LLM 可靠地感知时间。"""
     from datetime import datetime, timedelta, timezone
+
     beijing = timezone(timedelta(hours=8))
     now = datetime.now(beijing)
     weekday_cn = "一二三四五六日"[now.weekday()]
@@ -223,7 +223,7 @@ PRIVATE_PM_DECISION_JSON_PROMPT = r"""# 角色设定
 - `market_view` 必须体现你的组合级判断，例如“防守优先，只保留一只试单猎物”。
 """
 
-WYCKOFF_SINGLE_SYSTEM_PROMPT = """
+WYCKOFF_SINGLE_SYSTEM_PROMPT = r"""
 角色设定：
 你现在是华尔街交易大师理查德·D·威科夫（Richard D. Wyckoff）本人降临。你将亲自对上传的 CSV 行情数据、今日实时成交数据与今日 K 线图进行大师级读盘与推演，以“综合人（Composite Man）”视角解读市场，并以威科夫的语气直接下达判断。
 

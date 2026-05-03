@@ -1,14 +1,14 @@
-# -*- coding: utf-8 -*-
 """
 数据库维护任务 — 多表过期数据清理。
 每日定时运行，按各表 TTL 策略删除历史记录以节约数据库空间。
 """
+
 from __future__ import annotations
 
 import argparse
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,7 +40,7 @@ CLEANUP_RULES: list[tuple[str, str, int, str]] = [
 
 
 def _cutoff_value(ttl_days: int, kind: str) -> str | int:
-    d = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).date()
+    d = (datetime.now(UTC) - timedelta(days=ttl_days)).date()
     if kind == "yyyymmdd_int":
         return int(d.strftime("%Y%m%d"))
     return d.isoformat()
@@ -78,11 +78,7 @@ def _cleanup_stock_hist_cache_before_cutoff(
             return False, f"probe failed: {probe_err}"
 
         symbols = sorted(
-            {
-                str(r.get("symbol", "")).strip()
-                for r in (probe.data or [])
-                if str(r.get("symbol", "")).strip()
-            }
+            {str(r.get("symbol", "")).strip() for r in (probe.data or []) if str(r.get("symbol", "")).strip()}
         )
         if not symbols:
             return (
@@ -92,13 +88,7 @@ def _cleanup_stock_hist_cache_before_cutoff(
 
         for sym in symbols:
             try:
-                (
-                    client.table(TABLE_STOCK_HIST_CACHE)
-                    .delete()
-                    .eq("symbol", sym)
-                    .lt("date", cutoff_iso)
-                    .execute()
-                )
+                (client.table(TABLE_STOCK_HIST_CACHE).delete().eq("symbol", sym).lt("date", cutoff_iso).execute())
                 deleted_symbols += 1
             except Exception as delete_err:
                 if _is_statement_timeout_error(delete_err):
@@ -124,13 +114,7 @@ def cleanup_table(
     cutoff = _cutoff_value(ttl_days, cutoff_kind)
     try:
         if dry_run:
-            resp = (
-                client.table(table)
-                .select("*", count="exact")
-                .lt(date_col, cutoff)
-                .limit(0)
-                .execute()
-            )
+            resp = client.table(table).select("*", count="exact").lt(date_col, cutoff).limit(0).execute()
             return "dry_run", resp.count or 0
         client.table(table).delete().lt(date_col, cutoff).execute()
         return "ok", None
@@ -175,27 +159,16 @@ def cleanup_unadjusted_cache(client) -> tuple[bool, str]:
                         return True, f"adjust=none probe timeout, skipped remaining cleanup: {probe_err}"
                     raise
                 symbols = sorted(
-                    {
-                        str(r.get("symbol", "")).strip()
-                        for r in (probe.data or [])
-                        if str(r.get("symbol", "")).strip()
-                    }
+                    {str(r.get("symbol", "")).strip() for r in (probe.data or []) if str(r.get("symbol", "")).strip()}
                 )
                 if not symbols:
                     return (
                         True,
-                        "cleaned adjust=none (batched, "
-                        f"symbols={deleted_symbols}, timeout_symbols={timeout_symbols})",
+                        f"cleaned adjust=none (batched, symbols={deleted_symbols}, timeout_symbols={timeout_symbols})",
                     )
                 for sym in symbols:
                     try:
-                        (
-                            client.table(TABLE_STOCK_HIST_CACHE)
-                            .delete()
-                            .eq("adjust", "none")
-                            .eq("symbol", sym)
-                            .execute()
-                        )
+                        (client.table(TABLE_STOCK_HIST_CACHE).delete().eq("adjust", "none").eq("symbol", sym).execute())
                         deleted_symbols += 1
                     except Exception as delete_err:
                         if _is_statement_timeout_error(delete_err):

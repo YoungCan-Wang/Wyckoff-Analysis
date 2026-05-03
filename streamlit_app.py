@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 Wyckoff 智能对话 — 首页。
 
 基于 Google ADK 的对话式投研助手，用户可通过自然语言与 Wyckoff Agent 交互，
 触发系统所有能力：筛选、诊断、研报、策略、跟踪等。
 """
+
 import json
 import os
 import time
@@ -24,22 +24,18 @@ setup_page(page_title="Wyckoff 读盘室", page_icon="💬")
 # ── 用户信息 & 登出 & 供应商切换 ──
 with st.sidebar:
     if st.session_state.get("user"):
-        st.caption(
-            f"当前用户: {st.session_state.user.get('email') if isinstance(st.session_state.user, dict) else ''}"
-        )
+        st.caption(f"当前用户: {st.session_state.user.get('email') if isinstance(st.session_state.user, dict) else ''}")
         if st.button("退出登录"):
             logout()
     st.divider()
 
     # ── 读盘室供应商快捷切换 ──
-    from integrations.llm_client import SUPPORTED_PROVIDERS, PROVIDER_LABELS
+    from integrations.llm_client import PROVIDER_LABELS, SUPPORTED_PROVIDERS
 
     st.session_state.setdefault("chat_provider", "gemini")
     _current_provider = st.session_state.get("chat_provider", "gemini")
     _provider_idx = (
-        list(SUPPORTED_PROVIDERS).index(_current_provider)
-        if _current_provider in SUPPORTED_PROVIDERS
-        else 0
+        list(SUPPORTED_PROVIDERS).index(_current_provider) if _current_provider in SUPPORTED_PROVIDERS else 0
     )
     _new_provider = st.selectbox(
         "🗣️ 读盘室供应商",
@@ -76,20 +72,21 @@ TOOL_DISPLAY_NAMES = {
 _WELCOME_TEXT = (
     "我是理查德·威科夫。我只看供需关系和主力行为，不听故事。\n\n"
     "你可以直接跟我说：\n"
-    "- 🔍 **\"搜一下宁德时代\"** — 我帮你查\n"
-    "- 🕵️ **\"帮我看看 000001\"** — 我给它做一次完整的量价体检\n"
-    "- 🪓 **\"审判我的持仓\"** — 我会逐一下达去留判决\n"
-    "- 🌊 **\"今天大盘水温怎么样\"** — 我告诉你现在适合进攻还是蛰伏\n"
-    "- 🧭 **\"有什么机会\"** — 我从四千多只股票里帮你扫出来\n"
-    "- 📈 **\"600519 最近走势\"** — 我调它的 K 线给你看\n"
-    "- 📝 **\"深度审一下这几只\"** — 我把它们分成三个阵营\n"
-    "- ⚔️ **\"该买什么该卖什么\"** — 我给你下作战指令\n"
-    "- 🎯 **\"之前推荐的表现怎么样\"** — 我翻一翻战绩\n\n"
+    '- 🔍 **"搜一下宁德时代"** — 我帮你查\n'
+    '- 🕵️ **"帮我看看 000001"** — 我给它做一次完整的量价体检\n'
+    '- 🪓 **"审判我的持仓"** — 我会逐一下达去留判决\n'
+    '- 🌊 **"今天大盘水温怎么样"** — 我告诉你现在适合进攻还是蛰伏\n'
+    '- 🧭 **"有什么机会"** — 我从四千多只股票里帮你扫出来\n'
+    '- 📈 **"600519 最近走势"** — 我调它的 K 线给你看\n'
+    '- 📝 **"深度审一下这几只"** — 我把它们分成三个阵营\n'
+    '- ⚔️ **"该买什么该卖什么"** — 我给你下作战指令\n'
+    '- 🎯 **"之前推荐的表现怎么样"** — 我翻一翻战绩\n\n'
     "*说吧，你想看什么？*"
 )
 
 # 当系统提示词/工具策略有重要变更时，提升版本号以触发会话内 manager 重建
 CHAT_AGENT_VERSION = "2026-05-01-portfolio-tool-source-v1"
+
 
 def _get_chat_config() -> tuple[str, str, str, str]:
     """
@@ -97,9 +94,7 @@ def _get_chat_config() -> tuple[str, str, str, str]:
 
     根据 session_state['chat_provider'] 决定从哪组配置中读取凭证。
     """
-    provider = (
-        str(st.session_state.get("chat_provider") or "").strip() or "1route"
-    )
+    provider = str(st.session_state.get("chat_provider") or "").strip() or "1route"
 
     if provider == "gemini":
         api_key = (
@@ -113,8 +108,7 @@ def _get_chat_config() -> tuple[str, str, str, str]:
             or "gemini-2.0-flash"
         )
         base_url = (
-            str(st.session_state.get("gemini_base_url") or "").strip()
-            or os.getenv("GEMINI_BASE_URL", "").strip()
+            str(st.session_state.get("gemini_base_url") or "").strip() or os.getenv("GEMINI_BASE_URL", "").strip()
         )
     else:
         # 非 Gemini：读对应 provider 的 key/model/base_url
@@ -164,11 +158,14 @@ def _init_chat_manager():
         if not api_key:
             return None
 
-        from agents.wyckoff_chat_agent import create_agent
         from agents.session_manager import ChatSessionManager
+        from agents.wyckoff_chat_agent import create_agent
 
         agent = create_agent(
-            provider=provider, model=model, api_key=api_key, base_url=base_url,
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
         )
         mgr = ChatSessionManager(
             user_id=user_id or "anonymous",
@@ -297,16 +294,17 @@ def _render_header_card(provider: str, model: str) -> None:
             f'<span class="chat-chip">供应商: {provider_label}</span>'
             f'<span class="chat-chip">模型: {model_text}</span>'
             f'<span class="chat-chip">会话用户: {uid_preview}</span>'
-            '</div>'
-            '</div>'
+            "</div>"
+            "</div>"
         ),
         unsafe_allow_html=True,
     )
+
+
 # =====================================================================
 # 页面主体
 # =====================================================================
 with content_col:
-
     # ── API Key 检查 ──
     _provider, _api_key, _model, _base_url = _get_chat_config()
     if not _api_key:
@@ -354,21 +352,20 @@ with content_col:
                 use_container_width=True,
             )
         # form 内只保留一个 submit_button，确保 Enter 键能可靠触发发送
-        with compose_mid:
-            with st.form("chat_compose_form", clear_on_submit=True):
-                _form_cols = st.columns([8, 1])
-                with _form_cols[0]:
-                    draft_input = st.text_input(
-                        "输入消息",
-                        label_visibility="collapsed",
-                        placeholder="问我关于股票的任何问题...",
-                    )
-                with _form_cols[1]:
-                    send_clicked = st.form_submit_button(
-                        "发送",
-                        type="primary",
-                        use_container_width=True,
-                    )
+        with compose_mid, st.form("chat_compose_form", clear_on_submit=True):
+            _form_cols = st.columns([8, 1])
+            with _form_cols[0]:
+                draft_input = st.text_input(
+                    "输入消息",
+                    label_visibility="collapsed",
+                    placeholder="问我关于股票的任何问题...",
+                )
+            with _form_cols[1]:
+                send_clicked = st.form_submit_button(
+                    "发送",
+                    type="primary",
+                    use_container_width=True,
+                )
         st.markdown("</div>", unsafe_allow_html=True)
 
         if new_chat_clicked:
@@ -381,7 +378,6 @@ with content_col:
         # form 提交（Enter 或点击发送）时读取输入
         prompt = str(draft_input or "").strip() if send_clicked else ""
         if prompt:
-
             # 显示用户消息
             st.session_state["chat_messages"].append({"role": "user", "content": prompt})
 
@@ -413,13 +409,10 @@ with content_col:
                     )
 
                     for event_type, data in manager.send_message_streaming(prompt, auth_state=_get_auth_state()):
-
                         if event_type == "thinking":
                             # 首次出现 thinking 时创建可折叠区域
                             if thinking_expander is None:
-                                thinking_expander = status_container.expander(
-                                    "💭 推理过程", expanded=True
-                                )
+                                thinking_expander = status_container.expander("💭 推理过程", expanded=True)
                                 thinking_placeholder = thinking_expander.empty()
                             thinking_text += data
                             thinking_placeholder.markdown(thinking_text + "▌")
@@ -490,9 +483,11 @@ with content_col:
 
                     # 保存到消息历史
                     if final_response:
-                        st.session_state["chat_messages"].append({
-                            "role": "assistant",
-                            "content": final_response,
-                        })
+                        st.session_state["chat_messages"].append(
+                            {
+                                "role": "assistant",
+                                "content": final_response,
+                            }
+                        )
 
             st.rerun()

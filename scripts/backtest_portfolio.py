@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 组合级回测器 (Portfolio-Level Backtest)
 
@@ -15,29 +14,25 @@
         --benchmark-start 2025-09-01 --benchmark-end 2026-02-28 \
         --output-dir analysis/portfolio
 """
+
 from __future__ import annotations
 
 import argparse
 import os
 import sys
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-
 
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.backtester import (
-    calc_max_drawdown_pct,
-    calc_sharpe_ratio,
-    calc_calmar_ratio,
-    calc_information_ratio,
     calc_cvar95_pct,
+    calc_information_ratio,
+    calc_sharpe_ratio,
     fmt_metric,
-    parse_date,
 )
 
 
@@ -109,13 +104,15 @@ def build_portfolio_nav(
                     if entry_cap <= 0:
                         continue
                     cash -= entry_cap
-                    active_positions.append({
-                        "code": row.get("code", ""),
-                        "track": row.get("track", ""),
-                        "entry_capital": entry_cap,
-                        "ret_pct": float(row.get("ret_pct", 0.0)),
-                        "exit_date": row["exit_date"],
-                    })
+                    active_positions.append(
+                        {
+                            "code": row.get("code", ""),
+                            "track": row.get("track", ""),
+                            "entry_capital": entry_cap,
+                            "ret_pct": float(row.get("ret_pct", 0.0)),
+                            "exit_date": row["exit_date"],
+                        }
+                    )
 
         # 3. Calculate NAV
         positions_value = sum(p["entry_capital"] for p in active_positions)
@@ -123,13 +120,15 @@ def build_portfolio_nav(
         prev_nav = nav_records[-1]["nav"] if nav_records else initial_capital
         daily_ret = (nav / prev_nav - 1.0) * 100.0 if prev_nav > 0 else 0.0
 
-        nav_records.append({
-            "date": day,
-            "nav": nav,
-            "daily_ret_pct": daily_ret,
-            "cash": cash,
-            "positions_count": len(active_positions),
-        })
+        nav_records.append(
+            {
+                "date": day,
+                "nav": nav,
+                "daily_ret_pct": daily_ret,
+                "cash": cash,
+                "positions_count": len(active_positions),
+            }
+        )
 
     return pd.DataFrame(nav_records)
 
@@ -153,7 +152,7 @@ def calc_portfolio_metrics(
 
     # Max drawdown from NAV curve
     peak = nav.cummax()
-    dd = (nav / peak - 1.0)
+    dd = nav / peak - 1.0
     max_dd_pct = float(dd.min()) * 100.0 if not dd.empty else None
 
     # Sharpe from daily returns
@@ -213,13 +212,15 @@ def _build_portfolio_md(metrics: dict, nav_df: pd.DataFrame) -> str:
         nav_s = pd.to_numeric(nav_df["nav"], errors="coerce")
         if not nav_s.empty:
             min_idx = nav_s.idxmin()
-            lines.extend([
-                "## 净值关键节点",
-                f"- 起点: {nav_df.iloc[0]['date']} | NAV={nav_s.iloc[0]:.2f}",
-                f"- 最低: {nav_df.iloc[min_idx]['date']} | NAV={nav_s.iloc[min_idx]:.2f}",
-                f"- 终点: {nav_df.iloc[-1]['date']} | NAV={nav_s.iloc[-1]:.2f}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## 净值关键节点",
+                    f"- 起点: {nav_df.iloc[0]['date']} | NAV={nav_s.iloc[0]:.2f}",
+                    f"- 最低: {nav_df.iloc[min_idx]['date']} | NAV={nav_s.iloc[min_idx]:.2f}",
+                    f"- 终点: {nav_df.iloc[-1]['date']} | NAV={nav_s.iloc[-1]:.2f}",
+                    "",
+                ]
+            )
 
     return "\n".join(lines)
 

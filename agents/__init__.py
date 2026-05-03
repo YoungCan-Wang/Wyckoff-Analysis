@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Wyckoff Agent 层 — 基于 Google ADK 的对话式智能投研 Agent。
 

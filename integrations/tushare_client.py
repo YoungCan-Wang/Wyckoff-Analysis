@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tushare Pro 客户端封装（含全局限流）
 
@@ -13,13 +12,13 @@ Tushare Pro 客户端封装（含全局限流）
     if pro:
         df = pro.daily(ts_code="000001.SZ", start_date="20260101", end_date="20260411")
 """
+
 from __future__ import annotations
 
 import os
 import time
 import warnings
 from threading import Lock
-
 
 # ── 全局滑动窗口限流器（进程级单例，线程安全） ──
 _RATE_LIMIT = int(os.getenv("TUSHARE_RATE_LIMIT", "400"))  # 次/分钟
@@ -49,9 +48,11 @@ class _RateLimitedPro:
     def __getattr__(self, name):
         attr = getattr(object.__getattribute__(self, "_pro"), name)
         if callable(attr):
+
             def wrapper(*args, **kwargs):
                 _wait_for_rate_limit()
                 return attr(*args, **kwargs)
+
             wrapper.__name__ = name
             return wrapper
         return attr
@@ -63,6 +64,7 @@ def get_pro():
     # 优先尝试从 streamlit session 中获取用户配置
     try:
         import streamlit as st
+
         token = (st.session_state.get("tushare_token") or "").strip()
     except Exception:
         pass
@@ -81,6 +83,7 @@ def get_pro():
             module=r"tushare\.pro\.data_pro",
         )
         import tushare as ts
+
         ts.set_token(token)
         return _RateLimitedPro(ts.pro_api())
     except ImportError:

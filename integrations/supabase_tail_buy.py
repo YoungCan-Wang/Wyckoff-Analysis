@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """Supabase tail_buy_history 表读写。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -31,9 +31,7 @@ def save_tail_buy_to_supabase(rows: list[dict]) -> int:
     ]
     try:
         client = _admin()
-        client.table(TABLE_TAIL_BUY_HISTORY).upsert(
-            payload, on_conflict="code,run_date"
-        ).execute()
+        client.table(TABLE_TAIL_BUY_HISTORY).upsert(payload, on_conflict="code,run_date").execute()
         return len(payload)
     except Exception as e:
         print(f"[tail_buy] supabase write failed: {e}")
@@ -46,13 +44,7 @@ def load_tail_buy_from_supabase(limit: int = 100) -> list[dict[str, Any]]:
         return []
     try:
         client = _admin()
-        resp = (
-            client.table(TABLE_TAIL_BUY_HISTORY)
-            .select("*")
-            .order("run_date", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        resp = client.table(TABLE_TAIL_BUY_HISTORY).select("*").order("run_date", desc=True).limit(limit).execute()
         return resp.data or []
     except Exception as e:
         print(f"[tail_buy] supabase read failed: {e}")

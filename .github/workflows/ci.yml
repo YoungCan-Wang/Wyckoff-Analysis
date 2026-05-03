@@ -5,17 +5,25 @@ on:
     branches: [main, feature/visible]
     paths:
       - "**.py"
+      - "pyproject.toml"
+      - "scripts/quality_gate.py"
+      - ".metrics/**"
       - "requirements.txt"
       - ".github/workflows/ci.yml"
+      - "web/**"
   pull_request:
     branches: [main, feature/visible]
     paths:
       - "**.py"
+      - "pyproject.toml"
+      - "scripts/quality_gate.py"
+      - ".metrics/**"
       - "requirements.txt"
       - ".github/workflows/ci.yml"
+      - "web/**"
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -36,13 +44,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[streamlit,dev]"
 
+      - name: Lint (ruff check)
+        run: ruff check .
+
+      - name: Format check (ruff format)
+        run: ruff format --check .
+
+      - name: Quality gate (function length + LOC trend)
+        run: python scripts/quality_gate.py --ci
+
       - name: Sanity check (import)
         run: |
           python -c "import streamlit; import akshare; import pandas; print('OK')"
 
       - name: Py compile all modules
         run: |
-          python -m py_compile $(find app core integrations pages scripts utils -name "*.py")
+          python -m py_compile $(find agents app cli core integrations pages scripts tools utils -name "*.py")
 
       - name: Run tests
         run: python -m pytest tests/ -x -q
@@ -52,3 +69,22 @@ jobs:
         env:
           FEISHU_WEBHOOK_URL: "https://example.com"
           GEMINI_API_KEY: "fake-key-for-dry-run"
+
+  web-check:
+    runs-on: ubuntu-latest
+    if: contains(toJSON(github.event.commits.*.modified), 'web/') || contains(toJSON(github.event.commits.*.added), 'web/') || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: TypeScript check
+        run: pnpm -r exec tsc --noEmit
+        working-directory: web

@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 """Shared guardrails and constants for the agent loop."""
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 MAX_TOOL_ROUNDS = 15
 MAX_INCOMPLETE_TOOL_RETRIES = 2
@@ -158,15 +159,12 @@ def resolve_turn_expectation(messages: list[dict[str, Any]]) -> TurnExpectation 
 
     previous_context = _recent_context_text(messages[:-1], limit=4)
     if (
-        (
-            any(phrase in last_user for phrase in _PURE_FOLLOWUP_DIAGNOSE_PHRASES)
-            or (
-                any(hint in last_user for hint in _GENERIC_DIAGNOSE_HINTS)
-                and any(ref in last_user for ref in _PORTFOLIO_FOLLOWUP_REFERENCES)
-            )
+        any(phrase in last_user for phrase in _PURE_FOLLOWUP_DIAGNOSE_PHRASES)
+        or (
+            any(hint in last_user for hint in _GENERIC_DIAGNOSE_HINTS)
+            and any(ref in last_user for ref in _PORTFOLIO_FOLLOWUP_REFERENCES)
         )
-        and any(marker in previous_context for marker in _PORTFOLIO_CONTEXT_MARKERS)
-    ):
+    ) and any(marker in previous_context for marker in _PORTFOLIO_CONTEXT_MARKERS):
         return TurnExpectation(
             required_tool="portfolio",
             reason="上一轮上下文已经明确在讨论持仓，这一轮体检需要继续做持仓诊断。",
@@ -237,10 +235,7 @@ def build_retry_user_message(expectation: TurnExpectation, assistant_text: str =
 
 def build_retry_exhausted_warning(expectation: TurnExpectation, retries: int) -> str:
     tool_name = _TOOL_CN_NAMES.get(expectation.required_tool, expectation.required_tool)
-    return (
-        f"⚠ 模型连续 {retries} 次没有调用必需工具 `{expectation.required_tool}`"
-        f"（{tool_name}），以下回答可能不可靠。"
-    )
+    return f"⚠ 模型连续 {retries} 次没有调用必需工具 `{expectation.required_tool}`（{tool_name}），以下回答可能不可靠。"
 
 
 def _looks_like_plan_only(text: str) -> bool:
@@ -267,12 +262,13 @@ def _looks_like_plan_only(text: str) -> bool:
 # Doom-loop detection
 # ---------------------------------------------------------------------------
 
+
 def _jaccard_similarity(s1: str, s2: str) -> float:
     """计算两个字符串的 Jaccard 相似度（字符 3-gram）。"""
     if not s1 or not s2:
         return 0.0
-    grams1 = {s1[i:i+3] for i in range(max(len(s1) - 2, 1))}
-    grams2 = {s2[i:i+3] for i in range(max(len(s2) - 2, 1))}
+    grams1 = {s1[i : i + 3] for i in range(max(len(s1) - 2, 1))}
+    grams2 = {s2[i : i + 3] for i in range(max(len(s2) - 2, 1))}
     if not grams1 or not grams2:
         return 0.0
     return len(grams1 & grams2) / len(grams1 | grams2)
@@ -307,14 +303,8 @@ def check_doom_loop(
     # 语义相似匹配：检查同工具的参数是否"换汤不换药"
     if recent_args_texts is not None:
         args_text = _json.dumps(args, sort_keys=True, ensure_ascii=False)
-        same_tool_texts = [
-            t for (n, _), t in zip(recent_calls, recent_args_texts)
-            if n == name
-        ]
-        similar_count = sum(
-            1 for t in same_tool_texts
-            if _jaccard_similarity(args_text, t) >= similarity_threshold
-        )
+        same_tool_texts = [t for (n, _), t in zip(recent_calls, recent_args_texts) if n == name]
+        similar_count = sum(1 for t in same_tool_texts if _jaccard_similarity(args_text, t) >= similarity_threshold)
         if similar_count >= DOOM_LOOP_THRESHOLD:
             return True
         recent_args_texts.append(args_text)

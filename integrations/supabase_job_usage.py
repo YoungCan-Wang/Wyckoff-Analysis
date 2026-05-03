@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
 """
 任务限频 — 基于 Supabase 的 per-user 每日使用次数管控 + 等级体系。
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 from core.constants import TABLE_JOB_USAGE
@@ -56,6 +56,7 @@ DEFAULT_TIER = "free"
 # 等级查询
 # ---------------------------------------------------------------------------
 
+
 def get_user_tier(user_id: str) -> str:
     """
     查询用户等级。
@@ -68,13 +69,9 @@ def get_user_tier(user_id: str) -> str:
         return DEFAULT_TIER
     try:
         from integrations.supabase_client import get_supabase_client
+
         supabase = get_supabase_client()
-        resp = (
-            supabase.table(TABLE_USER_TIER)
-            .select("tier, expires_at")
-            .eq("user_id", user_id)
-            .execute()
-        )
+        resp = supabase.table(TABLE_USER_TIER).select("tier, expires_at").eq("user_id", user_id).execute()
         if not resp.data:
             return DEFAULT_TIER
         row = resp.data[0]
@@ -84,7 +81,7 @@ def get_user_tier(user_id: str) -> str:
         if expires_at:
             try:
                 exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-                if exp < datetime.now(timezone.utc):
+                if exp < datetime.now(UTC):
                     return DEFAULT_TIER  # 已过期，降级
             except (ValueError, TypeError):
                 pass
@@ -114,12 +111,14 @@ def get_user_tier_info(user_id: str) -> dict[str, Any]:
 # 用量查询 / 自增
 # ---------------------------------------------------------------------------
 
+
 def get_daily_usage(user_id: str, job_kind: str) -> int:
     """查询用户今日已使用次数。Supabase 不可用时返回 0（不阻塞）。"""
     if not user_id:
         return 0
     try:
         from integrations.supabase_client import get_supabase_client
+
         supabase = get_supabase_client()
         today = date.today().isoformat()
         resp = (
@@ -147,6 +146,7 @@ def increment_daily_usage(user_id: str, job_kind: str) -> int:
         return -1
     try:
         from integrations.supabase_client import get_supabase_client
+
         supabase = get_supabase_client()
         today = date.today().isoformat()
         current = get_daily_usage(user_id, job_kind)
@@ -164,8 +164,11 @@ def increment_daily_usage(user_id: str, job_kind: str) -> int:
         limit = get_tier_limit(tier, job_kind)
         logger.info(
             "[job_usage] %s/%s [%s]: %d/%s",
-            user_id[:8], job_kind, tier,
-            new_count, "∞" if limit < 0 else str(limit),
+            user_id[:8],
+            job_kind,
+            tier,
+            new_count,
+            "∞" if limit < 0 else str(limit),
         )
         return new_count
     except Exception as e:
@@ -176,6 +179,7 @@ def increment_daily_usage(user_id: str, job_kind: str) -> int:
 # ---------------------------------------------------------------------------
 # 限频校验
 # ---------------------------------------------------------------------------
+
 
 def check_daily_limit(user_id: str, job_kind: str) -> tuple[bool, int, int]:
     """

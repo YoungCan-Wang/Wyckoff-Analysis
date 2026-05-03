@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """信号确认逻辑：pending → confirmed / expired。纯业务，不依赖 DB。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -36,7 +36,12 @@ def _confirm_sos(snap: dict, today: dict, days_elapsed: int) -> tuple[str, str]:
         return "expired", f"跌破信号日低点 {snap_low:.2f}"
     if snap_vol > 0 and today["volume"] > snap_vol * 0.8 and today["close"] < snap_close * 0.97:
         return "expired", "放量回落，非缩量确认"
-    if snap_vol > 0 and today["volume"] < snap_vol * 0.8 and today["low"] >= snap_low and today["close"] >= snap_close * 0.97:
+    if (
+        snap_vol > 0
+        and today["volume"] < snap_vol * 0.8
+        and today["low"] >= snap_low
+        and today["close"] >= snap_close * 0.97
+    ):
         return "confirmed", f"缩量回踩确认，收盘 {today['close']:.2f} 守住 {snap_low:.2f}"
     return "pending", "等待缩量确认"
 
@@ -79,7 +84,10 @@ _CONFIRM_DISPATCH = {
 
 
 def build_snap(
-    signal_type: str, df: pd.DataFrame, score: float, cfg: Any = None,
+    signal_type: str,
+    df: pd.DataFrame,
+    score: float,
+    cfg: Any = None,
 ) -> dict[str, Any]:
     """从 OHLCV DataFrame 最后一根 K 线构建价格快照。"""
     df_s = df.sort_values("date") if "date" in df.columns else df
@@ -88,14 +96,18 @@ def build_snap(
     ma50 = float(df_s["close"].rolling(50).mean().iloc[-1]) if len(df_s) >= 50 else float(last["close"])
 
     snap = {
-        "snap_open": float(last["open"]), "snap_high": float(last["high"]),
-        "snap_low": float(last["low"]), "snap_close": float(last["close"]),
-        "snap_volume": float(last["volume"]), "snap_ma20": ma20, "snap_ma50": ma50,
+        "snap_open": float(last["open"]),
+        "snap_high": float(last["high"]),
+        "snap_low": float(last["low"]),
+        "snap_close": float(last["close"]),
+        "snap_volume": float(last["volume"]),
+        "snap_ma20": ma20,
+        "snap_ma50": ma50,
     }
 
     if signal_type == "spring":
         window = 60 if cfg is None else getattr(cfg, "spring_support_window", 60)
-        zone = df_s.iloc[-(window + 2):-2] if len(df_s) > window + 2 else df_s.iloc[:-2]
+        zone = df_s.iloc[-(window + 2) : -2] if len(df_s) > window + 2 else df_s.iloc[:-2]
         snap["snap_support"] = float(zone["close"].min()) if len(zone) > 0 else float(last["low"])
     elif signal_type == "sos":
         snap["snap_support"] = float(df_s["high"].tail(21).iloc[:-1].max()) if len(df_s) >= 21 else float(last["high"])
@@ -114,9 +126,13 @@ def build_today_ohlcv(df: pd.DataFrame) -> dict[str, float]:
     ma20 = float(df_s["close"].rolling(20).mean().iloc[-1]) if len(df_s) >= 20 else float(last["close"])
     ma50 = float(df_s["close"].rolling(50).mean().iloc[-1]) if len(df_s) >= 50 else float(last["close"])
     return {
-        "open": float(last["open"]), "high": float(last["high"]),
-        "low": float(last["low"]), "close": float(last["close"]),
-        "volume": float(last["volume"]), "ma20": ma20, "ma50": ma50,
+        "open": float(last["open"]),
+        "high": float(last["high"]),
+        "low": float(last["low"]),
+        "close": float(last["close"]),
+        "volume": float(last["volume"]),
+        "ma20": ma20,
+        "ma50": ma50,
     }
 
 
@@ -145,21 +161,25 @@ def run_confirmation_cycle(
         new_status, reason = check_confirmation(sig["signal_type"], snap, today, days)
 
         update: dict[str, Any] = {
-            "id": sig["id"], "status": new_status,
-            "days_elapsed": days, "confirm_reason": reason,
+            "id": sig["id"],
+            "status": new_status,
+            "days_elapsed": days,
+            "confirm_reason": reason,
         }
         if new_status == "confirmed":
             update["confirm_date"] = trade_date
-            confirmed_symbols.append({
-                "code": code_str,
-                "name": sig.get("name", code_str),
-                "tag": f"{sig['signal_type'].upper()}(确认)",
-                "track": "Accum" if sig["signal_type"] in ("spring", "lps") else "Trend",
-                "initial_price": today["close"],
-                "score": sig.get("signal_score", 0),
-                "signal_type": sig["signal_type"],
-                "signal_date": str(sig["signal_date"]),
-            })
+            confirmed_symbols.append(
+                {
+                    "code": code_str,
+                    "name": sig.get("name", code_str),
+                    "tag": f"{sig['signal_type'].upper()}(确认)",
+                    "track": "Accum" if sig["signal_type"] in ("spring", "lps") else "Trend",
+                    "initial_price": today["close"],
+                    "score": sig.get("signal_score", 0),
+                    "signal_type": sig["signal_type"],
+                    "signal_date": str(sig["signal_date"]),
+                }
+            )
         elif new_status == "expired":
             update["expire_date"] = trade_date
         updates.append(update)
@@ -175,7 +195,8 @@ class PendingPool:
         self._next_id: int = 1
 
     def write(
-        self, signal_date: str,
+        self,
+        signal_date: str,
         triggers: dict[str, list[tuple[str, float]]],
         df_map: dict[str, pd.DataFrame],
         regime: str = "NEUTRAL",
@@ -196,12 +217,18 @@ class PendingPool:
                     continue
                 snap = build_snap(signal_type, df, score, cfg)
                 self._pool[key] = {
-                    "id": self._next_id, "code": int(code) if code.isdigit() else code,
-                    "signal_type": signal_type, "signal_date": signal_date,
-                    "signal_score": score, "status": "pending",
-                    "ttl_days": ttl, "days_elapsed": 0,
-                    "regime": regime, "name": name_map.get(code, code),
-                    "industry": sector_map.get(code, ""), **snap,
+                    "id": self._next_id,
+                    "code": int(code) if code.isdigit() else code,
+                    "signal_type": signal_type,
+                    "signal_date": signal_date,
+                    "signal_score": score,
+                    "status": "pending",
+                    "ttl_days": ttl,
+                    "days_elapsed": 0,
+                    "regime": regime,
+                    "name": name_map.get(code, code),
+                    "industry": sector_map.get(code, ""),
+                    **snap,
                 }
                 self._next_id += 1
                 added += 1

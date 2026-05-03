@@ -1,12 +1,14 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import traceback
-from datetime import date, datetime, timezone
+
+logger = logging.getLogger(__name__)
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -172,19 +174,11 @@ def _resolve_model_credentials(payload: dict[str, Any]) -> tuple[str, str, str, 
         provider_entry = custom_providers.get(provider) or {}
         if isinstance(provider_entry, dict):
             if not api_key:
-                api_key = str(
-                    provider_entry.get("apikey")
-                    or provider_entry.get("api_key")
-                    or ""
-                ).strip()
+                api_key = str(provider_entry.get("apikey") or provider_entry.get("api_key") or "").strip()
             if not model:
                 model = str(provider_entry.get("model") or "").strip()
             if not base_url:
-                base_url = str(
-                    provider_entry.get("baseurl")
-                    or provider_entry.get("base_url")
-                    or ""
-                ).strip()
+                base_url = str(provider_entry.get("baseurl") or provider_entry.get("base_url") or "").strip()
     if not api_key:
         api_key = str(os.getenv(env_api_key, "") or "").strip()
     if not api_key and provider == "gemini":
@@ -256,11 +250,12 @@ def main() -> int:
 
     payload = _load_payload(args.payload_json)
     requested_by_user_id = str(payload.get("user_id", "") or "").strip()
-    
+
     # 注入用户配置的环境变量（Tushare Token 等）
     if requested_by_user_id:
         try:
             from integrations.supabase_portfolio import load_user_settings_admin
+
             user_settings = load_user_settings_admin(requested_by_user_id)
             if user_settings:
                 ts_token = str(user_settings.get("tushare_token") or "").strip()
@@ -274,7 +269,7 @@ def main() -> int:
         "request_id": args.request_id,
         "job_kind": args.job_kind,
         "requested_by_user_id": requested_by_user_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "status": "success",
     }
 

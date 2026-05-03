@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 手动复盘 review_list：检查每只股票在漏斗中止步的层级与原因，并发送飞书。
 
@@ -9,27 +8,22 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import os
 import sys
+from collections import Counter
 
 import pandas as pd
-
 
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.wyckoff_engine import FunnelConfig, _sorted_if_needed
 from core.funnel_pipeline import TRIGGER_LABELS, run_funnel_job
+from core.wyckoff_engine import FunnelConfig, _sorted_if_needed
 from utils.feishu import send_feishu_notification
 
 
 def _is_main_or_chinext(code: str) -> bool:
-    return str(code).startswith(
-        ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")
-    )
-
-
+    return str(code).startswith(("600", "601", "603", "605", "000", "001", "002", "003", "300", "301"))
 
 
 def _build_layer2_context(
@@ -65,10 +59,7 @@ def _explain_l1_fail(
     if "amount" in s.columns:
         avg_amt = pd.to_numeric(s["amount"], errors="coerce").tail(cfg.amount_avg_window).mean()
         if pd.notna(avg_amt) and float(avg_amt) < cfg.min_avg_amount_wan * 10000:
-            return (
-                f"成交额不足: {float(avg_amt)/10000.0:.1f}万"
-                f" < {cfg.min_avg_amount_wan:.1f}万"
-            )
+            return f"成交额不足: {float(avg_amt) / 10000.0:.1f}万 < {cfg.min_avg_amount_wan:.1f}万"
     return "未通过L1（综合条件不满足）"
 
 
@@ -90,7 +81,10 @@ def _explain_l2_fail(
 
     # 用引擎做单票 L2 判断
     passed, channel_map = layer2_strength_detailed(
-        [code], df_map, bench_df_raw, cfg,
+        [code],
+        df_map,
+        bench_df_raw,
+        cfg,
         rps_universe=rps_universe,
     )
     if passed:
@@ -208,16 +202,17 @@ def main() -> int:
 
     # 1. 先获取今日涨幅 ≥ 8% 的股票（使用今日数据）
     print("[review] 获取今日涨幅 ≥ 8% 股票...")
-    from utils.trading_clock import resolve_end_calendar_day
-    from integrations.fetch_a_share_csv import _resolve_trading_window, get_stocks_by_board
     from datetime import timedelta
-    
+
+    from integrations.fetch_a_share_csv import _resolve_trading_window, get_stocks_by_board
+    from utils.trading_clock import resolve_end_calendar_day
+
     end_calendar_day = resolve_end_calendar_day()
     today_window = _resolve_trading_window(end_calendar_day=end_calendar_day, trading_days=1)
     today = today_window.end_trade_date
     previous_window = _resolve_trading_window(end_calendar_day=today - timedelta(days=1), trading_days=1)
     previous_trade_date = previous_window.end_trade_date
-    
+
     # 获取今日数据找涨停股
     print(f"[review] 今日: {today}, 前一交易日: {previous_trade_date}")
     stock_items = get_stocks_by_board("main_chinext")
@@ -262,7 +257,7 @@ def main() -> int:
             f"target_trade_date={today_window.end_trade_date}"
         )
         review_codes = _find_big_gainers(today_df_map, name_map_today, threshold=8.0)
-    
+
     if not review_codes:
         print("[review] 今日无涨幅 ≥ 8% 的股票，跳过")
         send_feishu_notification(webhook, "🔍 涨停复盘", f"交易日 {today}：今日无涨幅 ≥ 8% 的主板/创业板股票")
@@ -273,7 +268,7 @@ def main() -> int:
     print(f"[review] 回放前一交易日 ({previous_trade_date}) 漏斗...")
     original_end_day = os.getenv("END_CALENDAR_DAY", "")
     os.environ["END_CALENDAR_DAY"] = previous_trade_date.strftime("%Y-%m-%d")
-    
+
     try:
         triggers, metrics = run_funnel_job(include_debug_context=True)
     finally:
@@ -379,9 +374,7 @@ def main() -> int:
     ]
 
     for row in rows:
-        lines.append(
-            f"• {row['code']} {row['name']} | {row['stage']} | {row['reason']}"
-        )
+        lines.append(f"• {row['code']} {row['name']} | {row['stage']} | {row['reason']}")
 
     title = "🔍 涨停复盘：今日涨停为何未在前一日漏斗捕获"
     content = "\n".join(lines)

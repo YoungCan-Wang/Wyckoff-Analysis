@@ -1,36 +1,36 @@
-# -*- coding: utf-8 -*-
-
-import streamlit as st
-from datetime import date, timedelta, datetime
 import random
 import time
+from datetime import date, datetime, timedelta
+
+import streamlit as st
+from dotenv import load_dotenv
 from tenacity import (
     retry,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception,
 )
-from dotenv import load_dotenv
-from integrations.fetch_a_share_csv import (
-    _resolve_trading_window,
-    _build_export,
-    get_all_stocks,
-    get_stocks_by_board,
-    _normalize_symbols,
-    _stock_name_from_code,
-)
-from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
+
 from app.auth_component import logout
 from app.layout import is_data_source_failure_message, setup_page, show_user_error
-from app.ui_helpers import show_page_loading, inject_custom_css
 from app.navigation import show_right_nav
+from app.ui_helpers import inject_custom_css, show_page_loading
 from core.export_artifacts import (
     cleanup_export_artifacts,
     file_loader,
     write_dataframe_csv,
     write_zip_from_files,
 )
+from integrations.fetch_a_share_csv import (
+    _build_export,
+    _normalize_symbols,
+    _resolve_trading_window,
+    _stock_name_from_code,
+    get_all_stocks,
+    get_stocks_by_board,
+)
 from integrations.stock_hist_repository import get_stock_hist
+from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 
 # Load environment variables from .env file
 load_dotenv()
@@ -41,9 +41,7 @@ inject_custom_css()
 # === Logged In User Info ===
 with st.sidebar:
     if st.session_state.get("user"):
-        st.caption(
-            f"当前用户: {st.session_state.user.get('email') if isinstance(st.session_state.user, dict) else ''}"
-        )
+        st.caption(f"当前用户: {st.session_state.user.get('email') if isinstance(st.session_state.user, dict) else ''}")
         if st.button("退出登录"):
             logout()
     st.divider()
@@ -98,9 +96,7 @@ def _fetch_hist_with_retry(symbol, window, adjust):
 def add_to_history(symbol, name):
     item = {"symbol": symbol, "name": name}
     # Remove if exists to move to top
-    st.session_state.search_history = [
-        x for x in st.session_state.search_history if x["symbol"] != symbol
-    ]
+    st.session_state.search_history = [x for x in st.session_state.search_history if x["symbol"] != symbol]
     st.session_state.search_history.insert(0, item)
     # Keep only last 10
     st.session_state.search_history = st.session_state.search_history[:10]
@@ -138,9 +134,7 @@ content_col = show_right_nav()
 with content_col:
     _maybe_cleanup_export_artifacts()
     st.title("📈 A股历史行情导出工具")
-    st.markdown(
-        "基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。"
-    )
+    st.markdown("基于 **akshare**，支持导出 **威科夫分析** 所需的增强版 CSV（包含量价、换手率、振幅、均价、板块等）。")
     st.markdown("💡 灵感来自 **秋生trader @Hoyooyoo**，祝各位在祖国的大A里找到价值！")
 
     # Sidebar for inputs
@@ -168,9 +162,7 @@ with content_col:
 
         if batch_mode:
             st.markdown("##### 📌 1. 手动输入代码")
-            st.caption(
-                "批量模式：为降低失败率与封禁风险，固定回溯 60 个交易日，且最多 6 只股票。"
-            )
+            st.caption("批量模式：为降低失败率与封禁风险，固定回溯 60 个交易日，且最多 6 只股票。")
             batch_symbols_text = st.text_area(
                 "股票代码列表（支持粘贴混合文本）",
                 value="",
@@ -189,9 +181,7 @@ with content_col:
             st.markdown("##### 📌 2. 按板块批量添加 (可选)", help=board_help)
             col_b1, col_b2, col_b3, col_b4 = st.columns(4)
             with col_b1:
-                check_main = st.checkbox(
-                    "主板", key="check_board_main", help=board_help
-                )
+                check_main = st.checkbox("主板", key="check_board_main", help=board_help)
             with col_b2:
                 check_chinext = st.checkbox("创业板", key="check_board_chinext")
             with col_b3:
@@ -200,21 +190,13 @@ with content_col:
                 check_bse = st.checkbox("北交所", key="check_board_bse")
 
             if check_main:
-                selected_boards_codes.extend(
-                    [s["code"] for s in _cached_stocks_by_board("main")]
-                )
+                selected_boards_codes.extend([s["code"] for s in _cached_stocks_by_board("main")])
             if check_chinext:
-                selected_boards_codes.extend(
-                    [s["code"] for s in _cached_stocks_by_board("chinext")]
-                )
+                selected_boards_codes.extend([s["code"] for s in _cached_stocks_by_board("chinext")])
             if check_star:
-                selected_boards_codes.extend(
-                    [s["code"] for s in _cached_stocks_by_board("star")]
-                )
+                selected_boards_codes.extend([s["code"] for s in _cached_stocks_by_board("star")])
             if check_bse:
-                selected_boards_codes.extend(
-                    [s["code"] for s in _cached_stocks_by_board("bse")]
-                )
+                selected_boards_codes.extend([s["code"] for s in _cached_stocks_by_board("bse")])
 
             if selected_boards_codes:
                 st.info(f"✅ 已从板块选择 {len(selected_boards_codes)} 只股票")
@@ -228,18 +210,12 @@ with content_col:
 
             stock_options = []
             if enable_stock_search:
-                loading = show_page_loading(
-                    title="思考中...", subtitle="正在加载股票列表"
-                )
+                loading = show_page_loading(title="思考中...", subtitle="正在加载股票列表")
                 try:
                     all_stocks = load_stock_list()
                 finally:
                     loading.empty()
-                stock_options = (
-                    [f"{s['code']} {s['name']}" for s in all_stocks]
-                    if all_stocks
-                    else []
-                )
+                stock_options = [f"{s['code']} {s['name']}" for s in all_stocks] if all_stocks else []
 
             if stock_options:
                 default_index = 0
@@ -259,16 +235,12 @@ with content_col:
 
                 stock_parts = selected_stock.split(maxsplit=1)
                 current_code = stock_parts[0] if stock_parts else ""
-                current_name_from_select = (
-                    stock_parts[1] if len(stock_parts) > 1 else ""
-                )
+                current_name_from_select = stock_parts[1] if len(stock_parts) > 1 else ""
                 if current_code != st.session_state.current_symbol:
                     st.session_state.current_symbol = current_code
             else:
                 if enable_stock_search:
-                    st.warning(
-                        "股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。"
-                    )
+                    st.warning("股票列表加载失败（可能是网络或数据源问题）。你仍可直接输入 6 位股票代码继续使用。")
                     if st.button("🔄 重试加载股票列表", width="stretch"):
                         load_stock_list.clear()
                         st.rerun()
@@ -310,9 +282,7 @@ with content_col:
         adjust = st.selectbox(
             "复权类型",
             options=["", "qfq", "hfq"],
-            format_func=lambda x: "不复权"
-            if x == ""
-            else ("前复权" if x == "qfq" else "后复权"),
+            format_func=lambda x: "不复权" if x == "" else ("前复权" if x == "qfq" else "后复权"),
             index=1,
             help=(
                 "不复权：原始行情；\n"
@@ -321,9 +291,7 @@ with content_col:
             ),
         )
 
-        st.caption(
-            "复权用于处理分红送转等导致的价格跳变：前复权更常用于看趋势；后复权更常用于还原历史价位对比。"
-        )
+        st.caption("复权用于处理分红送转等导致的价格跳变：前复权更常用于看趋势；后复权更常用于还原历史价位对比。")
 
         st.markdown("---")
 
@@ -358,9 +326,7 @@ with content_col:
                     st.error("请至少输入 1 个股票代码，或勾选至少 1 个板块。")
                     st.stop()
                 if len(symbols) > 6:
-                    st.error(
-                        f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。"
-                    )
+                    st.error(f"批量生成一次最多支持 6 个股票代码（当前识别到 {len(symbols)} 个）。")
                     st.stop()
 
                 progress_ph = st.empty()
@@ -380,9 +346,7 @@ with content_col:
                     name_map = _stock_name_map()
                     zip_members: list[tuple[str, str]] = []
                     for idx, symbol in enumerate(symbols, start=1):
-                        status_ph.caption(
-                            f"({idx}/{len(symbols)}) 正在处理：{symbol}"
-                        )
+                        status_ph.caption(f"({idx}/{len(symbols)}) 正在处理：{symbol}")
                         try:
                             name = name_map.get(symbol) or "Unknown"
 
@@ -394,12 +358,8 @@ with content_col:
 
                             safe_symbol = safe_filename_part(symbol)
                             safe_name = safe_filename_part(name)
-                            file_name_export = (
-                                f"{safe_symbol}_{safe_name}_ohlcv.csv"
-                            )
-                            file_name_hist = (
-                                f"{safe_symbol}_{safe_name}_hist_data.csv"
-                            )
+                            file_name_export = f"{safe_symbol}_{safe_name}_ohlcv.csv"
+                            file_name_hist = f"{safe_symbol}_{safe_name}_hist_data.csv"
 
                             export_path = write_dataframe_csv(
                                 df_export,
@@ -457,9 +417,7 @@ with content_col:
                     if feishu or wecom or dingtalk:
                         success_count = len([r for r in results if r["status"] == "ok"])
                         failed_count = len(results) - success_count
-                        notify_title = (
-                            f"📦 批量下载完成 ({success_count}/{len(symbols)})"
-                        )
+                        notify_title = f"📦 批量下载完成 ({success_count}/{len(symbols)})"
                         notify_text = (
                             f"**任务状态**: 已完成\n"
                             f"**成功**: {success_count} 个\n"
@@ -469,14 +427,11 @@ with content_col:
                         )
                         if failed_count > 0:
                             failed_details = "\\n".join(
-                                [
-                                    f"- {r['symbol']}: {r['error']}"
-                                    for r in results
-                                    if r["status"] != "ok"
-                                ]
+                                [f"- {r['symbol']}: {r['error']}" for r in results if r["status"] != "ok"]
                             )
                             notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
                         from utils.notify import send_all_webhooks
+
                         send_all_webhooks(feishu, wecom, dingtalk, notify_title, notify_text)
                         st.toast("✅ 通知已发送", icon="🔔")
 
@@ -531,9 +486,7 @@ with content_col:
                     f"**{window.end_trade_date}** ({trading_days} 个交易日)"
                 )
 
-                df_hist = _fetch_hist_with_retry(
-                    st.session_state.current_symbol, window, adjust
-                )
+                df_hist = _fetch_hist_with_retry(st.session_state.current_symbol, window, adjust)
                 sector = stock_sector_em(st.session_state.current_symbol, timeout=60)
                 df_export = _build_export(df_hist, sector)
 
@@ -553,9 +506,7 @@ with content_col:
                         st.dataframe(df_hist, width="stretch")
 
                 file_name_export = f"{st.session_state.current_symbol}_{name}_ohlcv.csv"
-                file_name_hist = (
-                    f"{st.session_state.current_symbol}_{name}_hist_data.csv"
-                )
+                file_name_hist = f"{st.session_state.current_symbol}_{name}_hist_data.csv"
                 file_name_zip = f"{st.session_state.current_symbol}_{name}_all.zip"
                 export_path = write_dataframe_csv(
                     df_export,
@@ -642,4 +593,6 @@ with content_col:
         st.info("👈 请在左侧输入参数并点击「开始获取数据」")
 
     # ── 自定义导出跳转 ──
-    st.page_link("pages/CustomExport.py", label="🧰 更多数据源（ETF / 指数 / 宏观 CPI）→ 自定义导出", use_container_width=True)
+    st.page_link(
+        "pages/CustomExport.py", label="🧰 更多数据源（ETF / 指数 / 宏观 CPI）→ 自定义导出", use_container_width=True
+    )

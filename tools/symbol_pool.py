@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """
 股票池解析工具。
 
 根据环境变量选择股票来源（手动指定 / 板块筛选 / 全市场默认）。
 """
+
 from __future__ import annotations
 
 import os
@@ -21,9 +21,7 @@ def _stock_name_map() -> dict[str, str]:
         from integrations.fetch_a_share_csv import get_all_stocks
 
         items = get_all_stocks()
-        return {
-            x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)
-        }
+        return {x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)}
     except Exception:
         return {}
 
@@ -41,9 +39,7 @@ def resolve_symbol_pool_from_env() -> tuple[list[str], dict[str, str], dict[str,
     if pool_mode == "manual":
         manual_raw = str(os.getenv("FUNNEL_POOL_MANUAL_SYMBOLS", "") or "")
         all_name_map = _stock_name_map()
-        symbols = _normalize_symbols(
-            [x.strip() for x in manual_raw.replace(";", ",").replace("\n", ",").split(",")]
-        )
+        symbols = _normalize_symbols([x.strip() for x in manual_raw.replace(";", ",").replace("\n", ",").split(",")])
         name_map = {code: all_name_map.get(code, "") for code in symbols}
         return (
             symbols,
@@ -79,8 +75,16 @@ def resolve_symbol_pool_from_env() -> tuple[list[str], dict[str, str], dict[str,
             {code: merged_code_to_name.get(code, "") for code in symbols},
             {
                 "pool_mode": "board",
-                "pool_main": len(items) if board_name == "main" else len(get_stocks_by_board("main")) if board_name == "all" else 0,
-                "pool_chinext": len(items) if board_name == "chinext" else len(get_stocks_by_board("chinext")) if board_name == "all" else 0,
+                "pool_main": len(items)
+                if board_name == "main"
+                else len(get_stocks_by_board("main"))
+                if board_name == "all"
+                else 0,
+                "pool_chinext": len(items)
+                if board_name == "chinext"
+                else len(get_stocks_by_board("chinext"))
+                if board_name == "all"
+                else 0,
                 "pool_merged": len(symbols),
                 "pool_st_excluded": 0,
                 "pool_limit": limit_count,
@@ -97,9 +101,7 @@ def resolve_symbol_pool_from_env() -> tuple[list[str], dict[str, str], dict[str,
         if code not in merged_code_to_name:
             merged_code_to_name[code] = str(item.get("name", "")).strip()
     merged_symbols = _normalize_symbols(list(merged_code_to_name.keys()))
-    st_symbols = [
-        sym for sym in merged_symbols if "ST" in merged_code_to_name.get(sym, "").upper()
-    ]
+    st_symbols = [sym for sym in merged_symbols if "ST" in merged_code_to_name.get(sym, "").upper()]
     st_set = set(st_symbols)
     all_symbols = [sym for sym in merged_symbols if sym not in st_set]
     if limit_count > 0:

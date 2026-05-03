@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from cli.memory import _extract_keywords, build_memory_context, extract_stock_codes
@@ -40,6 +39,7 @@ class TestBuildMemoryContext:
     def test_returns_empty_when_no_db(self, monkeypatch):
         def _boom(*a, **kw):
             raise ImportError("no db")
+
         monkeypatch.setattr("cli.memory.extract_stock_codes", lambda t: [])
         result = build_memory_context("随便问个问题")
         assert result == "" or isinstance(result, str)

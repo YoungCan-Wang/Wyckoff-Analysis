@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 板块轮动水温计
 
@@ -14,10 +13,9 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import pandas as pd
-
 
 SECTOR_STATE_LABELS: dict[str, str] = {
     "CONSENSUS_CLIMAX": "连续一致高潮",
@@ -142,11 +140,7 @@ def _member_snapshot(df: pd.DataFrame) -> dict | None:
     ret3 = _safe_return(close, 3)
     ret10 = _safe_return(close, 10)
     breakdown_flag = bool(
-        ret3 is not None
-        and ret3 <= -2.0
-        and amount_ratio_3d is not None
-        and amount_ratio_3d >= 1.05
-        and not above_ma20
+        ret3 is not None and ret3 <= -2.0 and amount_ratio_3d is not None and amount_ratio_3d >= 1.05 and not above_ma20
     )
     pullback_shrink_flag = bool(
         ret10 is not None
@@ -237,12 +231,7 @@ def _classify_sector_state(info: dict) -> str:
         and breakdown_pct >= 20.0
     ):
         return "DISTRIBUTION_RISK"
-    if (
-        ret_10d is not None
-        and ret_10d >= 3.0
-        and above_ma50_pct >= 45.0
-        and breakdown_pct < 25.0
-    ):
+    if ret_10d is not None and ret_10d >= 3.0 and above_ma50_pct >= 45.0 and breakdown_pct < 25.0:
         return "HEALTHY_MAINLINE"
     return "NEUTRAL_MIXED"
 
@@ -262,11 +251,7 @@ def _group_overview_lines(state_map: dict[str, dict], focus_sectors: list[str] |
     focus_set = {str(x).strip() for x in (focus_sectors or []) if str(x).strip()}
     lines: list[str] = []
     for state in _OVERVIEW_STATE_ORDER:
-        bucket = [
-            (sec, info)
-            for sec, info in state_map.items()
-            if str(info.get("state", "")) == state
-        ]
+        bucket = [(sec, info) for sec, info in state_map.items() if str(info.get("state", "")) == state]
         if not bucket:
             continue
         bucket = sorted(
@@ -302,7 +287,7 @@ def analyze_sector_rotation(
         grouped.setdefault(sector, []).append(code)
 
     state_map: dict[str, dict] = {}
-    counts: dict[str, int] = {state: 0 for state in SECTOR_STATE_LABELS.keys()}
+    counts: dict[str, int] = dict.fromkeys(SECTOR_STATE_LABELS.keys(), 0)
     for sector, members in grouped.items():
         snapshots = []
         for code in members:
@@ -313,21 +298,11 @@ def analyze_sector_rotation(
             continue
 
         stock_count = len(snapshots)
-        breadth_up_pct = (
-            sum(1 for x in snapshots if (x.get("last_pct") or 0.0) > 0) / stock_count * 100.0
-        )
-        above_ma50_pct = (
-            sum(1 for x in snapshots if bool(x.get("above_ma50"))) / stock_count * 100.0
-        )
-        climax_pct = (
-            sum(1 for x in snapshots if bool(x.get("climax_flag"))) / stock_count * 100.0
-        )
-        pullback_pct = (
-            sum(1 for x in snapshots if bool(x.get("pullback_shrink_flag"))) / stock_count * 100.0
-        )
-        breakdown_pct = (
-            sum(1 for x in snapshots if bool(x.get("breakdown_flag"))) / stock_count * 100.0
-        )
+        breadth_up_pct = sum(1 for x in snapshots if (x.get("last_pct") or 0.0) > 0) / stock_count * 100.0
+        above_ma50_pct = sum(1 for x in snapshots if bool(x.get("above_ma50"))) / stock_count * 100.0
+        climax_pct = sum(1 for x in snapshots if bool(x.get("climax_flag"))) / stock_count * 100.0
+        pullback_pct = sum(1 for x in snapshots if bool(x.get("pullback_shrink_flag"))) / stock_count * 100.0
+        breakdown_pct = sum(1 for x in snapshots if bool(x.get("breakdown_flag"))) / stock_count * 100.0
 
         info = {
             "stock_count": stock_count,

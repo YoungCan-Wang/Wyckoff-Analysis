@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """data_source 中 tickflow 优先链路测试。"""
+
 from __future__ import annotations
 
 import pandas as pd

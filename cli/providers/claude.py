@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 """Claude Provider — anthropic SDK 实现。"""
+
 from __future__ import annotations
 
 import json
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 
 import anthropic
 
@@ -126,26 +127,32 @@ class ClaudeProvider(LLMProvider):
                 if msg.get("content"):
                     content.append({"type": "text", "text": msg["content"]})
                 for tc in msg.get("tool_calls", []):
-                    content.append({
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["name"],
-                        "input": tc["args"],
-                    })
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "input": tc["args"],
+                        }
+                    )
                 claude_msgs.append({"role": "assistant", "content": content})
 
             elif role == "tool":
                 result = msg["content"]
                 if not isinstance(result, str):
                     result = json.dumps(result, ensure_ascii=False)
-                claude_msgs.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": msg.get("tool_call_id", ""),
-                        "content": result,
-                    }],
-                })
+                claude_msgs.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.get("tool_call_id", ""),
+                                "content": result,
+                            }
+                        ],
+                    }
+                )
 
         return claude_msgs
 
@@ -153,11 +160,13 @@ class ClaudeProvider(LLMProvider):
         """将标准 function schema 转为 Claude tools 格式。"""
         claude_tools = []
         for t in tools:
-            claude_tools.append({
-                "name": t["name"],
-                "description": t.get("description", ""),
-                "input_schema": t.get("parameters", {"type": "object", "properties": {}}),
-            })
+            claude_tools.append(
+                {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "input_schema": t.get("parameters", {"type": "object", "properties": {}}),
+                }
+            )
         return claude_tools
 
     def _parse_response(self, response) -> dict[str, Any]:
@@ -167,11 +176,13 @@ class ClaudeProvider(LLMProvider):
 
         for block in response.content:
             if block.type == "tool_use":
-                tool_calls.append({
-                    "id": block.id,
-                    "name": block.name,
-                    "args": block.input,
-                })
+                tool_calls.append(
+                    {
+                        "id": block.id,
+                        "name": block.name,
+                        "args": block.input,
+                    }
+                )
             elif block.type == "text":
                 text_parts.append(block.text)
 
