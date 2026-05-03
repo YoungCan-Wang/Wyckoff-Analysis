@@ -160,12 +160,46 @@ function buildKlineDigest(data: KlineRow[]): string {
   return lines.join('\n')
 }
 
+function createReasoningFetch(): typeof globalThis.fetch {
+  const cache: string[] = []
+
+  return async (input, init) => {
+    if (init?.body && typeof init.body === 'string') {
+      try {
+        const body = JSON.parse(init.body)
+        if (Array.isArray(body.messages)) {
+          let idx = 0
+          for (const msg of body.messages) {
+            if (msg.role === 'assistant' && !msg.reasoning_content && idx < cache.length) {
+              msg.reasoning_content = cache[idx]
+            }
+            if (msg.role === 'assistant') idx++
+          }
+          init = { ...init, body: JSON.stringify(body) }
+        }
+      } catch {}
+    }
+
+    const res = await globalThis.fetch(input, init)
+
+    const clone = res.clone()
+    clone.json().then((data: Record<string, unknown>) => {
+      const choices = data?.choices as Array<{ message?: { reasoning_content?: string } }> | undefined
+      const rc = choices?.[0]?.message?.reasoning_content
+      if (rc) cache.push(rc)
+    }).catch(() => {})
+
+    return res
+  }
+}
+
 function createProxiedProvider(config: LLMConfig) {
   return createOpenAI({
     apiKey: config.api_key,
     baseURL: '/api/llm-proxy',
     headers: { 'X-Target-URL': config.base_url },
     compatibility: 'compatible',
+    fetch: createReasoningFetch(),
   })
 }
 
