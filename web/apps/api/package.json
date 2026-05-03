@@ -11,7 +11,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^1.1.0",
     "@supabase/supabase-js": "^2.49.0",
-    "ai": "^4.1.0",
+    "ai": "^5.0.52",
     "hono": "^4.6.0",
     "zod": "^3.25.76"
   },

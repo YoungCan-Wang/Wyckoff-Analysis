@@ -13,7 +13,7 @@
     "@supabase/supabase-js": "^2.49.0",
     "@tanstack/react-query": "^5.62.0",
     "@wyckoff/shared": "workspace:*",
-    "ai": "^4.1.0",
+    "ai": "^5.0.52",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
