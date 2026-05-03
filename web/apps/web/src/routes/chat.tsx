@@ -21,6 +21,7 @@ const TOOL_LABELS: Record<string, string> = {
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  isError?: boolean
 }
 
 export function ChatPage() {
@@ -86,10 +87,12 @@ export function ChatPage() {
 
     let accumulated = ''
 
-    const chatHistory = newMessages.map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }))
+    const chatHistory = newMessages
+      .filter((m) => !m.isError)
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }))
 
     await runChatAgentStream(
       llmConfig,
@@ -123,7 +126,7 @@ export function ChatPage() {
           if (accumulated) {
             setMessages((prev) => [...prev, { role: 'assistant', content: accumulated }])
           } else {
-            setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${msg}` }])
+            setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${msg}`, isError: true }])
           }
           setStreamingText('')
           setToolStatus('')
@@ -223,7 +226,9 @@ export function ChatPage() {
                   className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
                     msg.role === 'user'
                       ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
-                      : 'bg-muted text-foreground'
+                      : msg.isError
+                        ? 'bg-red-50 text-red-700 border border-red-200'
+                        : 'bg-muted text-foreground'
                   }`}
                 >
                   {msg.role === 'user' ? msg.content : <MarkdownContent content={msg.content} />}
