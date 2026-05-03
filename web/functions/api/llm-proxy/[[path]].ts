@@ -1,15 +1,22 @@
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Max-Age': '86400',
+}
+
+const FORWARD_HEADERS = new Set([
+  'authorization',
+  'content-type',
+  'content-length',
+  'accept',
+])
+
 export const onRequest: PagesFunction = async (context) => {
   const { request } = context
 
   if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': '*',
-        'Access-Control-Max-Age': '86400',
-      },
-    })
+    return new Response(null, { headers: CORS_HEADERS })
   }
 
   const targetUrl = request.headers.get('X-Target-URL')
@@ -23,11 +30,9 @@ export const onRequest: PagesFunction = async (context) => {
 
   const headers = new Headers()
   for (const [key, value] of request.headers.entries()) {
-    if (['host', 'x-target-url', 'connection', 'origin', 'referer', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'cf-worker'].includes(key)) continue
-    if (key.startsWith('sec-')) continue
-    headers.set(key, value)
+    if (FORWARD_HEADERS.has(key)) headers.set(key, value)
   }
-  headers.set('user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36')
+  headers.set('user-agent', 'wyckoff-agent/1.0')
 
   try {
     const response = await fetch(dest, {

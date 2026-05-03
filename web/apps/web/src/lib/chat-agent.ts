@@ -16,7 +16,8 @@ const SYSTEM_PROMPT = `# 角色设定
 3. **大盘水温** — market_overview：查看市场信号、指数走势
 4. **战绩追踪** — query_recommendations：查询推荐跟踪记录
 5. **尾盘记录** — query_tail_buy：查询尾盘买入记录
-6. **调仓操作** — update_portfolio：新增、修改或删除持仓
+6. **调仓方案** — plan_portfolio_update：生成调仓方案（不直接执行）
+11. **确认执行** — execute_portfolio_update：用户确认后执行调仓方案
 7. **个股诊断** — analyze_stock：对单只股票做威科夫深度诊断（K线+量价+阶段）
 8. **漏斗选股** — screen_stocks：查看最新一期漏斗选股结果
 9. **AI 研报** — generate_ai_report：为指定股票生成威科夫深度研报
@@ -38,7 +39,8 @@ const SYSTEM_PROMPT = `# 角色设定
 
 1. 数据先行：所有分析基于工具返回的真实数据，绝不凭空编造数字。
 2. 中文输出：使用中文回复，用 Markdown 格式让信息清晰。
-3. 风险声明：涉及具体操作建议时，附带风险提示。`
+3. 风险声明：涉及具体操作建议时，附带风险提示。
+4. 调仓两步走：涉及调仓时，先调用 plan_portfolio_update 展示方案，等用户明确说"确认"/"执行"/"好的"后才调用 execute_portfolio_update 执行。绝不跳过确认步骤。`
 
 export interface LLMConfig {
   api_key: string
@@ -435,8 +437,31 @@ function buildTools(userId: string, config: LLMConfig) {
       },
     }),
 
-    update_portfolio: tool({
-      description: '新增、修改或删除持仓。action: "add"新增, "update"修改, "delete"删除。',
+    plan_portfolio_update: tool({
+      description: '生成调仓方案（不执行）。展示给用户确认后再调用 execute_portfolio_update。',
+      parameters: z.object({
+        action: z.enum(['add', 'update', 'delete']).describe('操作类型'),
+        code: z.string().describe('6位股票代码'),
+        name: z.string().optional().describe('股票名称'),
+        shares: z.number().optional().describe('股数'),
+        cost_price: z.number().optional().describe('成本价'),
+        stop_loss: z.number().optional().describe('止损价'),
+        reason: z.string().optional().describe('调仓理由'),
+      }),
+      execute: async ({ action, code, name, shares, cost_price, stop_loss, reason }) => {
+        const actionLabel = { add: '新增', update: '修改', delete: '删除' }[action]
+        const lines = [`📋 **调仓方案**`, `- 操作：${actionLabel}`, `- 标的：${code} ${name || ''}`]
+        if (shares) lines.push(`- 股数：${shares}`)
+        if (cost_price) lines.push(`- 价格：¥${cost_price}`)
+        if (stop_loss) lines.push(`- 止损：¥${stop_loss}`)
+        if (reason) lines.push(`- 理由：${reason}`)
+        lines.push('', '⚠️ 请确认是否执行此操作？')
+        return lines.join('\n')
+      },
+    }),
+
+    execute_portfolio_update: tool({
+      description: '用户确认后执行调仓。必须在 plan_portfolio_update 之后、用户确认后才能调用。',
       parameters: z.object({
         action: z.enum(['add', 'update', 'delete']).describe('操作类型'),
         code: z.string().describe('6位股票代码'),
@@ -454,12 +479,12 @@ function buildTools(userId: string, config: LLMConfig) {
             .delete()
             .eq('portfolio_id', portfolioId)
             .eq('code', code)
-          return error ? `删除失败: ${error.message}` : `已删除 ${code} ${name || ''}`
+          return error ? `删除失败: ${error.message}` : `✅ 已删除 ${code} ${name || ''}`
         }
 
         if (action === 'add' || action === 'update') {
           if (!name || !shares || !cost_price) {
-            return '新增/修改持仓需要 name、shares、cost_price 参数'
+            return '执行失败：缺少 name、shares、cost_price 参数'
           }
           const record: Record<string, unknown> = {
             portfolio_id: portfolioId,
@@ -473,7 +498,7 @@ function buildTools(userId: string, config: LLMConfig) {
           const { error } = await supabase
             .from('portfolio_positions')
             .upsert(record)
-          return error ? `操作失败: ${error.message}` : `已${action === 'add' ? '新增' : '更新'} ${code} ${name} ${shares}股 @¥${cost_price}${stop_loss ? ` 止损¥${stop_loss}` : ''}`
+          return error ? `执行失败: ${error.message}` : `✅ 已${action === 'add' ? '新增' : '更新'} ${code} ${name} ${shares}股 @¥${cost_price}${stop_loss ? ` 止损¥${stop_loss}` : ''}`
         }
 
         return '未知操作'
