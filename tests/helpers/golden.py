@@ -22,7 +22,4 @@ def assert_golden(name: str, actual: str) -> None:
         path.write_text(actual, encoding="utf-8")
         pytest.skip(f"Golden file created: {path}")
     expected = path.read_text(encoding="utf-8")
-    assert actual == expected, (
-        f"Output changed vs golden file {path}.\n"
-        f"Delete the file and re-run to update."
-    )
+    assert actual == expected, f"Output changed vs golden file {path}.\nDelete the file and re-run to update."

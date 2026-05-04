@@ -293,6 +293,9 @@ class AgentTestHarness:
             elif event_type == "done":
                 result["response"] = data
             elif event_type == "error":
+                err = str(data)
+                if any(marker in err for marker in ("RateLimitError", "too_many_requests", "达到使用量上限", "429")):
+                    pytest.skip(f"Live model quota/rate limit: {err[:160]}")
                 result["response"] = f"ERROR: {data}"
 
         return result

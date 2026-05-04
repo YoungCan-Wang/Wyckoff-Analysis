@@ -10,6 +10,7 @@
     wyckoff mcp                     # 启动 MCP Server
     wyckoff memory                  # 查看 Agent 记忆
     wyckoff log                     # 查看对话日志
+    wyckoff trace                   # 查看 JSONL 运行轨迹
     wyckoff dashboard               # 启动本地可视化面板
     wyckoff auth <email>            # 登录
     wyckoff model list/add/rm       # 模型管理
@@ -134,6 +135,18 @@ def _mask(val: str) -> str:
     if len(val) > 8:
         return val[:4] + "****" + val[-4:]
     return "****" if val else ""
+
+
+def _set_terminal_title(title: str) -> None:
+    """Set the terminal tab title only for interactive terminals."""
+
+    if not sys.stdout.isatty():
+        return
+    try:
+        sys.stdout.write(f"\033]0;{title}\007")
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -779,6 +792,57 @@ def _cmd_log(args):
 
 
 # ---------------------------------------------------------------------------
+# wyckoff trace — 查看 append-only 运行轨迹
+# ---------------------------------------------------------------------------
+
+
+def _cmd_trace(args):
+    from pathlib import Path
+
+    from cli.scratchpad import wyckoff_home
+
+    trace_dir = wyckoff_home() / "scratchpad"
+    if args.path:
+        print(trace_dir)
+        return
+
+    if args.show:
+        target = Path(args.show).expanduser()
+        if not target.is_absolute():
+            target = trace_dir / target
+        if not target.exists():
+            print(f"轨迹文件不存在: {target}")
+            sys.exit(1)
+        text = target.read_text(encoding="utf-8", errors="replace")
+        print(text[: args.chars])
+        if len(text) > args.chars:
+            print(f"\n... 已截断，完整文件: {target}")
+        return
+
+    files = (
+        sorted(trace_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True) if trace_dir.exists() else []
+    )
+    if not files:
+        print("暂无运行轨迹")
+        return
+
+    print(f"最近运行轨迹 ({min(args.limit, len(files))} 条)")
+    print()
+    for path in files[: args.limit]:
+        query = ""
+        try:
+            first = path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+            data = json.loads(first)
+            query = str(data.get("content", ""))
+        except Exception as exc:
+            query = f"(无法读取摘要: {type(exc).__name__})"
+        if len(query) > 80:
+            query = query[:80] + "..."
+        stamp = path.name.split("_", 1)[0]
+        print(f"  [{stamp}] {path.name}  {query}")
+
+
+# ---------------------------------------------------------------------------
 # wyckoff sync — 手动同步 Supabase → SQLite
 # ---------------------------------------------------------------------------
 
@@ -982,9 +1046,49 @@ def _cmd_tui(_args=None):
 # ---------------------------------------------------------------------------
 
 
+def _dispatch_command(args) -> None:
+    if args.cmd == "update":
+        _cmd_update(args)
+    elif args.cmd == "auth":
+        _cmd_auth(args)
+    elif args.cmd == "model":
+        _cmd_model(args)
+    elif args.cmd == "config":
+        _cmd_config(args)
+    elif args.cmd in ("portfolio", "pf"):
+        _cmd_portfolio(args)
+    elif args.cmd == "signal":
+        _cmd_signal(args)
+    elif args.cmd in ("recommend", "rec"):
+        _cmd_recommend(args)
+    elif args.cmd in ("dashboard", "dash"):
+        from cli.dashboard import start_dashboard
+
+        start_dashboard(port=args.port)
+    elif args.cmd == "screen":
+        _cmd_screen(args)
+    elif args.cmd in ("backtest", "bt"):
+        _cmd_backtest(args)
+    elif args.cmd == "report":
+        _cmd_report(args)
+    elif args.cmd == "mcp":
+        _cmd_mcp(args)
+    elif args.cmd in ("memory", "mem"):
+        _cmd_memory(args)
+    elif args.cmd == "log":
+        _cmd_log(args)
+    elif args.cmd == "trace":
+        _cmd_trace(args)
+    elif args.cmd == "sync":
+        _cmd_sync(args)
+    elif args.cmd == "cleanup":
+        _cmd_cleanup(args)
+    else:
+        _cmd_tui(args)
+
+
 def main():
-    sys.stdout.write("\033]0;Wyckoff-Analysis\007")
-    sys.stdout.flush()
+    _set_terminal_title("Wyckoff-Analysis")
 
     parser = argparse.ArgumentParser(
         prog="wyckoff",
@@ -1068,6 +1172,13 @@ def main():
     p_log.add_argument("--session", default="", help="指定会话 ID")
     p_log.add_argument("-n", "--limit", type=int, default=30, help="返回条数")
 
+    # wyckoff trace
+    p_trace = sub.add_parser("trace", help="查看 JSONL 运行轨迹")
+    p_trace.add_argument("-n", "--limit", type=int, default=10, help="返回条数")
+    p_trace.add_argument("--show", default="", help="显示指定轨迹文件（文件名或绝对路径）")
+    p_trace.add_argument("--chars", type=int, default=12000, help="--show 输出字符数上限")
+    p_trace.add_argument("--path", action="store_true", help="只打印轨迹目录")
+
     # wyckoff sync
     p_sync = sub.add_parser("sync", help="同步 Supabase → 本地 SQLite")
     p_sync.add_argument("sync_cmd", nargs="?", default="", help="status: 查看同步状态")
@@ -1077,43 +1188,7 @@ def main():
     p_cleanup.add_argument("--days", type=int, default=30, help="保留天数 (默认 30)")
 
     args = parser.parse_args()
-
-    if args.cmd == "update":
-        _cmd_update(args)
-    elif args.cmd == "auth":
-        _cmd_auth(args)
-    elif args.cmd == "model":
-        _cmd_model(args)
-    elif args.cmd == "config":
-        _cmd_config(args)
-    elif args.cmd in ("portfolio", "pf"):
-        _cmd_portfolio(args)
-    elif args.cmd == "signal":
-        _cmd_signal(args)
-    elif args.cmd in ("recommend", "rec"):
-        _cmd_recommend(args)
-    elif args.cmd in ("dashboard", "dash"):
-        from cli.dashboard import start_dashboard
-
-        start_dashboard(port=args.port)
-    elif args.cmd == "screen":
-        _cmd_screen(args)
-    elif args.cmd in ("backtest", "bt"):
-        _cmd_backtest(args)
-    elif args.cmd == "report":
-        _cmd_report(args)
-    elif args.cmd == "mcp":
-        _cmd_mcp(args)
-    elif args.cmd in ("memory", "mem"):
-        _cmd_memory(args)
-    elif args.cmd == "log":
-        _cmd_log(args)
-    elif args.cmd == "sync":
-        _cmd_sync(args)
-    elif args.cmd == "cleanup":
-        _cmd_cleanup(args)
-    else:
-        _cmd_tui(args)
+    _dispatch_command(args)
 
 
 if __name__ == "__main__":

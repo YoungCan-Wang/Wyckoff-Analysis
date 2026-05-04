@@ -165,13 +165,13 @@ Streamlit: **[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-an
 | 상한가 복기 | 월-금 19:25 | 당일 상승률 >= 8% 복기 |
 | 추천 추적 가격 갱신 | 일-목 23:00 | 종가 동기화 |
 | 백테스트 그리드 | 매월 1일, 15일 04:00 | 18개 병렬 파라미터 → 종합 리포트 |
-| 캐시 유지보수 | 매일 23:05 | 만료된 시세 캐시 정리 |
+| DB 유지보수 | 매일 23:05 | 시세, 주문, 신호, 시장 신호 등 롤링 윈도우 데이터를 정리 |
 
 ## 모델 지원
 
 **CLI**: Gemini / Claude / OpenAI, `/model`로 원클릭 전환, 임의의 OpenAI 호환 엔드포인트 지원 (DeepSeek / Qwen / Kimi 등).
 
-**Web / Pipeline**: Gemini / OpenAI / DeepSeek / Qwen / Kimi / Zhipu / Volcengine / Minimax, 총 8개 제공사.
+**Web / Pipeline**: 1Route / Gemini / OpenAI / Zhipu / Minimax / DeepSeek / Qwen / Volcengine. Kimi 등 OpenAI 호환 제공사는 `base_url` / `custom_providers`로 연결할 수 있습니다.
 
 ## 설정
 

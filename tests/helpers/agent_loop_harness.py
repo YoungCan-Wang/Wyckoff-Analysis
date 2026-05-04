@@ -60,6 +60,7 @@ class StubToolRegistry:
         *,
         schemas: list[dict[str, Any]] | None = None,
         tool_results: dict[str, Any] | None = None,
+        concurrency_safe_tools: set[str] | None = None,
     ):
         self._schemas = (
             deepcopy(schemas)
@@ -73,6 +74,17 @@ class StubToolRegistry:
             ]
         )
         self._tool_results = tool_results or {}
+        self._concurrency_safe_tools = (
+            concurrency_safe_tools
+            if concurrency_safe_tools is not None
+            else {
+                "search_stock_by_name",
+                "analyze_stock",
+                "portfolio",
+                "get_market_overview",
+                "query_history",
+            }
+        )
         self.calls: list[dict[str, Any]] = []
 
     def schemas(self) -> list[dict[str, Any]]:
@@ -84,6 +96,9 @@ class StubToolRegistry:
         if callable(result):
             return result(name, deepcopy(args))
         return deepcopy(result)
+
+    def concurrency_safe(self, name: str) -> bool:
+        return name in self._concurrency_safe_tools
 
 
 class AgentLoopHarness:

@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router'
-import { MessageSquare, Briefcase, TrendingUp, Settings, LogOut, BarChart3, Moon, FileDown, Megaphone, Home, Github, Filter } from 'lucide-react'
+import { MessageSquare, Briefcase, TrendingUp, Settings, LogOut, BarChart3, Moon, FileDown, BookOpen, Home, Github, Filter } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { MarketBar } from '@/components/market-bar'
@@ -12,7 +12,7 @@ const navItems = [
   { to: '/tracking', icon: TrendingUp, label: '跟踪' },
   { to: '/tail-buy', icon: Moon, label: '尾盘记录' },
   { to: '/export', icon: FileDown, label: '数据导出' },
-  { to: '/changelog', icon: Megaphone, label: '更新日志' },
+  { to: '/guide', icon: BookOpen, label: '功能说明' },
   { to: '/settings', icon: Settings, label: '设置' },
 ]
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from core.holding_diagnostic import (
     HoldingDiagnostic,

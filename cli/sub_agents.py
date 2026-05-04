@@ -79,6 +79,11 @@ class SubAgentToolProxy:
             return {"error": f"sub-agent 无权调用工具: {name}"}
         return self._registry.execute(name, args)
 
+    def concurrency_safe(self, name: str) -> bool:
+        if name not in self._allowed:
+            return False
+        return self._registry.concurrency_safe(name)
+
 
 def run_sub_agent(
     sub: SubAgent,

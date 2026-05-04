@@ -9,12 +9,11 @@ import glob
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from statistics import mean, median
-from typing import Callable
-
 
 REGIME_LABELS = {
     "CRASH": "下跌/踩踏期",
@@ -296,7 +295,11 @@ def _latest_cycle(rows: list[dict[str, str]], sample_size: int = 20) -> tuple[st
         cycle = f"{dominant[0][0]} / {dominant[1][0]} 切换观察期"
     else:
         cycle = f"{dominant[0][0]} 主导期"
-    detail = f"最优组合可完整验证的尾段信号为 {first_date} ~ {latest_date}，近 {len(tail)} 笔以 " + "、".join(label_parts) + " 为主。"
+    detail = (
+        f"最优组合可完整验证的尾段信号为 {first_date} ~ {latest_date}，近 {len(tail)} 笔以 "
+        + "、".join(label_parts)
+        + " 为主。"
+    )
     return cycle, detail
 
 
@@ -365,7 +368,7 @@ def build_report(cells: list[GridCell], run_url: str = "", generated_at: str = "
         "",
         "## 执行上下文",
         "",
-        f"- 回测脚本: `python -m scripts.backtest_runner`（由 `.github/workflows/backtest_grid.yml` 以 18 单元参数网格并发执行）",
+        "- 回测脚本: `python -m scripts.backtest_runner`（由 `.github/workflows/backtest_grid.yml` 以 18 单元参数网格并发执行）",
         f"- 回测区间: {start} ~ {end}",
         f"- 市场周期: {current_cycle}",
         f"- 周期说明: {cycle_detail}",
@@ -499,7 +502,9 @@ def build_report(cells: list[GridCell], run_url: str = "", generated_at: str = "
         lines.append(
             f"- 纯 SOS 信号本轮均收 {_fmt_signed(pure_sos['avg'], 2, '%')}，建议后续测试 `SOS+EVR/Spring/LPS` 或次日跟随确认，避免宽口径突破噪音。"
         )
-    lines.append("- 后续每次 Backtest Grid 完成后，本文件会被 workflow 自动刷新；若 Actions token 有写权限，会提交到仓库，否则仍会作为 artifact 留存。")
+    lines.append(
+        "- 后续每次 Backtest Grid 完成后，本文件会被 workflow 自动刷新；若 Actions token 有写权限，会提交到仓库，否则仍会作为 artifact 留存。"
+    )
 
     lines.extend(
         [

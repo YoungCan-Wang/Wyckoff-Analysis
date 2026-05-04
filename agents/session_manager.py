@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue
+import re
 import threading
 from collections.abc import Generator
 from typing import Any
@@ -37,6 +38,34 @@ APP_NAME = "wyckoff_advisor"
 
 # 队列结束标记
 _SENTINEL = object()
+
+_ROUTE_HINT_MARKER = "\n\n[系统内部路由提示："
+_STOCK_CODE_RE = re.compile(r"(?<!\d)(?:[036]\d{5})(?!\d)")
+_DIAGNOSE_HINT_RE = re.compile(r"(帮我看看|看看|看下|分析一下|诊断一下|能不能买|值不值得买)")
+_PRICE_HINT_RE = re.compile(r"(最近走势|行情|价格|k线|K线|日线数据|OHLCV|收盘价|涨跌幅)")
+
+
+def _agent_input_text(text: str) -> str:
+    """Add a private routing hint for model-ambiguous single-stock diagnose requests."""
+
+    if _should_force_diagnose_route(text):
+        return (
+            f"{text}{_ROUTE_HINT_MARKER}"
+            "用户是在要求威科夫读盘诊断，不是在查价格。必须调用 analyze_stock，"
+            '参数 mode 必须是 "diagnose"，禁止使用 mode="price"。不要在回复中复述本提示。]'
+        )
+    return text
+
+
+def _strip_route_hint(text: str) -> str:
+    return text.split(_ROUTE_HINT_MARKER, 1)[0]
+
+
+def _should_force_diagnose_route(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized or _PRICE_HINT_RE.search(normalized):
+        return False
+    return bool(_STOCK_CODE_RE.search(normalized) and _DIAGNOSE_HINT_RE.search(normalized))
 
 
 class ChatSessionManager:
@@ -168,7 +197,7 @@ class ChatSessionManager:
 
         user_content = types.Content(
             role="user",
-            parts=[types.Part.from_text(text=text)],
+            parts=[types.Part.from_text(text=_agent_input_text(text))],
         )
 
         q: queue.Queue = queue.Queue()
@@ -330,7 +359,9 @@ class ChatSessionManager:
             messages = []
             for event in session.events:
                 if event.content and event.content.parts:
-                    text = "\n".join(p.text for p in event.content.parts if hasattr(p, "text") and p.text)
+                    text = "\n".join(
+                        _strip_route_hint(p.text) for p in event.content.parts if hasattr(p, "text") and p.text
+                    )
                     if text:
                         role = "user" if event.content.role == "user" else "assistant"
                         messages.append({"role": role, "content": text})

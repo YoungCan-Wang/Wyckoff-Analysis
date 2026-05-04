@@ -2,6 +2,8 @@
 
 [← 返回 README](../README.md)
 
+> 本文是当前架构、数据表、Actions 与缓存口径的事实文档。策略逻辑详见 [`../README_STRATEGY.md`](../README_STRATEGY.md)。
+
 ## 系统全景
 
 ```
@@ -12,8 +14,8 @@
             │                 │                 │                 │                 │
             ▼                 ▼                 ▼                 ▼                 ▼
      ┌─────────────────────────────────────────────────────────────────────────────────┐
-     │                              Agent Brain                                        │
-     │  React: Vercel AI SDK · Streamlit: Google ADK · CLI: Agent Loop · MCP: FastMCP │
+    │                              Agent Brain                                        │
+    │ React: Vercel AI SDK · Streamlit: Google ADK(legacy) · CLI: AgentRuntime · MCP │
      │                                                                                 │
      │  10 专业工具 + 5 通用能力 — LLM 自主编排                                          │
      │  自动 Plan Mode — 复杂任务拆步骤执行                                              │
@@ -28,7 +30,7 @@
    │ Diagnostic  │         │ Claude       │              │ SQLite 本地  │
    │ Strategy    │         │ OpenAI       │              │  (离线缓存)  │
    │ Signal      │         │ DeepSeek     │              │ CF Pages     │
-   │ Sector      │         │ Qwen/Kimi    │              │  (边缘代理)  │
+   │ Sector      │         │ Qwen/兼容端点│              │  (边缘代理)  │
    │ Tail-Buy    │         │ 智谱/火山    │              └──────────────┘
    └──────┬──────┘         │ Minimax      │
           │                │ 1Route       │
@@ -112,7 +114,7 @@ Web（React）、Web（Streamlit）、CLI、MCP 共享同一套工具函数（`a
 
 | | React Web (CF Pages) | Streamlit | CLI（TUI） | MCP Server |
 |---|---|---|---|---|
-| 运行时 | Vercel AI SDK `streamText` | Google ADK `LlmAgent` | Agent Loop（`cli/tui.py`） | FastMCP（stdio） |
+| 运行时 | Vercel AI SDK `streamText` | Google ADK `LlmAgent`（保留作兼容/对比） | `AgentRuntime`（`cli/runtime.py`） | FastMCP（stdio） |
 | UI | React SPA | Streamlit 页面 | Textual 全屏 TUI | 无（被 Claude Code 等调用） |
 | 入口 | `web/apps/web/` | `streamlit_app.py` | `wyckoff`（无子命令） | `wyckoff-mcp` |
 | 工具数 | 10（独立实现） | 10（共享） | 18（+5 本地 +3 委派） | 10（三层权限） |
@@ -127,6 +129,8 @@ Web（React）、Web（Streamlit）、CLI、MCP 共享同一套工具函数（`a
 | Plan Mode | ✗ | ✓ prompt 驱动 | ✓ prompt 驱动 | N/A |
 
 Streamlit 框架在 MVP 阶段支撑了产品验证，但随着项目功能持续增长，Streamlit 在组件定制、状态管理、部署灵活性等方面的局限性日益凸显，已不适用于当前规模。数据导出功能仍保留在 Streamlit 内，其余功能均已迁移至 CF Pages React 版本。
+
+当前主力 agent loop 收敛在 `cli/runtime.py::AgentRuntime`：它负责 provider 调用、工具执行、并发分批、上下文压缩、retry、doom-loop、scratchpad 和大结果落盘。TUI/CLI 只消费 runtime event；Google ADK 路径暂时保留，用于旧 Streamlit 入口和后续多 agent SDK 体感对比，不再作为新能力的默认承载层。
 
 **CLI 专属工具**（Web / MCP 不可用）：`exec_command`、`read_file`、`write_file`、`web_fetch`、`check_background_tasks`、`delegate_to_research`、`delegate_to_analysis`、`delegate_to_trading`
 
@@ -588,16 +592,16 @@ signal_pending (pending/confirmed)
 
 | 工作流 | 时间（北京） | 说明 |
 |-------|-------------|------|
-| **CI** | push/PR | pytest + compile + dry-run |
-| **漏斗筛选 + AI 研报 + 决策** | 周日-周四 18:25 | `daily_job.py` Step2→3→4 |
-| **尾盘策略** | 周一-周五 13:50 | `tail_buy_intraday_job.py` |
-| **盘前风控** | 周一-周五 08:20 | A50 + VIX 预警 |
-| **涨停复盘** | 周一-周五 19:25 | 当日涨幅 ≥ 8% 回溯 |
-| **推荐跟踪重定价** | 周日-周四 23:00 | 同步收盘价、计算收益 |
-| **缓存维护** | 每天 23:05 | 清理过期行情缓存 |
-| **回测网格** | 每月 1 / 15 日 04:00 | 3 阶段：快照→18 并行格→聚合通知 |
-| **Web 后台任务** | 手动触发 | Streamlit 发起的漏斗/研报任务 |
-| **输入预览** | 手动触发 | dry-run 模式查看漏斗输入 |
+| **CI** (`ci.yml`) | push/PR | pytest + compile + dry-run |
+| **漏斗筛选 + AI 研报 + 决策** (`wyckoff_funnel.yml`) | 周日-周四 18:25 | `daily_job.py` Step2→3→4 |
+| **尾盘策略** (`tail_buy_1420.yml`) | 周一-周五 13:50 | `tail_buy_intraday_job.py` |
+| **盘前风控** (`premarket_risk.yml`) | 周一-周五 08:20 | A50 + VIX 预警 |
+| **涨停复盘** (`review_list_replay.yml`) | 周一-周五 19:25 | 当日涨幅 ≥ 8% 回溯 |
+| **推荐跟踪重定价** (`recommendation_tracking_reprice.yml`) | 周日-周四 23:00 | 同步收盘价、计算收益 |
+| **数据库维护** (`db_maintenance.yml`) | 每天 23:05 | 清理过期行情、订单、信号、市场信号等滑动窗口数据 |
+| **回测网格** (`backtest_grid.yml`) | 每月 1 / 15 日 04:00 | 3 阶段：快照→18 并行格→聚合通知 |
+| **Web 后台任务** (`web_quant_jobs.yml`) | 手动触发 | Web/Streamlit 发起的漏斗/研报任务 |
+| **输入预览** (`wyckoff_input_preview.yml`) | 手动触发 | dry-run 模式查看漏斗输入 |
 
 ## 数据源
 
@@ -606,6 +610,8 @@ tickflow(★) → tushare → akshare → baostock → efinance   （行情 OHLC
 tushare → akshare + 本地 24h 缓存              （股票列表，代码⇄名字映射）
 tickflow                                        （1 分钟盘中数据，尾盘策略专用）
 ```
+
+日线行情通过统一仓库层读取：先查 Supabase `stock_hist_cache`，缺口按日期补拉并回写，之后 Web 单股/批量、自定义导出、Step3、回测都复用同一缓存窗口。
 
 `integrations/rag_veto.py` — 新闻否决层：抓取东方财富个股新闻，命中负面关键词则拦截推荐。
 
@@ -616,15 +622,16 @@ tickflow                                        （1 分钟盘中数据，尾盘
 | `portfolios` | 投资组合元数据 |
 | `portfolio_positions` | 持仓明细 |
 | `trade_orders` | AI 交易建议 |
-| `user_settings` | 用户配置（API Key / Webhook） |
-| `stock_hist_cache` | 行情缓存（qfq，滚动 400 天） |
+| `user_settings` | 用户配置（API Key / Webhook / provider base_url / custom_providers JSON） |
+| `stock_hist_cache` | 日线行情缓存（按 `symbol + adjust + date` 去重，默认滑动保留约 320 个交易日窗口） |
 | `recommendation_tracking` | 推荐跟踪 |
 | `signal_pending` | 信号确认池 |
 | `market_signal_daily` | 大盘信号 |
 | `daily_nav` | 每日净值 |
-| `job_usage` | Web 用户限流 |
 
 数据隔离：Web JWT → RLS，CLI access_token → RLS，脚本 service_role_key → 绕过 RLS。
+
+`scripts/db_maintenance.py` 负责清理过期数据：行情缓存约 320 日，订单/信号/净值等短周期表保留 10-40 日区间，避免数据库行数无限增长。
 
 ## CLI 命令
 
@@ -668,9 +675,9 @@ wyckoff-mcp                      # 启动 MCP Server（供 Claude Code 等调用
 
 ```
 mcp_server.py    MCP Server 入口（FastMCP，10 个工具）
-agents/          Agent 工具函数（ADK + CLI + MCP 共用）
+agents/          Agent 工具函数（ADK + AgentRuntime + MCP 共用）
 app/             Streamlit Web 页面
-cli/             CLI 入口、TUI、Agent Loop、Provider、Dashboard、Memory
+cli/             CLI 入口、TUI、AgentRuntime、Provider、Dashboard、Memory
   providers/     LLM Provider 实现（Gemini / Claude / OpenAI / Fallback）
 core/            漏斗引擎、诊断、策略、信号确认、尾盘策略、常量
 integrations/    数据源集成、Supabase 模块、SQLite 本地层、同步引擎

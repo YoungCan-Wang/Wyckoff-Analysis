@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -281,33 +282,58 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
-# 后台执行的长任务工具
-BACKGROUND_TOOLS = {"screen_stocks", "generate_ai_report", "generate_strategy_decision", "run_backtest"}
 
-# 需要用户确认的高风险写操作工具
-CONFIRM_TOOLS = {"exec_command", "write_file", "update_portfolio"}
+@dataclass(frozen=True)
+class ToolSpec:
+    """Runtime behavior metadata for one tool."""
 
-# 工具中文显示名，用于终端展示
-TOOL_DISPLAY_NAMES: dict[str, str] = {
-    "search_stock_by_name": "搜索股票",
-    "analyze_stock": "个股分析",
-    "portfolio": "持仓",
-    "get_market_overview": "大盘水温",
-    "screen_stocks": "全市场扫描",
-    "generate_ai_report": "深度审讯",
-    "generate_strategy_decision": "攻防决策",
-    "query_history": "历史查询",
-    "update_portfolio": "调仓操作",
-    "run_backtest": "回测",
-    "check_background_tasks": "任务状态",
-    "exec_command": "执行命令",
-    "read_file": "读取文件",
-    "write_file": "写入文件",
-    "web_fetch": "抓取网页",
-    "delegate_to_research": "委派研究员",
-    "delegate_to_analysis": "委派分析师",
-    "delegate_to_trading": "委派交易员",
+    name: str
+    display_name: str
+    concurrency_safe: bool = False
+    requires_approval: bool = False
+    background: bool = False
+
+
+# 工具行为元数据：runtime / TUI / 执行器都从这里派生策略。
+TOOL_SPECS: dict[str, ToolSpec] = {
+    "search_stock_by_name": ToolSpec("search_stock_by_name", "搜索股票", concurrency_safe=True),
+    "analyze_stock": ToolSpec("analyze_stock", "个股分析", concurrency_safe=True),
+    "portfolio": ToolSpec("portfolio", "持仓", concurrency_safe=True),
+    "get_market_overview": ToolSpec("get_market_overview", "大盘水温", concurrency_safe=True),
+    "screen_stocks": ToolSpec("screen_stocks", "全市场扫描", background=True),
+    "generate_ai_report": ToolSpec("generate_ai_report", "深度审讯", background=True),
+    "generate_strategy_decision": ToolSpec("generate_strategy_decision", "攻防决策", background=True),
+    "query_history": ToolSpec("query_history", "历史查询", concurrency_safe=True),
+    "update_portfolio": ToolSpec("update_portfolio", "调仓操作", requires_approval=True),
+    "run_backtest": ToolSpec("run_backtest", "回测", background=True),
+    "check_background_tasks": ToolSpec("check_background_tasks", "任务状态"),
+    "exec_command": ToolSpec("exec_command", "执行命令", requires_approval=True),
+    "read_file": ToolSpec("read_file", "读取文件"),
+    "write_file": ToolSpec("write_file", "写入文件", requires_approval=True),
+    "web_fetch": ToolSpec("web_fetch", "抓取网页"),
+    "delegate_to_research": ToolSpec("delegate_to_research", "委派研究员"),
+    "delegate_to_analysis": ToolSpec("delegate_to_analysis", "委派分析师"),
+    "delegate_to_trading": ToolSpec("delegate_to_trading", "委派交易员"),
 }
+
+# 兼容旧调用点；新增代码优先使用 ToolSpec / ToolRegistry 方法。
+BACKGROUND_TOOLS = {name for name, spec in TOOL_SPECS.items() if spec.background}
+CONFIRM_TOOLS = {name for name, spec in TOOL_SPECS.items() if spec.requires_approval}
+CONCURRENCY_SAFE_TOOLS = {name for name, spec in TOOL_SPECS.items() if spec.concurrency_safe}
+TOOL_DISPLAY_NAMES: dict[str, str] = {name: spec.display_name for name, spec in TOOL_SPECS.items()}
+
+
+def tool_spec(name: str) -> ToolSpec | None:
+    """Return metadata for a registered tool name."""
+
+    return TOOL_SPECS.get(name)
+
+
+def is_concurrency_safe(name: str) -> bool:
+    """Return whether a tool can safely run in a concurrent batch."""
+
+    spec = tool_spec(name)
+    return bool(spec and spec.concurrency_safe)
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +439,7 @@ class ToolRegistry:
             return {"error": f"未知工具: {name}"}
 
         # 高风险工具确认
-        if name in CONFIRM_TOOLS and self._confirm_callback and name not in self._always_allowed:
+        if self.requires_approval(name) and self._confirm_callback and name not in self._always_allowed:
             confirm = self._confirm_callback(name, args)
             action = confirm.get("action", "deny")
             if action == "deny":
@@ -430,9 +456,9 @@ class ToolRegistry:
             call_args["tool_context"] = self._tool_context
 
         # 长任务提交后台
-        if name in BACKGROUND_TOOLS and self._bg_manager is not None:
+        if self.is_background(name) and self._bg_manager is not None:
             task_id = f"bg_{time.time_ns()}_{name}"
-            display = TOOL_DISPLAY_NAMES.get(name, name)
+            display = self.display_name(name)
             self._bg_manager.submit(
                 task_id,
                 name,
@@ -454,4 +480,23 @@ class ToolRegistry:
 
     def display_name(self, name: str) -> str:
         """返回工具的中文显示名。"""
-        return TOOL_DISPLAY_NAMES.get(name, name)
+        spec = self.spec(name)
+        return spec.display_name if spec else name
+
+    def spec(self, name: str) -> ToolSpec | None:
+        """返回工具行为元数据。"""
+        return tool_spec(name)
+
+    def concurrency_safe(self, name: str) -> bool:
+        """返回工具是否可安全并行执行。"""
+        return is_concurrency_safe(name)
+
+    def requires_approval(self, name: str) -> bool:
+        """返回工具执行前是否需要用户确认。"""
+        spec = self.spec(name)
+        return bool(spec and spec.requires_approval)
+
+    def is_background(self, name: str) -> bool:
+        """返回工具是否应提交后台执行。"""
+        spec = self.spec(name)
+        return bool(spec and spec.background)

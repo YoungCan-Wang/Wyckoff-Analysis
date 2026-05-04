@@ -39,11 +39,13 @@ def make_ohlcv(
     lows = np.minimum(opens, closes_arr) * (1 - rng.uniform(0, 0.015, n))
     volumes = rng.integers(50000, 500000, size=n).astype(float)
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": opens,
-        "high": highs,
-        "low": lows,
-        "close": closes_arr,
-        "volume": volumes,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": closes_arr,
+            "volume": volumes,
+        }
+    )

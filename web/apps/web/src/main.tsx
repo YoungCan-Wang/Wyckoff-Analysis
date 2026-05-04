@@ -15,7 +15,7 @@ const SettingsPage = lazy(() => import('@/routes/settings').then(m => ({ default
 const AnalysisPage = lazy(() => import('@/routes/analysis').then(m => ({ default: m.AnalysisPage })))
 const TailBuyPage = lazy(() => import('@/routes/tail-buy').then(m => ({ default: m.TailBuyPage })))
 const ExportPage = lazy(() => import('@/routes/export').then(m => ({ default: m.ExportPage })))
-const ChangelogPage = lazy(() => import('@/routes/changelog').then(m => ({ default: m.ChangelogPage })))
+const FeatureGuidePage = lazy(() => import('@/routes/feature-guide').then(m => ({ default: m.FeatureGuidePage })))
 const ScreenerPage = lazy(() => import('@/routes/screener').then(m => ({ default: m.ScreenerPage })))
 
 const queryClient = new QueryClient({
@@ -41,7 +41,8 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="/screener" element={<ScreenerPage />} />
                 <Route path="/tail-buy" element={<TailBuyPage />} />
                 <Route path="/export" element={<ExportPage />} />
-                <Route path="/changelog" element={<ChangelogPage />} />
+                <Route path="/guide" element={<FeatureGuidePage />} />
+                <Route path="/changelog" element={<Navigate to="/guide" replace />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Route>

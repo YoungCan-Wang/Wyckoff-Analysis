@@ -165,13 +165,13 @@ Streamlit：**[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-a
 | ストップ高復習 | 月-金 19:25 | 当日騰落率 >= 8% の銘柄を復習 |
 | レコメンド追跡リプライシング | 日-木 23:00 | 終値を同期 |
 | バックテストグリッド | 毎月1日・15日 04:00 | 18並列パラメータ → 集約レポート |
-| キャッシュメンテナンス | 毎日 23:05 | 期限切れ相場キャッシュをクリーンアップ |
+| DB メンテナンス | 毎日 23:05 | 相場、注文、シグナル、市場シグナルなどのローリングデータをクリーンアップ |
 
 ## モデル対応
 
 **CLI**：Gemini / Claude / OpenAI、`/model` でワンタッチ切替。任意の OpenAI 互換エンドポイントに対応（DeepSeek / Qwen / Kimi 等）。
 
-**Web / Pipeline**：Gemini / OpenAI / DeepSeek / Qwen / Kimi / Zhipu / Volcengine / Minimax -- 計8プロバイダー。
+**Web / Pipeline**：1Route / Gemini / OpenAI / Zhipu / Minimax / DeepSeek / Qwen / Volcengine。Kimi などの OpenAI 互換プロバイダーは `base_url` / `custom_providers` で接続できます。
 
 ## 設定
 

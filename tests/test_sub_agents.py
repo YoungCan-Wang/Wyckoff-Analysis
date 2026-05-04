@@ -43,6 +43,13 @@ class TestSubAgentToolProxy:
         assert "无权" in result["error"]
         assert len(registry.calls) == 0
 
+    def test_concurrency_metadata_respects_allowed_tools(self):
+        registry = StubToolRegistry(concurrency_safe_tools={"analyze_stock", "portfolio"})
+        proxy = SubAgentToolProxy(registry, {"analyze_stock"})
+
+        assert proxy.concurrency_safe("analyze_stock")
+        assert not proxy.concurrency_safe("portfolio")
+
 
 # ---------------------------------------------------------------------------
 # SubAgent 定义一致性

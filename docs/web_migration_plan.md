@@ -1,6 +1,6 @@
-# Wyckoff Web 基建迭代计划
+# Wyckoff Web 基建迭代计划（历史路线图）
 
-> 更新于 2026-05-03 | 当前状态：Phase 1.5 — 读盘室 Agent + 边缘代理已上线
+> 更新于 2026-05-04 | 当前状态：React Web 已承担主要交互入口；本文保留迁移路线与后续方向，不作为当前架构事实源。当前事实请看 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 当前架构
 

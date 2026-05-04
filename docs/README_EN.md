@@ -165,13 +165,13 @@ Built-in GitHub Actions cron jobs:
 | Limit-Up Review | Mon–Fri 19:25 | Review stocks that rose >= 8% today |
 | Recommendation Reprice | Sun–Thu 23:00 | Sync closing prices |
 | Backtest Grid | 1st & 15th monthly 04:00 | 18 parallel parameter combos → aggregated report |
-| Cache Maintenance | Daily 23:05 | Purge stale quote caches |
+| DB Maintenance | Daily 23:05 | Purge stale quotes, orders, signals, market signals, and other rolling-window data |
 
 ## Model Support
 
 **CLI**: Gemini / Claude / OpenAI — switch with `/model`; any OpenAI-compatible endpoint works (DeepSeek, Qwen, Kimi, etc.).
 
-**Web / Pipeline**: Gemini / OpenAI / DeepSeek / Qwen / Kimi / Zhipu / Volcengine / Minimax — 8 providers total.
+**Web / Pipeline**: 1Route / Gemini / OpenAI / Zhipu / Minimax / DeepSeek / Qwen / Volcengine. Kimi and other OpenAI-compatible providers can be configured via custom `base_url` / `custom_providers`.
 
 ## Configuration
 

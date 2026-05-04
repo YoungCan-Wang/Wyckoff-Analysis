@@ -17,11 +17,23 @@
 
 ---
 
-用自然语言和一位威科夫大师对话。他能调动 10 个专业工具 + 5 个通用能力，自主串联多步推理，给出"打还是不打"的结论。
+用自然语言和一位威科夫大师对话。系统把 A 股日线行情、威科夫结构识别、AI 研报、持仓风控、推荐跟踪和通知推送串成一条自动化链路。
 
-CLI + Web + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Actions 定时全自动。
+React Web、Streamlit 维护入口、CLI、MCP 与 GitHub Actions 共同组成当前产品形态；行情优先复用 Supabase 缓存，缺口再回源补拉并回写。
 
 项目主页：**[youngcan-wang.github.io/wyckoff-homepage](https://youngcan-wang.github.io/wyckoff-homepage/)**
+
+---
+
+## 文档导航
+
+| 想了解 | 去哪里看 |
+|--------|----------|
+| 怎么使用、部署、配置 | 本 README |
+| 当前架构、Actions、数据表、缓存口径 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| 漏斗、AI 研报、OMS、回测逻辑 | [README_STRATEGY.md](README_STRATEGY.md) |
+| 术语速查 | [GLOSSARY.md](GLOSSARY.md) |
+| 方法论、研究笔记、运维排障 | [wiki_repo_new/Home.md](wiki_repo_new/Home.md) |
 
 ---
 
@@ -43,9 +55,9 @@ CLI + Web + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Ac
 |:---:|:---:|
 | <img src="docs/screenshots/web-track.png" width="450" /> | <img src="docs/screenshots/web-portfolio.png" width="450" /> |
 
-### Streamlit
+### Streamlit（维护入口）
 
-Streamlit 框架仅支撑了 MVP 阶段，随着项目功能持续增长 Streamlit 已不适用。数据导出功能仍保留在 Streamlit 内，其余功能均已迁移至 CF Pages。
+Streamlit 框架支撑了项目早期 MVP。当前保留数据导出、单股分析、设置等历史入口；新功能优先进入 React Web 与 CLI。
 
 在线地址：**[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
 
@@ -206,7 +218,13 @@ Agent 的武器库 — 10 个量价工具 + 5 个通用能力：
 
 ## 数据源
 
-个股日线自动降级：
+个股日线先读统一行情仓库：
+
+1. 优先读取 Supabase `stock_hist_cache`。
+2. 区间缺口只补拉缺失日期。
+3. 合并去重后回写缓存，再返回给 Web、CLI、Step3 与回测。
+
+默认行情缓存按日期滑动保留约 320 个交易日窗口。实时回源按可用性自动降级：
 
 ```
 tickflow → tushare → akshare → baostock → efinance
@@ -232,13 +250,13 @@ tickflow → tushare → akshare → baostock → efinance
 | 涨停复盘 | 周一-周五 19:25 | 当日涨幅 ≥ 8% 复盘 |
 | 推荐跟踪重定价 | 周日-周四 23:00 | 同步收盘价 |
 | 回测网格 | 每月 1/15 日 04:00 | 18 并行参数格 → 聚合通知 |
-| 缓存维护 | 每天 23:05 | 清理过期行情缓存 |
+| 数据库维护 | 每天 23:05 | 清理过期行情、订单、信号、市场信号等滑动窗口数据 |
 
 ## 模型支持
 
 **CLI**：Gemini / Claude / OpenAI，`/model` 一键切换，支持任意 OpenAI 兼容端点。
 
-**Web / Pipeline**：Gemini / OpenAI / DeepSeek / Qwen / Kimi / 智谱 / 火山引擎 / Minimax，共 8 家。
+**Web / Pipeline**：1Route / Gemini / OpenAI / 智谱 / Minimax / DeepSeek / Qwen / 火山引擎；Kimi 等 OpenAI 兼容服务可通过自定义 `base_url` 或 `custom_providers` 接入。
 
 ## 配置
 

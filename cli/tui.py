@@ -26,15 +26,8 @@ from textual.widgets.option_list import Option
 # ---------------------------------------------------------------------------
 # Widget
 # ---------------------------------------------------------------------------
-from cli.compaction import TAIL_KEEP as _TAIL_KEEP_DEFAULT
-from cli.compaction import compact_messages
-from cli.loop_guard import MAX_INCOMPLETE_TOOL_RETRIES as _MAX_INCOMPLETE_TOOL_RETRIES
-from cli.loop_guard import (
-    build_retry_exhausted_warning,
-    build_retry_user_message,
-    missing_required_tool,
-    resolve_turn_expectation,
-)
+from cli.runtime import AgentRuntime
+from cli.scratchpad import AgentScratchpad
 from core.prompts import with_current_time
 
 
@@ -1133,349 +1126,277 @@ class WyckoffTUI(App):
         def _spinner_stop():
             self.call_from_thread(self._stop_spinner)
 
-        total_input = 0
-        total_output = 0
         t_start = time.monotonic()
-        _recent_calls: list[tuple[str, str]] = []  # doom-loop: (name, args_hash)
-        _recent_args_texts: list[str] = []
-        _doom_break = False
 
         # 记录用户输入
         _user_text = self._messages[-1]["content"] if self._messages else ""
+        try:
+            _scratchpad: AgentScratchpad | None = AgentScratchpad(_user_text, session_id=self._session_id)
+        except Exception:
+            _scratchpad = None
         _model_name = getattr(self._provider, "name", "") if self._provider else ""
         _provider_name = self._state.get("provider_name", "") if self._state else ""
-        expectation = resolve_turn_expectation(self._messages)
-        incomplete_tool_retries = 0
-        used_tools_this_turn: list[tuple[str, dict]] = []
         executed_tool_summaries: list[dict[str, object]] = []
-        rounds_detail: list[dict[str, object]] = []
+        round_usages: dict[int, dict[str, Any]] = {}
+        round_tool_names: dict[int, list[str]] = {}
+        round_starts: dict[int, float] = {}
+        final_text = ""
+        final_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        final_elapsed = 0.0
+        final_rounds = 0
+        last_usage: dict[str, Any] = {}
         self._agent_log.info("session=%s user: %s", self._session_id, _user_text[:200])
         _chatlog_save = self._chatlog_save  # bound method ref
 
-        try:
-            from cli.loop_guard import MAX_TOOL_ROUNDS, check_doom_loop
+        _stream_separator_strips = 0
+        _stream_text_strips = 0
+        _streaming_started = False
+        _stream_line_buf = ""
 
-            _model_name_for_compact = getattr(self._provider, "name", "") if self._provider else ""
+        def _ensure_round(round_number: int) -> None:
+            if round_number > 0:
+                round_starts.setdefault(round_number, time.monotonic())
 
-            for round_idx in range(MAX_TOOL_ROUNDS):
-                _round_start = time.monotonic()
-                # ── Context compaction ──
-                _spinner_start("压缩上下文")
-                prev_len = len(self._messages)
-                self._messages, compacted = compact_messages(
-                    self._messages,
-                    self._provider,
-                    _model_name_for_compact,
-                )
-                _spinner_stop()
-                if compacted:
-                    _write(
-                        Text.from_markup(
-                            f"  [dim]📦 上下文已压缩（{prev_len - _TAIL_KEEP_DEFAULT}条→摘要，保留最近{_TAIL_KEEP_DEFAULT}条）[/dim]"
-                        )
-                    )
-
-                text_buf = ""
-                thinking_buf = ""
-                tool_calls = None
-                round_usage = {}
-                _stream_separator_strips = 0
-                _stream_text_strips = 0
-                _streaming_started = False
+        def _flush_stream_line() -> None:
+            nonlocal _stream_line_buf, _stream_text_strips
+            if _stream_line_buf:
+                _stream_text_strips += _write_stream(Text(_stream_line_buf))
                 _stream_line_buf = ""
+                _scroll()
 
-                def _clear_streamed_block(*, include_separator: bool) -> None:
-                    nonlocal _stream_separator_strips
-                    nonlocal _stream_text_strips, _streaming_started
-                    strip_count = _stream_text_strips
-                    if include_separator:
-                        strip_count += _stream_separator_strips
-                    if _streaming_started and strip_count > 0:
-                        self.call_from_thread(_pop_lines, log, strip_count)
-                    _stream_text_strips = 0
-                    if include_separator:
-                        _stream_separator_strips = 0
-                        _streaming_started = False
+        def _clear_streamed_block(*, include_separator: bool) -> None:
+            nonlocal _stream_separator_strips
+            nonlocal _stream_text_strips, _streaming_started
+            strip_count = _stream_text_strips
+            if include_separator:
+                strip_count += _stream_separator_strips
+            if _streaming_started and strip_count > 0:
+                self.call_from_thread(_pop_lines, log, strip_count)
+            _stream_text_strips = 0
+            if include_separator:
+                _stream_separator_strips = 0
+                _streaming_started = False
 
-                if round_idx > 0:
-                    _spinner_start()
+        def _display_thinking(text: str) -> None:
+            preview = text.strip().replace("\n", " ")
+            if len(preview) > 80:
+                preview = preview[:80] + "…"
+            if preview:
+                _write(
+                    Text.from_markup(f"  [italic magenta]💭 {preview}[/italic magenta]  [dim]({len(text)} 字)[/dim]")
+                )
 
-                # ── 带重试的 streaming ──
-                _MAX_STREAM_RETRIES = 3
-                _stream = None
-                for _retry in range(_MAX_STREAM_RETRIES):
-                    try:
-                        _stream = self._provider.chat_stream(
-                            self._messages, self._tools.schemas(), with_current_time(self._system_prompt)
-                        )
-                        break
-                    except Exception as _stream_err:
-                        self._agent_log.warning(
-                            "session=%s stream_connect_fail retry=%d err=%s",
-                            self._session_id,
-                            _retry,
-                            _stream_err,
-                        )
-                        from cli.providers.fallback import _is_retriable
+        def _display_tool_result(event: dict[str, Any]) -> None:
+            name = event["name"]
+            args = event.get("args", {})
+            display = self._tools.display_name(name) if self._tools else name
+            result = event.get("result")
+            if result is None and event.get("error"):
+                result = {"error": event["error"]}
+            elapsed_s = float(event.get("elapsed_ms", 0)) / 1000
 
-                        if not _is_retriable(_stream_err) or _retry == _MAX_STREAM_RETRIES - 1:
-                            raise
-                        _delay = min(2 ** (_retry + 1), 30)
-                        _write(
-                            Text.from_markup(
-                                f"  [yellow]⚡ 连接失败，{_delay}s 后重试（{_retry + 1}/{_MAX_STREAM_RETRIES}）[/yellow]"
-                            )
-                        )
-                        _scroll()
-                        time.sleep(_delay)
-
-                for chunk in _stream:
-                    if chunk["type"] == "thinking_delta":
-                        thinking_buf += chunk["text"]
-
-                    elif chunk["type"] == "text_delta":
-                        text_buf += chunk["text"]
-                        _stream_line_buf += chunk["text"]
-                        if not _streaming_started:
-                            _spinner_stop()
-                            _stream_separator_strips += _write_stream(Text.from_markup("  [dim]───[/dim]"))
-                            _streaming_started = True
-                        while "\n" in _stream_line_buf:
-                            line, _stream_line_buf = _stream_line_buf.split("\n", 1)
-                            _stream_text_strips += _write_stream(Text(line))
-                            _scroll()
-
-                    elif chunk["type"] == "tool_calls":
-                        tool_calls = chunk["tool_calls"]
-                        partial = chunk.get("text", "")
-                        if partial and not text_buf:
-                            text_buf = partial
-
-                    elif chunk["type"] == "usage":
-                        round_usage = chunk
-
-                _spinner_stop()
-
-                # 刷出流式行缓冲剩余
-                if _stream_line_buf:
-                    _stream_text_strips += _write_stream(Text(_stream_line_buf))
-                    _stream_line_buf = ""
-                    _scroll()
-
-                total_input += round_usage.get("input_tokens", 0)
-                total_output += round_usage.get("output_tokens", 0)
-                rounds_detail.append(
+            if isinstance(result, dict) and result.get("error"):
+                executed_tool_summaries.append(
                     {
-                        "round": round_idx + 1,
-                        "model": _model_name,
-                        "tokens_in": round_usage.get("input_tokens", 0),
-                        "tokens_out": round_usage.get("output_tokens", 0),
-                        "cache_read": round_usage.get("cache_read_tokens", 0),
-                        "cache_write": round_usage.get("cache_write_tokens", 0),
-                        "duration": round(time.monotonic() - _round_start, 2),
-                        "has_tool_calls": bool(tool_calls),
-                        "tool_names": [c["name"] for c in (tool_calls or [])],
+                        "name": name,
+                        "args_brief": str(args)[:100],
+                        "status": "error",
+                        "error": str(result.get("error", ""))[:160],
                     }
                 )
-
-                will_retry_missing_tool = (
-                    missing_required_tool(expectation, used_tools_this_turn)
-                    and incomplete_tool_retries < _MAX_INCOMPLETE_TOOL_RETRIES
+                _write(
+                    Text.from_markup(
+                        f"  [red]✗ {display}[/red] [dim]{elapsed_s:.1f}s {str(result['error'])[:80]}[/dim]"
+                    )
                 )
-                if tool_calls or will_retry_missing_tool:
-                    _clear_streamed_block(include_separator=True)
-                elif _streaming_started:
-                    _clear_streamed_block(include_separator=False)
+            elif isinstance(result, dict) and result.get("status") == "background":
+                executed_tool_summaries.append(
+                    {
+                        "name": name,
+                        "args_brief": str(args)[:100],
+                        "status": "background",
+                    }
+                )
+                _write(Text.from_markup(f"  [cyan]↗ {display}[/cyan] [dim]已提交后台[/dim]"))
+            else:
+                executed_tool_summaries.append(
+                    {
+                        "name": name,
+                        "args_brief": str(args)[:100],
+                        "status": event.get("status", "ok"),
+                    }
+                )
+                _write(Text.from_markup(f"  [green]✓ {display}[/green] [dim]{elapsed_s:.1f}s[/dim]"))
+            _scroll()
 
-                # ── Fallback 通知 ──
-                fb_msg = getattr(self._provider, "last_fallback_msg", None)
-                if fb_msg:
-                    _write(Text.from_markup(f"  [yellow]⚡ {fb_msg}[/yellow]"))
-                    self._provider.last_fallback_msg = None
+        def _build_rounds_detail(rounds: int) -> list[dict[str, object]]:
+            details: list[dict[str, object]] = []
+            for round_number in range(1, rounds + 1):
+                usage = round_usages.get(round_number, {})
+                started = round_starts.get(round_number, t_start)
+                details.append(
+                    {
+                        "round": round_number,
+                        "model": _model_name,
+                        "tokens_in": usage.get("input_tokens", 0),
+                        "tokens_out": usage.get("output_tokens", 0),
+                        "cache_read": usage.get("cache_read_tokens", 0),
+                        "cache_write": usage.get("cache_write_tokens", 0),
+                        "duration": round(max(0.0, time.monotonic() - started), 2),
+                        "has_tool_calls": bool(round_tool_names.get(round_number)),
+                        "tool_names": round_tool_names.get(round_number, []),
+                    }
+                )
+            return details
 
-                # ── Thinking 摘要（折叠为一行） ──
-                if thinking_buf:
-                    preview = thinking_buf.strip().replace("\n", " ")
-                    if len(preview) > 80:
-                        preview = preview[:80] + "…"
+        try:
+            if not self._provider or not self._tools:
+                raise RuntimeError("模型或工具未初始化")
+
+            runtime = AgentRuntime(self._provider, self._tools, scratchpad=_scratchpad)
+            for event in runtime.run_stream(self._messages, with_current_time(self._system_prompt)):
+                event_type = event.get("type")
+                round_number = int(event.get("round") or 0)
+                _ensure_round(round_number)
+
+                if event_type == "compaction":
                     _write(
                         Text.from_markup(
-                            f"  [italic magenta]💭 {preview}[/italic magenta]  [dim]({len(thinking_buf)} 字)[/dim]"
+                            f"  [dim]📦 上下文已压缩（{event['before_messages']}条 → {event['after_messages']}条）[/dim]"
                         )
                     )
+                    _scroll()
+                    continue
 
-                # ── 工具调用 ──
-                if tool_calls:
-                    assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
-                    if text_buf:
-                        assistant_msg["content"] = text_buf
-                    if thinking_buf:
-                        assistant_msg["reasoning_content"] = thinking_buf
-                    self._messages.append(assistant_msg)
+                if event_type == "thinking_delta":
+                    continue
 
-                    for call in tool_calls:
-                        name = call["name"]
-                        args = call["args"]
-                        call_id = call["id"]
-                        display = self._tools.display_name(name)
-                        used_tools_this_turn.append((name, args))
-
-                        # ── Doom-loop 检测 ──
-                        if check_doom_loop(_recent_calls, name, args, recent_args_texts=_recent_args_texts):
-                            _write(Text.from_markup(f"  [yellow]⚠ 检测到重复调用 {display}，已中止循环[/yellow]"))
-                            self._messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": call_id,
-                                    "name": name,
-                                    "content": json.dumps(
-                                        {"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False
-                                    ),
-                                }
-                            )
-                            tool_calls = None
-                            _doom_break = True
-                            break
-
-                        _spinner_start(display)
-
-                        t_tool = time.monotonic()
-                        result = self._tools.execute(name, args)
-                        elapsed_tool = time.monotonic() - t_tool
-
+                if event_type == "text_delta":
+                    _stream_line_buf += event["text"]
+                    if not _streaming_started:
                         _spinner_stop()
-
-                        if isinstance(result, dict) and result.get("error"):
-                            executed_tool_summaries.append(
-                                {
-                                    "name": name,
-                                    "args_brief": str(args)[:100],
-                                    "status": "error",
-                                    "error": str(result.get("error", ""))[:160],
-                                }
-                            )
-                            _write(
-                                Text.from_markup(
-                                    f"  [red]✗ {display}[/red] [dim]{elapsed_tool:.1f}s {str(result['error'])[:80]}[/dim]"
-                                )
-                            )
-                        elif isinstance(result, dict) and result.get("status") == "background":
-                            executed_tool_summaries.append(
-                                {
-                                    "name": name,
-                                    "args_brief": str(args)[:100],
-                                    "status": "background",
-                                }
-                            )
-                            _write(Text.from_markup(f"  [cyan]↗ {display}[/cyan] [dim]已提交后台[/dim]"))
-                        else:
-                            executed_tool_summaries.append(
-                                {
-                                    "name": name,
-                                    "args_brief": str(args)[:100],
-                                    "status": "ok",
-                                }
-                            )
-                            _write(Text.from_markup(f"  [green]✓ {display}[/green] [dim]{elapsed_tool:.1f}s[/dim]"))
+                        _stream_separator_strips += _write_stream(Text.from_markup("  [dim]───[/dim]"))
+                        _streaming_started = True
+                    while "\n" in _stream_line_buf:
+                        line, _stream_line_buf = _stream_line_buf.split("\n", 1)
+                        _stream_text_strips += _write_stream(Text(line))
                         _scroll()
+                    continue
 
-                        self._messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": call_id,
-                                "name": name,
-                                "content": json.dumps(result, ensure_ascii=False, default=str),
-                            }
-                        )
-                    if tool_calls is not None:
-                        continue
-                    # doom-loop 中止：不再继续下一轮，走到最终输出
+                if event_type == "tool_calls":
+                    _flush_stream_line()
+                    _clear_streamed_block(include_separator=True)
+                    names = [call["name"] for call in event.get("tool_calls", [])]
+                    if round_number:
+                        round_tool_names.setdefault(round_number, []).extend(names)
+                    continue
 
-                if (
-                    missing_required_tool(expectation, used_tools_this_turn)
-                    and incomplete_tool_retries < _MAX_INCOMPLETE_TOOL_RETRIES
-                ):
-                    retry_prompt = build_retry_user_message(expectation, text_buf)
-                    incomplete_tool_retries += 1
+                if event_type == "usage":
+                    usage = event.get("usage", {})
+                    if round_number:
+                        round_usages[round_number] = usage
+                    last_usage = usage
+                    fb_msg = getattr(self._provider, "last_fallback_msg", None)
+                    if fb_msg:
+                        _write(Text.from_markup(f"  [yellow]⚡ {fb_msg}[/yellow]"))
+                        self._provider.last_fallback_msg = None
+                    continue
+
+                if event_type == "thinking":
+                    _spinner_stop()
+                    _display_thinking(event.get("text", ""))
+                    continue
+
+                if event_type == "tool_start":
+                    _flush_stream_line()
+                    _clear_streamed_block(include_separator=True)
+                    display = self._tools.display_name(event["name"]) if self._tools else event["name"]
+                    _spinner_start(display)
+                    continue
+
+                if event_type in {"tool_result", "tool_error"}:
+                    _spinner_stop()
+                    _display_tool_result(event)
+                    continue
+
+                if event_type == "retry":
+                    _flush_stream_line()
+                    _clear_streamed_block(include_separator=True)
                     self._agent_log.info(
-                        "session=%s loop_guard retry=%d required_tool=%s reason=%s",
+                        "session=%s loop_guard retry=%d required_tool=%s",
                         self._session_id,
-                        incomplete_tool_retries,
-                        expectation.required_tool if expectation else "",
-                        expectation.reason if expectation else "",
+                        event.get("retry", 0),
+                        event.get("required_tool", ""),
                     )
                     _write(Text.from_markup("  [yellow]⚠ 模型未执行必需工具，已自动要求继续执行[/yellow]"))
                     _scroll()
-                    if text_buf:
-                        _retry_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
-                        if thinking_buf:
-                            _retry_msg["reasoning_content"] = thinking_buf
-                        self._messages.append(_retry_msg)
-                    self._messages.append({"role": "user", "content": retry_prompt})
+                    _spinner_start()
                     continue
 
-                # ── 最终输出 ──
-                if missing_required_tool(expectation, used_tools_this_turn):
-                    warning = build_retry_exhausted_warning(expectation, incomplete_tool_retries)
-                    text_buf = f"{warning}\n\n{text_buf}".strip()
-                if not _doom_break:
-                    _final_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
-                    if thinking_buf:
-                        _final_msg["reasoning_content"] = thinking_buf
-                    self._messages.append(_final_msg)
-                if text_buf:
-                    if not _streaming_started:
-                        _write(Text.from_markup("  [dim]───[/dim]"))
-                    _write(Markdown(text_buf))
+                if event_type == "done":
+                    _spinner_stop()
+                    _flush_stream_line()
+                    final_text = event.get("text", "")
+                    final_usage = event.get("usage", final_usage)
+                    final_elapsed = float(event.get("elapsed", time.monotonic() - t_start))
+                    final_rounds = int(event.get("rounds", 0))
+
+                    if final_text:
+                        if _streaming_started:
+                            _clear_streamed_block(include_separator=False)
+                        else:
+                            _write(Text.from_markup("  [dim]───[/dim]"))
+                        _write(Markdown(final_text))
+                        _scroll()
+
+                    total_input = final_usage.get("input_tokens", 0)
+                    total_output = final_usage.get("output_tokens", 0)
+                    self._session_tokens["input"] += total_input
+                    self._session_tokens["output"] += total_output
+                    self._session_tokens["rounds"] += 1
+
+                    usage_parts = []
+                    if total_input or total_output:
+                        usage_parts.append(f"↑{total_input:,} ↓{total_output:,}")
+                    usage_parts.append(f"{final_elapsed:.1f}s")
+                    _write(Text.from_markup(f"  [dim]{' · '.join(usage_parts)}[/dim]"))
                     _scroll()
+                    self.call_from_thread(self._update_status)
 
-                elapsed = time.monotonic() - t_start
-                self._session_tokens["input"] += total_input
-                self._session_tokens["output"] += total_output
-                self._session_tokens["rounds"] += 1
-
-                usage_parts = []
-                if total_input or total_output:
-                    usage_parts.append(f"↑{total_input:,} ↓{total_output:,}")
-                usage_parts.append(f"{elapsed:.1f}s")
-                _write(Text.from_markup(f"  [dim]{' · '.join(usage_parts)}[/dim]"))
-                _scroll()
-                self.call_from_thread(self._update_status)
-
-                # 保存对话记录
-                _chatlog_save("user", _user_text, model=_model_name, provider=_provider_name)
-                _tc_json = json.dumps(executed_tool_summaries, ensure_ascii=False) if executed_tool_summaries else ""
-                _metadata = {
-                    "cache_read": round_usage.get("cache_read_tokens", 0),
-                    "cache_write": round_usage.get("cache_write_tokens", 0),
-                    "stop_reason": round_usage.get("stop_reason", "stop"),
-                    "rounds": round_idx + 1,
-                    "rounds_detail": rounds_detail,
-                    "messages": list(self._messages),
-                    "system_prompt": self._system_prompt,
-                    "tools": self._tools.schemas() if self._tools else [],
-                }
-                _chatlog_save(
-                    "assistant",
-                    text_buf,
-                    model=_model_name,
-                    provider=_provider_name,
-                    tokens_in=total_input,
-                    tokens_out=total_output,
-                    elapsed_s=round(elapsed, 2),
-                    tool_calls_json=_tc_json,
-                    metadata_json=json.dumps(_metadata, ensure_ascii=False),
-                )
-                self._agent_log.info(
-                    "session=%s done in=%.1fs tokens=%d/%d",
-                    self._session_id,
-                    elapsed,
-                    total_input,
-                    total_output,
-                )
-                break
-            else:
-                _write(Text.from_markup("[yellow](工具调用轮次超限)[/yellow]"))
+                    _chatlog_save("user", _user_text, model=_model_name, provider=_provider_name)
+                    _tc_json = (
+                        json.dumps(executed_tool_summaries, ensure_ascii=False) if executed_tool_summaries else ""
+                    )
+                    _metadata = {
+                        "cache_read": last_usage.get("cache_read_tokens", 0),
+                        "cache_write": last_usage.get("cache_write_tokens", 0),
+                        "stop_reason": last_usage.get("stop_reason", "stop"),
+                        "rounds": final_rounds,
+                        "rounds_detail": _build_rounds_detail(final_rounds),
+                        "messages": list(self._messages),
+                        "system_prompt": self._system_prompt,
+                        "tools": self._tools.schemas() if self._tools else [],
+                        "scratchpad_path": str(_scratchpad.path) if _scratchpad else "",
+                    }
+                    _chatlog_save(
+                        "assistant",
+                        final_text,
+                        model=_model_name,
+                        provider=_provider_name,
+                        tokens_in=total_input,
+                        tokens_out=total_output,
+                        elapsed_s=round(final_elapsed, 2),
+                        tool_calls_json=_tc_json,
+                        metadata_json=json.dumps(_metadata, ensure_ascii=False),
+                    )
+                    self._agent_log.info(
+                        "session=%s done in=%.1fs tokens=%d/%d",
+                        self._session_id,
+                        final_elapsed,
+                        total_input,
+                        total_output,
+                    )
+                    break
 
         except Exception as e:
             _spinner_stop()
@@ -1488,6 +1409,8 @@ class WyckoffTUI(App):
                 err = title.group(1) if title else "服务端返回 HTML 错误"
             if len(err) > 200:
                 err = err[:200] + "..."
+            if _scratchpad:
+                _scratchpad.record_error(f"{type(e).__name__}: {err}", elapsed_s=time.monotonic() - t_start)
             _write(Text.from_markup(f"[red]错误: {err}[/red]"))
             # 记录错误到日志和 SQLite
             _elapsed = time.monotonic() - t_start

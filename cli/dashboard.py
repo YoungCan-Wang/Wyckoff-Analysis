@@ -409,100 +409,131 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0a0e17;--bg2:#0f1420;--bg3:#151b2b;
-  --border:#1e2740;--border2:#2a3452;
-  --text:#c8d1e0;--text2:#8892a8;--text-dim:#505a70;
-  --accent:#00d4aa;--accent2:#00b894;--accent-dim:rgba(0,212,170,.08);
-  --red:#ff4757;--amber:#f59e0b;--blue:#3b82f6;--green:#06b6d4;
-  --card:#0f1420;
-  --hover-bg:rgba(255,255,255,.02);--hover-td:rgba(255,255,255,.015);
+  --bg:#090d14;--bg2:#111827;--bg3:#1a2434;
+  --border:#2b3548;--border2:#3a465c;
+  --text:#e3e9f4;--text2:#aeb8ca;--text-dim:#7f8ba0;
+  --accent:#ff4d5e;--accent2:#f59e0b;--accent-dim:rgba(255,77,94,.10);
+  --red:#ff5b6a;--amber:#fbbf24;--blue:#38bdf8;--green:#22c55e;--violet:#a78bfa;--cyan:#22d3ee;
+  --card:#121b2b;
+  --hover-bg:rgba(255,255,255,.055);--hover-td:rgba(255,255,255,.04);
   --scan-a:rgba(0,0,0,.03);
   --font:'SF Mono','Cascadia Code','Fira Code','JetBrains Mono',Consolas,'Courier New',monospace;
 }
 html.light{
-  --bg:#f4f5f7;--bg2:#ffffff;--bg3:#ebedf0;
-  --border:#dce0e6;--border2:#c8cdd5;
-  --text:#1a1d24;--text2:#5a6270;--text-dim:#9aa0ab;
-  --accent:#0a9b7a;--accent2:#088a6b;--accent-dim:rgba(10,155,122,.08);
-  --red:#d63031;--amber:#d4880f;--blue:#2563eb;--green:#0891b2;
+  --bg:#f5f6f9;--bg2:#ffffff;--bg3:#eef1f6;
+  --border:#cfd6e3;--border2:#b8c2d1;
+  --text:#151922;--text2:#4d5666;--text-dim:#6d7788;
+  --accent:#d62839;--accent2:#b45309;--accent-dim:rgba(214,40,57,.08);
+  --red:#d62839;--amber:#b45309;--blue:#2563eb;--green:#16a34a;--violet:#7c3aed;--cyan:#0891b2;
   --card:#ffffff;
   --hover-bg:rgba(0,0,0,.02);--hover-td:rgba(0,0,0,.02);
   --scan-a:rgba(255,255,255,.04);
 }
-html{font-size:13px}
-body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.5;overflow:hidden;height:100vh}
+html{font-size:14px}
+body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55;overflow:hidden;height:100vh}
 ::selection{background:var(--accent);color:var(--bg)}
 ::-webkit-scrollbar{width:5px}
 ::-webkit-scrollbar-track{background:var(--bg2)}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
 
 .shell{display:flex;height:100vh}
-.sidebar{width:200px;min-width:200px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:16px 0}
-.logo{padding:0 16px 20px;border-bottom:1px solid var(--border);margin-bottom:8px;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:700}
-.logo span{color:var(--text2);font-weight:400;display:block;font-size:10px;letter-spacing:1px;margin-top:2px}
-.nav-item{padding:8px 16px;cursor:pointer;font-size:12px;color:var(--text2);border-left:2px solid transparent;transition:all .15s}
+.sidebar{width:216px;min-width:216px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:18px 0}
+.logo{padding:0 18px 22px;border-bottom:1px solid var(--border);margin-bottom:10px;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:700}
+.logo span{color:var(--text2);font-weight:400;display:block;font-size:10.5px;letter-spacing:1px;margin-top:3px}
+.nav-item{padding:9px 18px;cursor:pointer;font-size:13px;color:var(--text2);border-left:2px solid transparent;transition:all .15s}
 .nav-item:hover{color:var(--text);background:var(--hover-bg)}
-.nav-item.active{color:var(--accent);border-left-color:var(--accent);background:rgba(0,212,170,.04)}
+.nav-item.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-dim)}
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
-.topbar{height:40px;min-height:40px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:var(--bg2)}
-.topbar-title{font-size:12px;color:var(--text2);letter-spacing:1px;text-transform:uppercase}
+.topbar{height:44px;min-height:44px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 22px;background:var(--bg2)}
+.topbar-title{font-size:13px;color:var(--text2);letter-spacing:1px;text-transform:uppercase}
 .topbar-r{display:flex;align-items:center;gap:12px}
-.clock{font-size:12px;color:var(--accent);letter-spacing:1px}
-.tb-btn{background:none;border:1px solid var(--border);color:var(--text2);cursor:pointer;font-size:11px;padding:3px 8px;border-radius:3px;font-family:var(--font);transition:all .15s}
+.clock{font-size:13px;color:var(--accent);letter-spacing:1px}
+.tb-btn{background:none;border:1px solid var(--border);color:var(--text2);cursor:pointer;font-size:12px;padding:4px 9px;border-radius:3px;font-family:var(--font);transition:all .15s}
 .tb-btn:hover{color:var(--accent);border-color:var(--accent)}
-.content{flex:1;overflow-y:auto;padding:20px}
+.content{flex:1;overflow-y:auto;padding:22px}
 
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-bottom:20px}
-.card{background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:16px;position:relative;overflow:hidden}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:18px;margin-bottom:22px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:4px;padding:18px;position:relative;overflow:hidden}
 .card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3}
-.card-title{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px}
-.card-value{font-size:24px;font-weight:700;color:var(--accent);line-height:1}
-.card-sub{font-size:11px;color:var(--text2);margin-top:6px}
+.card-title{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);font-weight:700;margin-bottom:13px}
+.card-value{font-size:27px;font-weight:700;color:var(--accent);line-height:1.1}
+.card-sub{font-size:12px;color:var(--text2);margin-top:7px}
 
-.tbl{width:100%;border-collapse:collapse;font-size:12px}
-.tbl th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border2);color:var(--text-dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:600;position:sticky;top:0;background:var(--bg2);z-index:1}
-.tbl td{padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text);white-space:nowrap}
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border2);color:var(--text2);font-size:11px;letter-spacing:1px;text-transform:uppercase;font-weight:600;position:sticky;top:0;background:var(--bg2);z-index:1}
+.tbl td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text);white-space:nowrap}
 .tbl tr:hover td{background:var(--hover-td)}
 .tbl-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:4px;overflow:auto;max-height:calc(100vh - 180px)}
 .tbl-wrap::before{content:'';display:block;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3}
 
-.pill{display:inline-block;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600;letter-spacing:.5px}
-.pill-green{background:rgba(6,182,212,.12);color:var(--green);border:1px solid rgba(6,182,212,.2)}
-.pill-red{background:rgba(255,71,87,.12);color:var(--red);border:1px solid rgba(255,71,87,.2)}
-.pill-amber{background:rgba(245,158,11,.12);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
-.pill-yellow{background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.25)}
-.pill-blue{background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
-.pill-dim{background:var(--bg3);color:var(--text-dim);border:1px solid var(--border)}
+.pill{display:inline-block;padding:2.5px 9px;border-radius:3px;font-size:11px;font-weight:700;letter-spacing:.5px;line-height:1.45}
+.pill-green{background:rgba(34,197,94,.16);color:var(--green);border:1px solid rgba(34,197,94,.34)}
+.pill-red{background:rgba(255,91,106,.16);color:var(--red);border:1px solid rgba(255,91,106,.34)}
+.pill-amber{background:rgba(251,191,36,.16);color:var(--amber);border:1px solid rgba(251,191,36,.34)}
+.pill-yellow{background:rgba(167,139,250,.16);color:var(--violet);border:1px solid rgba(167,139,250,.34)}
+.pill-blue{background:rgba(56,189,248,.16);color:var(--blue);border:1px solid rgba(56,189,248,.34)}
+.pill-cyan{background:rgba(34,211,238,.16);color:var(--cyan);border:1px solid rgba(34,211,238,.34)}
+.pill-dim{background:var(--bg3);color:var(--text2);border:1px solid var(--border2)}
+.pill-model{background:rgba(167,139,250,.16);color:var(--violet);border:1px solid rgba(167,139,250,.34)}
+.pill-provider{background:rgba(56,189,248,.14);color:var(--blue);border:1px solid rgba(56,189,248,.3)}
+.pill-token{background:rgba(251,191,36,.14);color:var(--amber);border:1px solid rgba(251,191,36,.3)}
+.pill-time{background:rgba(148,163,184,.12);color:var(--text2);border:1px solid var(--border2)}
+.pill-user{background:rgba(255,91,106,.16);color:var(--red);border:1px solid rgba(255,91,106,.34)}
+.pill-ai{background:rgba(34,211,238,.14);color:var(--cyan);border:1px solid rgba(34,211,238,.3)}
 
-.cfg-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}
+.chat-metrics{display:flex;gap:24px;margin-bottom:16px;padding:12px 16px;background:var(--card);border-radius:8px;border:1px solid var(--border);box-shadow:0 8px 30px rgba(0,0,0,.12)}
+.metric-label{font-size:11px;color:var(--text2);letter-spacing:.4px}
+.metric-value{font-size:18px;font-weight:700;color:var(--text)}
+.chat-side{width:430px;min-width:360px;border-right:1px solid var(--border);overflow-y:auto;padding:14px;background:color-mix(in srgb,var(--bg2) 76%,var(--bg) 24%)}
+.chat-side-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.chat-mini{display:flex;gap:8px;font-size:10px;color:var(--text2)}
+.chat-session-id{font-size:10px;color:var(--text2);margin-bottom:10px;font-family:var(--font);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trace-item{padding:10px 12px;margin-bottom:5px;border-radius:7px;cursor:pointer;border:1px solid transparent;border-left:3px solid transparent;background:transparent;transition:background .15s,border-color .15s}
+.trace-item:hover{background:var(--hover-bg);border-color:var(--border)}
+.trace-item.active{background:var(--accent-dim);border-color:rgba(255,77,94,.28);border-left-color:var(--accent)}
+.trace-meta{display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap}
+.trace-question{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trace-answer{font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+.trace-token{font-size:11px;color:var(--amber);margin-top:4px}
+.span-list{margin-top:6px;padding-left:8px;border-left:2px solid var(--border2)}
+.span-line{font-size:11px;padding:3px 0;color:var(--text2)}
+.span-args{color:var(--text-dim)}
+.detail-tabs{display:flex;gap:4px;margin-bottom:12px}
+.detail-tab{font-size:12px;padding:5px 13px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-family:var(--font)}
+.detail-tab.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+.detail-head{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.code-panel{font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:13px;background:color-mix(in srgb,var(--bg3) 68%,var(--bg2) 32%);border:1px solid var(--border);border-radius:6px;overflow-y:auto}
+.summary-row{font-size:14px;font-weight:700;cursor:pointer;padding:9px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;color:var(--text)}
+
+.cfg-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);font-size:13px}
 .cfg-key{color:var(--text2)}.cfg-val{color:var(--accent);font-weight:600}.cfg-val.masked{color:var(--text-dim)}
 .mem-item{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .mem-item:last-child{border-bottom:none}
-.mem-content{flex:1;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
-.mem-meta{font-size:10px;color:var(--text-dim);margin-top:4px}
-.btn-del{background:none;border:1px solid var(--border);color:var(--red);cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);flex-shrink:0}
+.mem-content{flex:1;font-size:13px;line-height:1.65;white-space:pre-wrap;word-break:break-all}
+.mem-meta{font-size:11px;color:var(--text-dim);margin-top:5px}
+.btn-del{background:none;border:1px solid var(--border);color:var(--red);cursor:pointer;font-size:11px;padding:4px 9px;border-radius:3px;font-family:var(--font);flex-shrink:0}
 .btn-del:hover{background:rgba(255,71,87,.1);border-color:var(--red)}
-.sync-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}
+.sync-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border);font-size:13px}
 .sync-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .sync-dot.ok{background:var(--green);box-shadow:0 0 6px var(--green)}
 .sync-dot.stale{background:var(--amber);box-shadow:0 0 6px var(--amber)}
 .sync-dot.none{background:var(--text-dim)}
-.empty{text-align:center;padding:40px;color:var(--text-dim);font-size:12px}
-.btn-accent{background:rgba(0,212,170,.1);border:1px solid var(--accent);color:var(--accent);cursor:pointer;font-size:11px;padding:4px 12px;border-radius:3px;font-family:var(--font);transition:all .15s}
-.btn-accent:hover{background:rgba(0,212,170,.2)}
-.btn-edit{background:none;border:1px solid var(--border);color:var(--blue);cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);margin-right:4px}
+.empty{text-align:center;padding:44px;color:var(--text2);font-size:13px}
+.btn-accent{background:var(--accent-dim);border:1px solid var(--accent);color:var(--accent);cursor:pointer;font-size:12px;padding:5px 13px;border-radius:3px;font-family:var(--font);transition:all .15s}
+.btn-accent:hover{background:rgba(255,77,94,.18)}
+.btn-edit{background:none;border:1px solid var(--border);color:var(--blue);cursor:pointer;font-size:11px;padding:4px 9px;border-radius:3px;font-family:var(--font);margin-right:4px}
 .btn-edit:hover{background:rgba(59,130,246,.1);border-color:var(--blue)}
-.btn-default{background:none;border:1px solid var(--border);color:var(--amber);cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);margin-right:4px}
+.btn-default{background:none;border:1px solid var(--border);color:var(--amber);cursor:pointer;font-size:11px;padding:4px 9px;border-radius:3px;font-family:var(--font);margin-right:4px}
 .btn-default:hover{background:rgba(245,158,11,.1);border-color:var(--amber)}
-.btn-fallback{background:none;border:1px solid var(--border);color:#a78bfa;cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);margin-right:4px}
+.btn-fallback{background:none;border:1px solid var(--border);color:#a78bfa;cursor:pointer;font-size:11px;padding:4px 9px;border-radius:3px;font-family:var(--font);margin-right:4px}
 .btn-fallback:hover{background:rgba(167,139,250,.1);border-color:#a78bfa}
 .model-form{background:var(--bg3);border:1px solid var(--border2);border-radius:4px;padding:16px;margin-top:12px}
 .form-row{display:flex;align-items:center;margin-bottom:10px;gap:8px}
 .form-row:last-child{margin-bottom:0}
-.form-label{width:80px;font-size:11px;color:var(--text2);text-align:right;flex-shrink:0}
-.form-input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:3px;font-family:var(--font);font-size:12px;outline:none}
+.form-label{width:88px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0}
+.form-input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 11px;border-radius:3px;font-family:var(--font);font-size:13px;outline:none}
 .form-input:focus{border-color:var(--accent)}
-.form-select{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:3px;font-family:var(--font);font-size:12px;outline:none;-webkit-appearance:none}
+.form-select{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 11px;border-radius:3px;font-family:var(--font);font-size:13px;outline:none;-webkit-appearance:none}
 .form-select:focus{border-color:var(--accent)}
 .form-select option{background:var(--bg);color:var(--text)}
 .form-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
@@ -704,7 +735,7 @@ function renderRecTable(recs,showDel){
   if(!recs.length)return `<div class="empty">${t('no_data')}</div>`;
   return `<table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_camp')}</th><th>${t('th_date')}</th><th>${t('th_init_price')}</th><th>${t('th_cur_price')}</th><th>${t('th_ai')}</th>${showDel?'<th></th>':''}</tr></thead><tbody>${recs.map(r=>{
     const code=String(r.code||'').padStart(6,'0');
-    const ai=r.is_ai_recommended?'<span class="pill pill-green">AI</span>':'<span class="pill pill-dim">Manual</span>';
+    const ai=r.is_ai_recommended?'<span class="pill pill-blue">AI</span>':'<span class="pill pill-dim">Manual</span>';
     return `<tr><td>${code}</td><td>${r.name||''}</td><td>${r.camp||''}</td><td>${localTime(r.recommend_date)}</td><td>${(r.initial_price||0).toFixed(2)}</td><td>${(r.current_price||0).toFixed(2)}</td><td>${ai}</td>${showDel?`<td><button class="btn-del" onclick="delRec('${code}')">${t('del')}</button></td>`:''}</tr>`}).join('')}</tbody></table>`}
 
 // ═══ Recommendations ═══
@@ -728,7 +759,7 @@ window.delSig=async function(code){if(!confirm(t('confirm_del_sig')+code+'?'))re
 async function renderTailBuy(c){
   const rows=await API('/api/tail-buy');
   if(!Array.isArray(rows)||!rows.length){c.innerHTML=`<div class="empty">${t('no_tailbuy')}</div>`;return}
-  const llmPill=d=>{const m={BUY:'pill-green',WATCH:'pill-amber',SKIP:'pill-red'};return d?`<span class="pill ${m[d]||'pill-dim'}">${d}</span>`:'<span class="pill pill-dim">-</span>'};
+  const llmPill=d=>{const m={BUY:'pill-red',WATCH:'pill-amber',SKIP:'pill-dim'};return d?`<span class="pill ${m[d]||'pill-dim'}">${d}</span>`:'<span class="pill pill-dim">-</span>'};
   c.innerHTML=`<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_run_date')}</th><th>${t('th_signal_type')}</th><th>${t('th_rule_score')}</th><th>${t('th_priority')}</th><th>${t('th_llm')}</th><th></th></tr></thead><tbody>${rows.map(r=>{
     const code=String(r.code||'').padStart(6,'0');
     return `<tr><td>${code}</td><td>${r.name||''}</td><td>${localTime(r.run_date)}</td><td>${r.signal_type||''}</td><td>${(r.rule_score||0).toFixed(1)}</td><td>${(r.priority_score||0).toFixed(1)}</td><td>${llmPill(r.llm_decision)}</td><td><button class="btn-del" onclick="delTailBuy('${code}','${r.run_date||''}')">${t('del')}</button></td></tr>`}).join('')}</tbody></table></div>`}
@@ -753,7 +784,7 @@ async function renderPortfolio(c){
 async function renderMemory(c){
   const mems=await API('/api/memory');
   if(!Array.isArray(mems)||!mems.length){c.innerHTML=`<div class="empty">${t('no_memory')}</div>`;return}
-  const typePill=tp=>{const m={session:'pill-blue',fact:'pill-green',preference:'pill-amber'};return `<span class="pill ${m[tp]||'pill-dim'}">${tp}</span>`};
+  const typePill=tp=>{const m={session:'pill-blue',fact:'pill-blue',preference:'pill-amber'};return `<span class="pill ${m[tp]||'pill-dim'}">${tp}</span>`};
   c.innerHTML=`<div class="tbl-wrap fade-in">${mems.map(m=>`
     <div class="mem-item"><div style="flex:1">
       <div style="margin-bottom:4px">${typePill(m.memory_type)} ${m.codes?`<span style="color:var(--text-dim);font-size:10px;margin-left:8px">${m.codes}</span>`:''}</div>
@@ -862,7 +893,7 @@ function fmtContent(raw,structured,mode){
 }
 function viewTabs(id){
   const modes=['pretty','json','yaml'];
-  return modes.map(m=>`<button onclick="_chatViewMode='${m}';loadPage('chatlog')" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid ${_chatViewMode===m?'var(--accent)':'var(--border)'};background:${_chatViewMode===m?'var(--accent-dim)':'transparent'};color:${_chatViewMode===m?'var(--accent)':'var(--text-dim)'};cursor:pointer">${m.toUpperCase()}</button>`).join('');
+  return modes.map(m=>`<button class="detail-tab ${_chatViewMode===m?'active':''}" onclick="_chatViewMode='${m}';loadPage('chatlog')" style="font-size:10px;padding:2px 8px">${m.toUpperCase()}</button>`).join('');
 }
 async function renderChatLog(c){
   if(_chatSessionId)return renderChatSession(c,_chatSessionId);
@@ -874,18 +905,18 @@ async function renderChatLog(c){
   const errCount=sessions.filter(s=>s.last_error).length;
   const errRate=total?(errCount/total*100).toFixed(1):'0';
   c.innerHTML=`<div class="fade-in">
-    <div style="display:flex;gap:24px;margin-bottom:16px;padding:12px 16px;background:var(--card);border-radius:8px;border:1px solid var(--border)">
-      <div><span style="font-size:11px;color:var(--text-dim)">Threads</span><div style="font-size:18px;font-weight:600">${total}</div></div>
-      <div><span style="font-size:11px;color:var(--text-dim)">Traces</span><div style="font-size:18px;font-weight:600">${totalTraces}</div></div>
-      <div><span style="font-size:11px;color:var(--text-dim)">Error Rate</span><div style="font-size:18px;font-weight:600">${errRate}%</div></div>
-      <div><span style="font-size:11px;color:var(--text-dim)">Total Tokens</span><div style="font-size:18px;font-weight:600">${totalTokens.toLocaleString()}</div></div>
+    <div class="chat-metrics">
+      <div><span class="metric-label">Threads</span><div class="metric-value">${total}</div></div>
+      <div><span class="metric-label">Traces</span><div class="metric-value">${totalTraces}</div></div>
+      <div><span class="metric-label">Error Rate</span><div class="metric-value">${errRate}%</div></div>
+      <div><span class="metric-label">Total Tokens</span><div class="metric-value">${totalTokens.toLocaleString()}</div></div>
     </div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Start time</th><th>First message</th><th>Traces</th><th>Tokens</th><th>Model</th><th>Status</th><th></th></tr></thead><tbody>${sessions.map(s=>{
     const hasErr=s.last_error?'<span class="pill pill-red">ERR</span>':'<span class="pill pill-green">OK</span>';
     const firstMsg=(s.first_user_msg||'').slice(0,60)+(s.first_user_msg&&s.first_user_msg.length>60?'...':'');
     const tokens=((s.total_tokens_in||0)+(s.total_tokens_out||0)).toLocaleString();
     const traceCount=Math.ceil((s.msg_count||0)/2);
-    return `<tr style="cursor:pointer" onclick="viewSession('${s.session_id}')"><td style="white-space:nowrap">${localTime(s.started_at)}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${escHtml(firstMsg)||'<span style="color:var(--text-dim)">—</span>'}</td><td>${traceCount}</td><td>${tokens}</td><td style="font-size:11px;color:var(--text-dim)">${s.model||'—'}</td><td>${hasErr}</td><td><button class="btn-del" onclick="event.stopPropagation();delSession('${s.session_id}')">${t('del')}</button></td></tr>`}).join('')}</tbody></table></div></div>`}
+    return `<tr style="cursor:pointer" onclick="viewSession('${s.session_id}')"><td style="white-space:nowrap">${localTime(s.started_at)}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${escHtml(firstMsg)||'<span style="color:var(--text-dim)">—</span>'}</td><td>${traceCount}</td><td><span class="pill pill-token">${tokens}</span></td><td>${s.model?`<span class="pill pill-model">${escHtml(s.model)}</span>`:'<span class="pill pill-dim">—</span>'}</td><td>${hasErr}</td><td><button class="btn-del" onclick="event.stopPropagation();delSession('${s.session_id}')">${t('del')}</button></td></tr>`}).join('')}</tbody></table></div></div>`}
 window.viewSession=function(sid){_chatSessionId=sid;_chatSelectedIdx=0;loadPage('chatlog')};
 window.backToSessions=function(){_chatSessionId=null;loadPage('chatlog')};
 window.delSession=async function(sid){if(!confirm(t('confirm_del_session')+sid+'?'))return;await fetch('/api/chat-sessions/'+sid,{method:'DELETE'});_chatSessionId=null;loadPage('chatlog')};
@@ -912,20 +943,19 @@ async function renderChatSession(c,sid){
   const inputStruct={role:'user',content:selTrace?.user?.content||''};
   const outputStruct={role:'assistant',content:selTrace?.assistant?.content||'',model:selLog?.model||'',provider:selLog?.provider||'',usage:{input:selLog?.tokens_in||0,output:selLog?.tokens_out||0,cache_read:meta.cache_read||0,cache_write:meta.cache_write||0,total:(selLog?.tokens_in||0)+(selLog?.tokens_out||0)+(meta.cache_read||0)},elapsed_s:selLog?.elapsed_s||0,stop_reason:meta.stop_reason||'stop',rounds:meta.rounds||1};
   if(toolSpans.length)outputStruct.tool_calls=toolSpans.map(s=>({name:s.name||s.tool||'tool',status:s.status||'ok'}));
-  c.innerHTML=`<div class="fade-in" style="display:flex;height:calc(100vh - 120px);gap:0">
+  c.innerHTML=`<div class="fade-in" style="display:flex;height:calc(100vh - 120px);gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg2)">
     <!-- Left: Traces + Spans Tree -->
-    <div style="width:380px;min-width:320px;border-right:1px solid var(--border);overflow-y:auto;padding:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <div class="chat-side">
+      <div class="chat-side-head">
         <span style="cursor:pointer;color:var(--accent)" onclick="backToSessions()">&larr; ${t('back')}</span>
-        <div style="display:flex;gap:8px;font-size:10px;color:var(--text-dim)">
+        <div class="chat-mini">
           <span>Traces <b>${traces.length}</b></span>
           <span>Spans <b>${totalSpans}</b></span>
         </div>
       </div>
-      <div style="font-size:10px;color:var(--text-dim);margin-bottom:10px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${sid}">${t('session')}: ${sid}</div>
+      <div class="chat-session-id" title="${sid}">${t('session')}: ${sid}</div>
       ${traces.map((tr,i)=>{
         const isActive=i===sel;
-        const bg=isActive?'background:var(--accent-dim);border-left:3px solid var(--accent)':'border-left:3px solid transparent';
         const uContent=(tr.user?.content||'').slice(0,50);
         const aContent=(tr.assistant?.content||'').slice(0,40);
         const time=localTime(tr.user?.created_at||tr.assistant?.created_at);
@@ -933,64 +963,67 @@ async function renderChatSession(c,sid){
         const tIn=tr.assistant?.tokens_in||0;const tOut=tr.assistant?.tokens_out||0;
         let trToolSpans=[];
         if(tr.assistant?.tool_calls){try{const tc=JSON.parse(tr.assistant.tool_calls);if(Array.isArray(tc))trToolSpans=tc;}catch(e){}}
-        return `<div onclick="selectTrace(${i})" style="padding:8px 10px;margin-bottom:2px;border-radius:6px;cursor:pointer;${bg}">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-            <span style="font-size:10px;color:var(--text-dim)">${time}</span>
-            ${dur?`<span style="font-size:10px;color:var(--text-dim)">${dur}</span>`:''}
-            ${trToolSpans.length?`<span class="pill pill-dim" style="font-size:9px">${trToolSpans.length} spans</span>`:''}${(()=>{const ec=trToolSpans.filter(s=>s.status==='error').length;return ec?`<span class="pill pill-red" style="font-size:9px">${ec} errors</span>`:''})()}
+        return `<div class="trace-item ${isActive?'active':''}" onclick="selectTrace(${i})">
+          <div class="trace-meta">
+            <span class="pill pill-user" style="font-size:9px">USER</span>
+            ${tr.assistant?'<span class="pill pill-ai" style="font-size:9px">AI</span>':''}
+            <span class="pill pill-time" style="font-size:9px">${time}</span>
+            ${dur?`<span class="pill pill-time" style="font-size:9px">${dur}</span>`:''}
+            ${tr.assistant?.model?`<span class="pill pill-model" style="font-size:9px">${escHtml(tr.assistant.model)}</span>`:''}
+            ${trToolSpans.length?`<span class="pill pill-blue" style="font-size:9px">${trToolSpans.length} spans</span>`:''}${(()=>{const ec=trToolSpans.filter(s=>s.status==='error').length;return ec?`<span class="pill pill-red" style="font-size:9px">${ec} errors</span>`:''})()}
           </div>
-          <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(uContent)}</div>
-          ${aContent?`<div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">→ ${escHtml(aContent)}</div>`:''}
-          ${tIn||tOut?`<div style="font-size:10px;color:var(--text-dim);margin-top:2px">⇄ ${tIn}/${tOut}</div>`:''}
-          ${trToolSpans.length&&isActive?`<div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--border)">${trToolSpans.map((sp,si)=>{
-            const statusColor=sp.status==='error'?'var(--red)':sp.status==='background'?'cyan':'var(--accent)';
-            return `<div style="font-size:10px;padding:2px 0;color:var(--text-dim)"><span style="color:${statusColor}">${sp.status==='error'?'✗':sp.status==='background'?'↗':'✓'}</span> ${escHtml(sp.name||sp.tool||'tool')} <span style="opacity:0.5">${escHtml(sp.args_brief||'')}</span></div>`}).join('')}</div>`:''}
+          <div class="trace-question">${escHtml(uContent)}</div>
+          ${aContent?`<div class="trace-answer">→ ${escHtml(aContent)}</div>`:''}
+          ${tIn||tOut?`<div class="trace-token">⇄ ${tIn}/${tOut}</div>`:''}
+          ${trToolSpans.length&&isActive?`<div class="span-list">${trToolSpans.map((sp,si)=>{
+            const statusColor=sp.status==='error'?'var(--red)':sp.status==='background'?'var(--blue)':'var(--accent)';
+            return `<div class="span-line"><span style="color:${statusColor}">${sp.status==='error'?'✗':sp.status==='background'?'↗':'✓'}</span> ${escHtml(sp.name||sp.tool||'tool')} <span class="span-args">${escHtml(sp.args_brief||'')}</span></div>`}).join('')}</div>`:''}
         </div>`}).join('')}
     </div>
     <!-- Right: Detail Panel -->
     <div style="flex:1;overflow-y:auto;padding:16px 20px">
-      <div style="display:flex;gap:4px;margin-bottom:12px">
-        ${['content','runtime'].map(tb=>`<button onclick="_chatDetailTab='${tb}';loadPage('chatlog')" style="font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid ${_chatDetailTab===tb?'var(--accent)':'var(--border)'};background:${_chatDetailTab===tb?'var(--accent-dim)':'transparent'};color:${_chatDetailTab===tb?'var(--accent)':'var(--text-dim)'};cursor:pointer">${t('tab_'+tb)}</button>`).join('')}
+      <div class="detail-tabs">
+        ${['content','runtime'].map(tb=>`<button class="detail-tab ${_chatDetailTab===tb?'active':''}" onclick="_chatDetailTab='${tb}';loadPage('chatlog')">${t('tab_'+tb)}</button>`).join('')}
       </div>
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-        <span style="font-size:12px;color:var(--text-dim)">${localTime(selLog?.created_at)}</span>
-        ${selLog?.elapsed_s?`<span style="font-size:12px;color:var(--text-dim)">${selLog.elapsed_s}s</span>`:''}
-        ${selLog?.model?`<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:var(--accent-dim);color:var(--accent)">${selLog.model}</span>`:''}
-        ${selLog?.provider?`<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:var(--card);border:1px solid var(--border);color:var(--text-dim)">${selLog.provider}</span>`:''}
-        ${selLog?.tokens_in||selLog?.tokens_out?`<span style="font-size:12px;color:var(--text-dim)"># ${(selLog.tokens_in||0)+(selLog.tokens_out||0)}</span>`:''}
-        ${meta.rounds&&meta.rounds>1?`<span style="font-size:10px;color:var(--text-dim)">${meta.rounds} rounds</span>`:''}
+      <div class="detail-head">
+        <span class="pill pill-time">${localTime(selLog?.created_at)}</span>
+        ${selLog?.elapsed_s?`<span class="pill pill-time">${selLog.elapsed_s}s</span>`:''}
+        ${selLog?.model?`<span class="pill pill-model">${escHtml(selLog.model)}</span>`:''}
+        ${selLog?.provider?`<span class="pill pill-provider">${escHtml(selLog.provider)}</span>`:''}
+        ${selLog?.tokens_in||selLog?.tokens_out?`<span class="pill pill-token">${((selLog.tokens_in||0)+(selLog.tokens_out||0)).toLocaleString()} tok</span>`:''}
+        ${meta.rounds&&meta.rounds>1?`<span class="pill pill-cyan">${meta.rounds} rounds</span>`:''}
       </div>
       ${_chatDetailTab==='content'?`
       ${selLog?.error?`<div style="background:var(--red-bg,rgba(255,0,0,0.1));border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--red)">${escHtml(selLog.error)}</div>`:''}
-      <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <details open style="margin-bottom:12px"><summary class="summary-row">
         <span>Input</span><span style="display:flex;gap:4px">${viewTabs('input')}</span>
       </summary>
-        <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:200px;overflow-y:auto">${fmtContent(selTrace?.user?.content,inputStruct,_chatViewMode)}</pre>
+        <pre class="code-panel" style="max-height:200px">${fmtContent(selTrace?.user?.content,inputStruct,_chatViewMode)}</pre>
       </details>
-      <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <details open style="margin-bottom:12px"><summary class="summary-row">
         <span>Output</span><span style="display:flex;gap:4px">${viewTabs('output')}</span>
       </summary>
-        <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:300px;overflow-y:auto">${fmtContent(selTrace?.assistant?.content,outputStruct,_chatViewMode)}</pre>
+        <pre class="code-panel" style="max-height:300px">${fmtContent(selTrace?.assistant?.content,outputStruct,_chatViewMode)}</pre>
       </details>
-      ${toolSpans.length?`<details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Spans (${toolSpans.length})</summary>
+      ${toolSpans.length?`<details open style="margin-bottom:12px"><summary class="summary-row"><span>Spans (${toolSpans.length})</span></summary>
         <div style="padding:12px 0">${toolSpans.map((sp,si)=>{
-          const statusIcon=sp.status==='error'?'<span style="color:var(--red)">✗</span>':sp.status==='background'?'<span style="color:cyan">↗</span>':'<span style="color:var(--accent)">✓</span>';
+          const statusIcon=sp.status==='error'?'<span style="color:var(--red)">✗</span>':sp.status==='background'?'<span style="color:var(--blue)">↗</span>':'<span style="color:var(--accent)">✓</span>';
           return `<div style="padding:8px 10px;margin-bottom:6px;border-radius:6px;background:var(--card);border:1px solid var(--border)">
-          <div style="display:flex;align-items:center;gap:8px">${statusIcon}<span class="pill pill-dim" style="font-size:10px">${escHtml(sp.name||sp.tool||'tool')}</span>${sp.status?`<span style="font-size:10px;color:var(--text-dim)">${sp.status}</span>`:''}</div>
-          ${sp.args||sp.args_brief?`<pre style="font-size:11px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;max-height:100px;overflow-y:auto">${escHtml(typeof sp.args==='string'?sp.args:sp.args?JSON.stringify(sp.args,null,2):sp.args_brief||'')}</pre>`:''}
-          ${sp.result?`<pre style="font-size:11px;color:var(--text);margin-top:4px;white-space:pre-wrap;max-height:100px;overflow-y:auto">${escHtml(typeof sp.result==='string'?sp.result:JSON.stringify(sp.result,null,2))}</pre>`:''}
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${statusIcon}<span class="pill pill-blue" style="font-size:10px">${escHtml(sp.name||sp.tool||'tool')}</span>${sp.status?`<span class="pill ${sp.status==='error'?'pill-red':sp.status==='background'?'pill-cyan':'pill-green'}" style="font-size:10px">${escHtml(sp.status)}</span>`:''}</div>
+          ${sp.args||sp.args_brief?`<pre class="code-panel" style="font-size:11px;color:var(--text2);margin-top:6px;max-height:100px">${escHtml(typeof sp.args==='string'?sp.args:sp.args?JSON.stringify(sp.args,null,2):sp.args_brief||'')}</pre>`:''}
+          ${sp.result?`<pre class="code-panel" style="font-size:11px;margin-top:6px;max-height:100px">${escHtml(typeof sp.result==='string'?sp.result:JSON.stringify(sp.result,null,2))}</pre>`:''}
           ${sp.error?`<pre style="font-size:11px;color:var(--red);margin-top:4px">${escHtml(sp.error)}</pre>`:''}
         </div>`}).join('')}</div></details>`:''}
-      ${selLog?.tokens_in||selLog?.tokens_out?`<details style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Token Usage</summary>
+      ${selLog?.tokens_in||selLog?.tokens_out?`<details style="margin-bottom:12px"><summary class="summary-row"><span>Token Usage</span></summary>
         <div style="padding:12px 0;font-size:12px;font-family:monospace;line-height:2">
-          <div><span style="color:var(--accent)">prompt_tokens</span>: ${(selLog.tokens_in||0).toLocaleString()}</div>
-          <div><span style="color:var(--accent)">completion_tokens</span>: ${(selLog.tokens_out||0).toLocaleString()}</div>
-          ${meta.cache_read?`<div><span style="color:var(--accent)">cache_read</span>: ${(meta.cache_read||0).toLocaleString()}</div>`:''}
-          ${meta.cache_write?`<div><span style="color:var(--accent)">cache_write</span>: ${(meta.cache_write||0).toLocaleString()}</div>`:''}
+          <div><span style="color:var(--amber)">prompt_tokens</span>: ${(selLog.tokens_in||0).toLocaleString()}</div>
+          <div><span style="color:var(--amber)">completion_tokens</span>: ${(selLog.tokens_out||0).toLocaleString()}</div>
+          ${meta.cache_read?`<div><span style="color:var(--cyan)">cache_read</span>: ${(meta.cache_read||0).toLocaleString()}</div>`:''}
+          ${meta.cache_write?`<div><span style="color:var(--cyan)">cache_write</span>: ${(meta.cache_write||0).toLocaleString()}</div>`:''}
           <div><span style="color:var(--accent)">total_tokens</span>: ${((selLog.tokens_in||0)+(selLog.tokens_out||0)+(meta.cache_read||0)).toLocaleString()}</div>
         </div></details>`:''}
-      ${Object.keys(meta).length?`<details style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Metadata</summary>
-        <pre style="font-size:11px;line-height:1.6;color:var(--text-dim);padding:12px 0;white-space:pre-wrap">${escHtml(JSON.stringify(meta,null,2))}</pre></details>`:''}
+      ${Object.keys(meta).length?`<details style="margin-bottom:12px"><summary class="summary-row"><span>Metadata</span></summary>
+        <pre class="code-panel" style="font-size:11px;color:var(--text2);max-height:260px">${escHtml(JSON.stringify(meta,null,2))}</pre></details>`:''}
       `:`
       ${(()=>{
         const rd=meta.rounds_detail;
@@ -999,25 +1032,25 @@ async function renderChatSession(c,sid){
         const totalDur=rd.reduce((a,r)=>a+(r.duration||0),0);
         const modelCounts={};rd.forEach(r=>{const m=r.model||'unknown';modelCounts[m]=(modelCounts[m]||0)+1;});
         const modelSummary=Object.entries(modelCounts).map(([m,c])=>`${m} ×${c}`).join('  ');
-        const modelColors=['var(--accent)','#a78bfa','#f59e0b','#ef4444','#06b6d4'];
+        const modelColors=['var(--accent)','#a78bfa','#f59e0b','#ef4444','#38bdf8'];
         const modelList=Object.keys(modelCounts);
         const mColor=(m)=>modelColors[modelList.indexOf(m)%modelColors.length];
-        return `<div style="display:flex;gap:16px;margin-bottom:16px;font-size:12px;color:var(--text-dim);flex-wrap:wrap">
-          <span>${rd.length} turns</span>
-          <span>${totalTok.toLocaleString()} tokens</span>
-          <span>${totalDur.toFixed(1)}s</span>
-          <span>${modelSummary}</span>
+        return `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+          <span class="pill pill-cyan">${rd.length} turns</span>
+          <span class="pill pill-token">${totalTok.toLocaleString()} tokens</span>
+          <span class="pill pill-time">${totalDur.toFixed(1)}s</span>
+          <span class="pill pill-model">${modelSummary}</span>
         </div>
         <div style="display:flex;flex-direction:column;gap:4px">${rd.map((r,i)=>{
           const tok=(r.tokens_in||0)+(r.tokens_out||0);
           const bar=Math.max(4,Math.min(100,tok/Math.max(...rd.map(x=>(x.tokens_in||0)+(x.tokens_out||0)),1)*100));
           return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:6px;background:var(--card);border:1px solid var(--border)">
-            <span style="font-size:11px;color:var(--text-dim);min-width:48px">Turn ${r.round}</span>
+            <span style="font-size:11px;color:var(--text2);min-width:48px;font-weight:700">Turn ${r.round}</span>
             <span style="font-size:10px;padding:2px 8px;border-radius:3px;background:color-mix(in srgb, ${mColor(r.model)} 15%, transparent);color:${mColor(r.model)};white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escHtml(r.model||'—')}</span>
             <div style="flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="width:${bar}%;height:100%;background:${mColor(r.model)};border-radius:3px"></div></div>
             <span style="font-size:11px;color:var(--text);min-width:60px;text-align:right">${tok.toLocaleString()} tok</span>
-            <span style="font-size:11px;color:var(--text-dim);min-width:40px;text-align:right">${r.duration||0}s</span>
-            ${r.has_tool_calls?`<span style="font-size:9px;color:var(--text-dim)">🔧 ${(r.tool_names||[]).join(', ')}</span>`:''}
+            <span style="font-size:11px;color:var(--text2);min-width:40px;text-align:right">${r.duration||0}s</span>
+            ${r.has_tool_calls?`<span class="pill pill-blue" style="font-size:9px">${(r.tool_names||[]).join(', ')}</span>`:''}
           </div>`}).join('')}</div>`;
       })()}
       `}

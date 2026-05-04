@@ -18,8 +18,30 @@ jobs:
       FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
       TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
       TICKFLOW_BASE_URL: ${{ secrets.TICKFLOW_BASE_URL }}
+      DEFAULT_LLM_PROVIDER: ${{ secrets.DEFAULT_LLM_PROVIDER }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+      1ROUTE_API_KEY: ${{ secrets.ONEROUTE_API_KEY }}
+      1ROUTE_MODEL: ${{ secrets.ONEROUTE_MODEL }}
+      1ROUTE_BASE_URL: ${{ secrets.ONEROUTE_BASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
+      DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_MODEL: ${{ secrets.QWEN_MODEL }}
+      QWEN_BASE_URL: ${{ secrets.QWEN_BASE_URL }}
+      ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+      ZHIPU_MODEL: ${{ secrets.ZHIPU_MODEL }}
+      ZHIPU_BASE_URL: ${{ secrets.ZHIPU_BASE_URL }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      MINIMAX_MODEL: ${{ secrets.MINIMAX_MODEL }}
+      MINIMAX_BASE_URL: ${{ secrets.MINIMAX_BASE_URL }}
+      VOLCENGINE_API_KEY: ${{ secrets.VOLCENGINE_API_KEY }}
+      VOLCENGINE_MODEL: ${{ secrets.VOLCENGINE_MODEL }}
+      VOLCENGINE_BASE_URL: ${{ secrets.VOLCENGINE_BASE_URL }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       MY_PORTFOLIO_STATE: ${{ secrets.MY_PORTFOLIO_STATE }}
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
