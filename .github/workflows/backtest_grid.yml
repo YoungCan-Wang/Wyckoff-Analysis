@@ -39,6 +39,9 @@ concurrency:
   group: backtest-grid-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 env:
   # BT_START / BT_END 留空时由各 job 的 compute-dates 步骤动态计算
   BT_START: ${{ inputs.start }}
@@ -236,6 +239,24 @@ jobs:
 
       - name: Install dependencies
         run: pip install requests
+
+      - name: Update market backtest report
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/update_backtest_market_report.py \
+            --artifacts-dir artifacts \
+            --output docs/BACKTEST_MARKET_REPORT.md \
+            --run-url "$RUN_URL" \
+            --generated-at "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S Asia/Shanghai')"
+
+      - name: Upload market backtest report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-market-report-${{ github.run_number }}
+          path: docs/BACKTEST_MARKET_REPORT.md
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Aggregate and notify
         shell: bash
@@ -487,6 +508,19 @@ jobs:
           resp = requests.post(webhook, json=payload, timeout=15)
           print(f'飞书通知: status={resp.status_code}, body={resp.text[:200]}')
           PYEOF
+
+      - name: Commit market backtest report
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/BACKTEST_MARKET_REPORT.md
+          if git diff --cached --quiet; then
+            echo "Backtest market report unchanged"
+          else
+            git commit -m "docs: update backtest market report"
+            git push
+          fi
 
       - name: Notify on failure
         if: failure()
