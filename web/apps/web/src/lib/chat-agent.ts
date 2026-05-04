@@ -1,5 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai'
-import { generateText, streamText, tool } from 'ai'
+import { generateText, stepCountIs, streamText, tool } from 'ai'
 import { z } from 'zod'
 import { supabase } from './supabase'
 
@@ -269,7 +269,6 @@ function createProxiedProvider(config: LLMConfig) {
     apiKey: config.api_key,
     baseURL: '/api/llm-proxy',
     headers: { 'X-Target-URL': config.base_url },
-    compatibility: 'compatible',
     fetch: createReasoningFetch(),
   })
 }
@@ -278,7 +277,7 @@ function buildTools(userId: string, config: LLMConfig) {
   return {
     search_stock: tool({
       description: '搜索股票，支持代码或名称。返回匹配的股票列表。',
-      parameters: z.object({
+      inputSchema: z.object({
         query: z.string().describe('股票代码或名称关键词'),
       }),
       execute: async ({ query }) => {
@@ -318,7 +317,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     view_portfolio: tool({
       description: '查看用户当前持仓列表（代码、名称、股数、成本价）和可用资金。',
-      parameters: z.object({}),
+      inputSchema: z.object({}),
       execute: async () => {
         const portfolioId = `USER_LIVE:${userId}`
 
@@ -350,7 +349,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     market_overview: tool({
       description: '查看最新大盘行情信号：市场状态（regime）、上证指数、A50、VIX、市场提示。',
-      parameters: z.object({}),
+      inputSchema: z.object({}),
       execute: async () => {
         const { data } = await supabase
           .from('market_signal_daily')
@@ -398,7 +397,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     query_recommendations: tool({
       description: '查询推荐跟踪记录，显示推荐的股票及其涨跌表现。',
-      parameters: z.object({
+      inputSchema: z.object({
         limit: z.number().describe('返回条数，通常20'),
       }),
       execute: async ({ limit }) => {
@@ -423,7 +422,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     query_tail_buy: tool({
       description: '查询尾盘买入策略的历史记录（BUY/WATCH 决策、评分、LLM 理由）。',
-      parameters: z.object({
+      inputSchema: z.object({
         limit: z.number().describe('返回条数，通常20'),
       }),
       execute: async ({ limit }) => {
@@ -446,7 +445,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     plan_portfolio_update: tool({
       description: '生成调仓方案（不执行）。展示给用户确认后再调用 execute_portfolio_update。',
-      parameters: z.object({
+      inputSchema: z.object({
         action: z.enum(['add', 'update', 'delete']).describe('操作类型'),
         code: z.string().describe('6位股票代码'),
         name: z.string().nullable().describe('股票名称'),
@@ -469,7 +468,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     execute_portfolio_update: tool({
       description: '用户确认后执行调仓。必须在 plan_portfolio_update 之后、用户确认后才能调用。',
-      parameters: z.object({
+      inputSchema: z.object({
         action: z.enum(['add', 'update', 'delete']).describe('操作类型'),
         code: z.string().describe('6位股票代码'),
         name: z.string().nullable().describe('股票名称'),
@@ -514,7 +513,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     analyze_stock: tool({
       description: '对单只股票做威科夫深度诊断：K线走势、量价关系、均线形态、阶段判断。需要股票代码。',
-      parameters: z.object({
+      inputSchema: z.object({
         code: z.string().describe('6位股票代码'),
         name: z.string().nullable().describe('股票名称'),
       }),
@@ -552,7 +551,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     screen_stocks: tool({
       description: '查看最新一期漏斗选股结果：AI推荐的候选股票列表及其评分。',
-      parameters: z.object({}),
+      inputSchema: z.object({}),
       execute: async () => {
         const { data } = await supabase
           .from('recommendation_tracking')
@@ -579,7 +578,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     generate_ai_report: tool({
       description: '为指定股票生成威科夫深度研报（AI分析），支持多只股票批量生成。',
-      parameters: z.object({
+      inputSchema: z.object({
         codes: z.array(z.string()).describe('股票代码数组，如 ["600519", "000858"]'),
       }),
       execute: async ({ codes }) => {
@@ -609,7 +608,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     generate_strategy_decision: tool({
       description: '基于当前持仓和市场状态，给出买入/卖出/持有的操作建议。',
-      parameters: z.object({}),
+      inputSchema: z.object({}),
       execute: async () => {
         const portfolioId = `USER_LIVE:${userId}`
 
@@ -677,7 +676,7 @@ export async function runChatAgentStream(
       system: SYSTEM_PROMPT,
       messages,
       tools,
-      maxSteps: 10,
+      stopWhen: stepCountIs(10),
       abortSignal: abort.signal,
     })
 
@@ -685,8 +684,8 @@ export async function runChatAgentStream(
     for await (const event of result.fullStream) {
       switch (event.type) {
         case 'text-delta':
-          finalText += event.textDelta
-          callbacks.onTextDelta(event.textDelta)
+          finalText += event.text
+          callbacks.onTextDelta(event.text)
           break
         case 'tool-call': {
           const step: StepInfo = { type: 'tool_call', toolName: event.toolName }
