@@ -7,7 +7,7 @@
 [![PyPI](https://img.shields.io/pypi/v/youngcan-wyckoff-analysis?color=blue)](https://pypi.org/project/youngcan-wyckoff-analysis/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![Web App](https://img.shields.io/badge/Web-React%20App-0ea5e9.svg)](https://wyckoff-analysis.pages.dev/home)
+[![Web App](https://img.shields.io/badge/Web-React%20App-0ea5e9.svg)](https://wyckoff-analysis.pages.dev/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B.svg)](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)
 [![Homepage](https://img.shields.io/badge/homepage-Wyckoff%20Homepage-0ea5e9.svg)](https://youngcan-wang.github.io/wyckoff-homepage/)
 
@@ -45,7 +45,7 @@ React Web、Streamlit 维护入口、CLI、MCP 与 GitHub Actions 共同组成�
 
 现代 React SPA，AI Agent 对话 + 持仓管理 + 漏斗选股 + 数据导出，流式输出 + 工具调用可视化。
 
-在线地址：**[wyckoff-analysis.pages.dev](https://wyckoff-analysis.pages.dev/home)**
+在线地址：**[wyckoff-analysis.pages.dev](https://wyckoff-analysis.pages.dev/)**
 
 | 读盘室 | 漏斗选股 |
 |:---:|:---:|
