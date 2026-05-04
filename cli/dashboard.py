@@ -876,7 +876,9 @@ async function renderBgTaskDetail(c,taskId){
 // ═══ Chat Log (Opik-style Tracing UI) ═══
 let _chatSessionId=null;
 let _chatSelectedIdx=0;
-let _chatViewMode='pretty';
+let _chatInputMode='pretty';
+let _chatOutputMode='pretty';
+let _chatFullView=false;
 let _chatDetailTab='content';
 function toYaml(obj,indent=0){
   if(obj==null)return 'null';
@@ -891,9 +893,11 @@ function fmtContent(raw,structured,mode){
   if(mode==='yaml')return escHtml(toYaml(structured).trimStart());
   return escHtml(raw||'—');
 }
-function viewTabs(id){
+function viewTabs(section){
   const modes=['pretty','json','yaml'];
-  return modes.map(m=>`<button class="detail-tab ${_chatViewMode===m?'active':''}" onclick="_chatViewMode='${m}';loadPage('chatlog')" style="font-size:10px;padding:2px 8px">${m.toUpperCase()}</button>`).join('');
+  const cur=section==='input'?_chatInputMode:_chatOutputMode;
+  const varName=section==='input'?'_chatInputMode':'_chatOutputMode';
+  return modes.map(m=>`<button class="detail-tab ${cur===m?'active':''}" onclick="${varName}='${m}';loadPage('chatlog')" style="font-size:10px;padding:2px 8px">${m.toUpperCase()}</button>`).join('');
 }
 async function renderChatLog(c){
   if(_chatSessionId)return renderChatSession(c,_chatSessionId);
@@ -940,9 +944,16 @@ async function renderChatSession(c,sid){
   let meta={};
   if(selTrace?.assistant?.metadata){try{meta=JSON.parse(selTrace.assistant.metadata)||{};}catch(e){}}
   const totalSpans=traces.reduce((a,tr)=>{try{const tc=tr.assistant?.tool_calls?JSON.parse(tr.assistant.tool_calls):[];return a+(Array.isArray(tc)?tc.length:0)}catch(e){return a}},0);
-  const inputStruct={role:'user',content:selTrace?.user?.content||''};
-  const outputStruct={role:'assistant',content:selTrace?.assistant?.content||'',model:selLog?.model||'',provider:selLog?.provider||'',usage:{input:selLog?.tokens_in||0,output:selLog?.tokens_out||0,cache_read:meta.cache_read||0,cache_write:meta.cache_write||0,total:(selLog?.tokens_in||0)+(selLog?.tokens_out||0)+(meta.cache_read||0)},elapsed_s:selLog?.elapsed_s||0,stop_reason:meta.stop_reason||'stop',rounds:meta.rounds||1};
-  if(toolSpans.length)outputStruct.tool_calls=toolSpans.map(s=>({name:s.name||s.tool||'tool',status:s.status||'ok'}));
+  const fullMessages=meta.messages||[];
+  const systemPrompt=meta.system_prompt||'';
+  const toolSchemas=meta.tools||[];
+  const inputFull={system_prompt:systemPrompt,messages:fullMessages,tools:toolSchemas};
+  const inputBrief={role:'user',content:selTrace?.user?.content||''};
+  const inputStruct=_chatFullView?inputFull:inputBrief;
+  const outputFull={role:'assistant',content:selTrace?.assistant?.content||'',model:selLog?.model||'',provider:selLog?.provider||'',usage:{input:selLog?.tokens_in||0,output:selLog?.tokens_out||0,cache_read:meta.cache_read||0,cache_write:meta.cache_write||0,total:(selLog?.tokens_in||0)+(selLog?.tokens_out||0)+(meta.cache_read||0)},elapsed_s:selLog?.elapsed_s||0,stop_reason:meta.stop_reason||'stop',rounds:meta.rounds||1};
+  if(toolSpans.length)outputFull.tool_calls=toolSpans.map(s=>({name:s.name||s.tool||'tool',status:s.status||'ok',args:s.args||undefined,result:s.result||undefined}));
+  const outputBrief={role:'assistant',content:(selTrace?.assistant?.content||'').slice(0,500),model:selLog?.model||'',tokens_in:selLog?.tokens_in||0,tokens_out:selLog?.tokens_out||0};
+  const outputStruct=_chatFullView?outputFull:outputBrief;
   c.innerHTML=`<div class="fade-in" style="display:flex;height:calc(100vh - 120px);gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg2)">
     <!-- Left: Traces + Spans Tree -->
     <div class="chat-side">
@@ -994,16 +1005,19 @@ async function renderChatSession(c,sid){
         ${meta.rounds&&meta.rounds>1?`<span class="pill pill-cyan">${meta.rounds} rounds</span>`:''}
       </div>
       ${_chatDetailTab==='content'?`
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+        <button class="detail-tab ${_chatFullView?'active':''}" onclick="_chatFullView=!_chatFullView;loadPage('chatlog')" style="font-size:10px;padding:2px 10px">${_chatFullView?'FULL':'BRIEF'}</button>
+      </div>
       ${selLog?.error?`<div style="background:var(--red-bg,rgba(255,0,0,0.1));border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--red)">${escHtml(selLog.error)}</div>`:''}
       <details open style="margin-bottom:12px"><summary class="summary-row">
-        <span>Input</span><span style="display:flex;gap:4px">${viewTabs('input')}</span>
+        <span>Input${_chatFullView?' (system+messages+tools)':''}</span><span style="display:flex;gap:4px">${viewTabs('input')}</span>
       </summary>
-        <pre class="code-panel" style="max-height:200px">${fmtContent(selTrace?.user?.content,inputStruct,_chatViewMode)}</pre>
+        <pre class="code-panel" style="${_chatFullView?'max-height:none':'max-height:200px'}">${fmtContent(selTrace?.user?.content,inputStruct,_chatInputMode)}</pre>
       </details>
       <details open style="margin-bottom:12px"><summary class="summary-row">
         <span>Output</span><span style="display:flex;gap:4px">${viewTabs('output')}</span>
       </summary>
-        <pre class="code-panel" style="max-height:300px">${fmtContent(selTrace?.assistant?.content,outputStruct,_chatViewMode)}</pre>
+        <pre class="code-panel" style="${_chatFullView?'max-height:none':'max-height:300px'}">${fmtContent(selTrace?.assistant?.content,outputStruct,_chatOutputMode)}</pre>
       </details>
       ${toolSpans.length?`<details open style="margin-bottom:12px"><summary class="summary-row"><span>Spans (${toolSpans.length})</span></summary>
         <div style="padding:12px 0">${toolSpans.map((sp,si)=>{
