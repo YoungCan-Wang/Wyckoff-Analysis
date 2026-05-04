@@ -86,3 +86,56 @@ def test_runtime_emits_retry_event_when_required_tool_is_skipped():
     assert retries[0]["required_tool"] == "portfolio"
     assert "不要重复计划" in retries[0]["message"]
     assert events[-1]["text"] == "体检完成。"
+
+
+def test_runtime_answers_all_tool_calls_when_doom_loop_aborts_round():
+    provider = ScriptedProvider(
+        rounds=[
+            [
+                {
+                    "type": "tool_calls",
+                    "tool_calls": [{"id": "tc1", "name": "analyze_stock", "args": {"code": "000001"}}],
+                    "text": "",
+                }
+            ],
+            [
+                {
+                    "type": "tool_calls",
+                    "tool_calls": [{"id": "tc2", "name": "analyze_stock", "args": {"code": "000001"}}],
+                    "text": "",
+                }
+            ],
+            [
+                {
+                    "type": "tool_calls",
+                    "tool_calls": [
+                        {"id": "tc3", "name": "analyze_stock", "args": {"code": "000001"}},
+                        {"id": "tc4", "name": "portfolio", "args": {"mode": "view"}},
+                    ],
+                    "text": "",
+                }
+            ],
+            [{"type": "text_delta", "text": "已中止。"}],
+        ]
+    )
+    tools = StubToolRegistry(
+        tool_results={
+            "analyze_stock": {"price": 10.5},
+            "portfolio": {"positions": []},
+        }
+    )
+    messages = [{"role": "user", "content": "反复查 000001 后再看持仓"}]
+
+    events = list(AgentRuntime(provider, tools).run_stream(messages))
+
+    third_assistant = [
+        m for m in messages if m.get("role") == "assistant" and len(m.get("tool_calls", [])) == 2
+    ][0]
+    tool_call_ids = {call["id"] for call in third_assistant["tool_calls"]}
+    answered_ids = {
+        m["tool_call_id"]
+        for m in messages
+        if m.get("role") == "tool" and m.get("tool_call_id") in tool_call_ids
+    }
+    assert answered_ids == tool_call_ids
+    assert any(e["type"] == "tool_error" and e["tool_call_id"] == "tc4" for e in events)

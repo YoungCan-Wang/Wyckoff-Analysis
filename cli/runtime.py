@@ -207,12 +207,29 @@ class AgentRuntime:
         tool_calls: list[dict],
         state: RunState,
     ) -> Iterator[RuntimeEvent | bool]:
+        answered_call_ids: set[str] = set()
         for batch in partition_tool_calls(tool_calls, self.tools.concurrency_safe):
             if batch["concurrent"] and len(batch["calls"]) > 1:
-                if (yield from self._execute_concurrent_batch(batch["calls"], messages, state)):
+                if (
+                    yield from self._execute_concurrent_batch(
+                        batch["calls"],
+                        messages,
+                        state,
+                        answered_call_ids,
+                    )
+                ):
+                    yield from self._append_aborted_tool_results(messages, tool_calls, answered_call_ids)
                     return False
                 continue
-            if (yield from self._execute_serial_batch(batch["calls"], messages, state)):
+            if (
+                yield from self._execute_serial_batch(
+                    batch["calls"],
+                    messages,
+                    state,
+                    answered_call_ids,
+                )
+            ):
+                yield from self._append_aborted_tool_results(messages, tool_calls, answered_call_ids)
                 return False
         return True
 
@@ -295,6 +312,7 @@ class AgentRuntime:
         calls: list[dict],
         messages: list[dict[str, Any]],
         state: RunState,
+        answered_call_ids: set[str],
     ) -> Iterator[RuntimeEvent | bool]:
         """Execute a concurrent-safe batch. Returns True on doom-loop break."""
 
@@ -312,6 +330,7 @@ class AgentRuntime:
 
                 if self._is_doom_loop(name, args, state):
                     yield self._append_doom_loop_result(messages, name, args, call_id)
+                    answered_call_ids.add(call_id)
                     return True
 
                 try:
@@ -333,6 +352,7 @@ class AgentRuntime:
                     elapsed_ms=elapsed_ms,
                     status=status,
                 )
+                answered_call_ids.add(call_id)
         return False
 
     def _execute_serial_batch(
@@ -340,9 +360,15 @@ class AgentRuntime:
         calls: list[dict],
         messages: list[dict[str, Any]],
         state: RunState,
+        answered_call_ids: set[str],
     ) -> Iterator[RuntimeEvent | bool]:
         for call in calls:
-            tool_event = yield from self._execute_single_tool(call, messages, state)
+            tool_event = yield from self._execute_single_tool(
+                call,
+                messages,
+                state,
+                answered_call_ids,
+            )
             if tool_event == "doom":
                 return True
         return False
@@ -352,6 +378,7 @@ class AgentRuntime:
         call: dict,
         messages: list[dict[str, Any]],
         state: RunState,
+        answered_call_ids: set[str],
     ) -> Iterator[RuntimeEvent | str | None]:
         name = call["name"]
         args = call["args"]
@@ -360,6 +387,7 @@ class AgentRuntime:
 
         if self._is_doom_loop(name, args, state):
             yield self._append_doom_loop_result(messages, name, args, call_id)
+            answered_call_ids.add(call_id)
             return "doom"
 
         yield self._tool_start_event(call)
@@ -373,6 +401,7 @@ class AgentRuntime:
             elapsed_ms=raw["elapsed_ms"],
             status=raw["status"],
         )
+        answered_call_ids.add(call_id)
         return None
 
     def _tool_start_event(self, call: dict[str, Any], *, concurrent: bool = False) -> RuntimeEvent:
@@ -424,6 +453,38 @@ class AgentRuntime:
             }
         )
         return {"type": "tool_error", "name": name, "args": args, "tool_call_id": call_id, "error": result["error"]}
+
+    def _append_aborted_tool_results(
+        self,
+        messages: list[dict[str, Any]],
+        tool_calls: list[dict],
+        answered_call_ids: set[str],
+    ) -> Iterator[RuntimeEvent]:
+        result = {"error": "工具调用已因 doom-loop 中止"}
+        for call in tool_calls:
+            call_id = call["id"]
+            if call_id in answered_call_ids:
+                continue
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": call["name"],
+                    "content": json.dumps(result, ensure_ascii=False),
+                }
+            )
+            answered_call_ids.add(call_id)
+            yield {
+                "type": "tool_error",
+                "name": call["name"],
+                "args": call["args"],
+                "result": result,
+                "tool_call_id": call_id,
+                "error": result["error"],
+                "status": "error",
+                "elapsed_ms": 0,
+                "content": json.dumps(result, ensure_ascii=False),
+            }
 
     def _append_tool_result(
         self,
