@@ -9,7 +9,6 @@ import os
 import re
 import sys
 from datetime import date
-from typing import Any
 
 import pandas as pd
 
@@ -18,6 +17,7 @@ if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from functools import partial
 
+from core.compliance_report import generate_compliance_brief
 from core.prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
 from core.sector_rotation import SECTOR_STATE_LABELS
 from core.wyckoff_engine import fit_ai_candidate_quotas, normalize_hist_from_fetch
@@ -104,10 +104,6 @@ STEP3_SEND_COMPLIANCE_BRIEF = os.getenv("STEP3_SEND_COMPLIANCE_BRIEF", "1").stri
     "yes",
     "on",
 }
-STEP3_COMPLIANCE_FOCUS_LIMIT = max(
-    int(os.getenv("STEP3_COMPLIANCE_FOCUS_LIMIT", "5")),
-    1,
-)
 
 
 RECENT_DAYS = 15
@@ -513,15 +509,6 @@ def _strip_report_title(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _fmt_pct(v: Any) -> str:
-    num = pd.to_numeric(v, errors="coerce")
-    if pd.isna(num):
-        return "待更新"
-    x = float(num)
-    sign = "+" if x >= 0 else ""
-    return f"{sign}{x:.2f}%"
-
-
 def _build_compliance_brief(
     *,
     benchmark_context: dict,
@@ -529,94 +516,19 @@ def _build_compliance_brief(
     ops_codes: list[str],
     code_name: dict[str, str],
 ) -> str:
-    regime = str((benchmark_context or {}).get("regime", "NEUTRAL") or "NEUTRAL").strip().upper()
-    main_today_pct = _fmt_pct((benchmark_context or {}).get("main_today_pct"))
-    recent3_cum_pct = _fmt_pct((benchmark_context or {}).get("recent3_cum_pct"))
-    breadth = (benchmark_context or {}).get("breadth", {}) or {}
-    breadth_ratio = _fmt_pct(breadth.get("ratio_pct"))
-    vol_state = str((benchmark_context or {}).get("main_volume_state", "") or "").strip() or "待更新"
-
-    sec_df = selected_df.copy() if isinstance(selected_df, pd.DataFrame) else pd.DataFrame()
-    if not sec_df.empty:
-        sec_df["industry"] = sec_df.get("industry", "").astype(str).str.strip()
-        sec_df = sec_df[sec_df["industry"] != ""]
-        score_series = pd.to_numeric(sec_df.get("priority_score"), errors="coerce")
-        score_series = score_series.where(
-            score_series.notna(), pd.to_numeric(sec_df.get("funnel_score"), errors="coerce")
-        )
-        sec_df["score"] = score_series.fillna(0.0)
-
-    strong_lines: list[str] = []
-    if not sec_df.empty:
-        grouped = (
-            sec_df.groupby("industry", as_index=False)
-            .agg(cnt=("code", "count"), score=("score", "mean"))
-            .sort_values(["cnt", "score"], ascending=[False, False])
-            .head(3)
-        )
-        for _, row in grouped.iterrows():
-            strong_lines.append(f"- {str(row['industry'])}（样本{int(row['cnt'])}）")
-
-    focus_codes: list[str] = []
-    for c in ops_codes:
-        cc = str(c).strip()
-        if cc and cc not in focus_codes:
-            focus_codes.append(cc)
-        if len(focus_codes) >= STEP3_COMPLIANCE_FOCUS_LIMIT:
-            break
-    if len(focus_codes) < STEP3_COMPLIANCE_FOCUS_LIMIT and not sec_df.empty:
-        ranked = sec_df.sort_values("score", ascending=False)
-        for code in ranked["code"].astype(str).tolist():
-            cc = code.strip()
-            if cc and cc not in focus_codes:
-                focus_codes.append(cc)
-            if len(focus_codes) >= STEP3_COMPLIANCE_FOCUS_LIMIT:
-                break
-
-    focus_lines = [f"- {c} {code_name.get(c, c)}" for c in focus_codes]
-
-    out: list[str] = [
-        "## 📌 今日市场观察简报（合规版）",
-        "",
-        "⚠️ **重要提示：以下内容由大模型自动生成，仅用于市场研究交流，不构成任何投资建议；股市有风险，投资需谨慎。**",
-        "",
-        "### 一、今日大盘数据",
-        (
-            f"- 市场状态: {regime} | 当日涨跌: {main_today_pct} | "
-            f"近3日累计: {recent3_cum_pct} | 市场广度: {breadth_ratio} | 量能状态: {vol_state}"
-        ),
-        "- 说明: 上述为客观量价观察，不构成交易建议。",
-        "",
-        "### 二、AI分析强势板块",
-    ]
-    if strong_lines:
-        out.extend(strong_lines)
-    else:
-        out.append("- 暂无明显强势板块（样本不足或分化明显）")
-
-    out.extend(
-        [
-            "",
-            "### 三、今日值得关注（研究观察）",
-        ]
+    rag_veto_count = 0
+    if isinstance(selected_df, pd.DataFrame) and "rag_veto_count" in selected_df.columns:
+        try:
+            rag_veto_count = int(pd.to_numeric(selected_df["rag_veto_count"], errors="coerce").fillna(0).max())
+        except Exception:
+            rag_veto_count = 0
+    return generate_compliance_brief(
+        benchmark_context=benchmark_context,
+        selected_df=selected_df,
+        ops_codes=ops_codes,
+        code_name=code_name,
+        rag_veto_count=rag_veto_count,
     )
-    if focus_lines:
-        out.extend(focus_lines)
-    else:
-        out.append("- 今日暂无明确观察标的")
-
-    out.extend(
-        [
-            "",
-            "### 合规声明",
-            "- 以下内容为大模型自动生成结果，仅供参考。",
-            "- 本简报仅用于市场研究与信息交流，不构成个股推荐或买卖建议。",
-            "- 不承诺收益，不涉及代客理财或代客下单。",
-            "- **股市有风险，投资需谨慎。**",
-            "- 投资决策请独立判断并自行承担风险。",
-        ]
-    )
-    return "\n".join(out).strip() + "\n"
 
 
 def _call_track_report(

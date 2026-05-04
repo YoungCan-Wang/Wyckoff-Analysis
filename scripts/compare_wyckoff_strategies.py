@@ -20,6 +20,7 @@ from typing import Any
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.kline_quality import check_kline_quality_map, summarize_quality_reports  # noqa: E402
 from core.strategy_compare import (  # noqa: E402
     STRATEGY_V1_CURRENT,
     STRATEGY_V2_STRUCTURE,
@@ -29,6 +30,7 @@ from core.strategy_compare import (  # noqa: E402
     format_strategy_comparison_markdown,
 )
 from core.wyckoff_engine import FunnelResult  # noqa: E402
+from core.wyckoff_events import classify_wyckoff_event  # noqa: E402
 from core.wyckoff_v2_structure import run_structure_funnel  # noqa: E402
 from scripts.wyckoff_funnel import run_funnel_job  # noqa: E402
 from utils.trading_clock import CN_TZ  # noqa: E402
@@ -101,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         candidates=extract_l4_candidates(v2_result, STRATEGY_V2_STRUCTURE),
     )
     comparison = compare_strategy_runs((v1_run, v2_run))
+    quality_reports = check_kline_quality_map(dict(debug["all_df_map"]))
+    quality_summary = summarize_quality_reports(quality_reports)
     report = format_strategy_comparison_markdown(
         (v1_run, v2_run),
         comparison,
@@ -108,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         sector_map=debug["sector_map"],
         benchmark_context=metrics.get("benchmark_context", {}) or {},
         input_symbol_count=int(metrics.get("total_symbols", len(debug["all_symbols"])) or 0),
+        quality_summary=quality_summary,
     )
 
     out_dir = Path(args.output_dir)
@@ -117,6 +122,19 @@ def main(argv: list[str] | None = None) -> int:
     json_path = out_dir / f"wyckoff_structure_shadow_{ts}.json"
 
     md_path.write_text(report, encoding="utf-8")
+    regime = str((metrics.get("benchmark_context", {}) or {}).get("regime", "") or "")
+    shadow_events = {
+        candidate.code: asdict(
+            classify_wyckoff_event(
+                candidate.triggers,
+                stage=candidate.stage,
+                channel=candidate.channel,
+                score=candidate.score,
+                regime=regime,
+            )
+        )
+        for candidate in v2_run.candidates
+    }
     payload = {
         "generated_at": datetime.now(CN_TZ).isoformat(),
         "strategy_ids": list(comparison.strategy_ids),
@@ -127,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
             v1_run.strategy_id: [asdict(candidate) for candidate in v1_run.candidates],
             v2_run.strategy_id: [asdict(candidate) for candidate in v2_run.candidates],
         },
+        "shadow_events": shadow_events,
+        "quality_summary": quality_summary,
         "benchmark_context": metrics.get("benchmark_context", {}) or {},
     }
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")

@@ -138,6 +138,34 @@ class TestLiteLLMSwitch:
                     user_message="hello",
                 )
 
+    def test_openrouter_uses_default_openai_compatible_base_url(self):
+        with patch.dict(os.environ, {}, clear=False):
+            from integrations.llm_client import call_llm
+
+            with patch("integrations.llm_client._call_openai_compatible", return_value="ok") as mock_call:
+                result = call_llm(
+                    provider="openrouter",
+                    model="tencent/hy3-preview:free",
+                    api_key="fake-key",
+                    system_prompt="test",
+                    user_message="hello",
+                )
+
+            assert result == "ok"
+            assert mock_call.call_args.kwargs["base_url"] == "https://openrouter.ai/api/v1"
+
+    def test_efficiency_requires_base_url(self):
+        from integrations.llm_client import call_llm
+
+        with pytest.raises(ValueError, match="base_url"):
+            call_llm(
+                provider="efficiency",
+                model="cheap-model",
+                api_key="fake-key",
+                system_prompt="test",
+                user_message="hello",
+            )
+
 
 class TestGeminiTruncationHandling:
     @staticmethod

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from core.wyckoff_engine import FunnelConfig, FunnelResult, run_funnel
+from core.wyckoff_events import classify_wyckoff_event
 from core.wyckoff_v2_structure import STRATEGY_ID as STRATEGY_V2_STRUCTURE
 from core.wyckoff_v2_structure import run_structure_funnel
 
@@ -129,12 +130,14 @@ def format_strategy_comparison_markdown(
     sector_map: dict[str, str] | None = None,
     benchmark_context: dict | None = None,
     input_symbol_count: int | None = None,
+    quality_summary: dict | None = None,
 ) -> str:
     """Render a standalone Wyckoff-style report for the V2 shadow strategy."""
 
     name_map = name_map or {}
     sector_map = sector_map or {}
     benchmark_context = benchmark_context or {}
+    quality_summary = quality_summary or {}
     shadow_run = next((run for run in runs if run.strategy_id == STRATEGY_V2_STRUCTURE), runs[-1] if runs else None)
 
     def _trigger_text(candidate: StrategyCandidate | None) -> str:
@@ -184,6 +187,13 @@ def format_strategy_comparison_markdown(
     if breadth_ratio is not None:
         bench_parts.append(f"广度 {_fmt_float(breadth_ratio, 1, '%')}")
     bench_line = " | ".join(bench_parts)
+    quality_line = ""
+    if quality_summary:
+        quality_line = (
+            f"检查 {int(quality_summary.get('total', 0) or 0)} 只"
+            f"，严重异常 {int(quality_summary.get('error_symbols', 0) or 0)} 只"
+            f"，警告 {int(quality_summary.get('warning_symbols', 0) or 0)} 只"
+        )
 
     sector_counts: dict[str, int] = {}
     for candidate in shadow_candidates:
@@ -202,6 +212,7 @@ def format_strategy_comparison_markdown(
         f"**漏斗概览**: {scope_text}只 → 结构命中:{len(shadow_codes)}（信号事件 {event_count} 次）",
         f"**大盘水温**: {bench_line}",
         f"**Top 行业**: {', '.join(top_sectors) if top_sectors else '无'}",
+        f"**数据质量**: {quality_line or '未启用'}",
         (
             f"**L4 触发**: SOS（强势信号）:{trigger_counts['sos']} | "
             f"Spring（假跌破修复）:{trigger_counts['spring']} | "
@@ -215,9 +226,16 @@ def format_strategy_comparison_markdown(
     if multi_signal:
         lines.append(f"**【🔥 多信号共振】{len(multi_signal)} 只**")
         for candidate in multi_signal:
+            event = classify_wyckoff_event(
+                candidate.triggers,
+                stage=candidate.stage,
+                channel=candidate.channel,
+                score=candidate.score,
+                regime=regime,
+            )
             lines.append(
                 f"{_score_star(candidate.score)} {candidate.code} {name_map.get(candidate.code, candidate.code)}  "
-                f"{candidate.score:.2f}  {_trigger_text(candidate)}  [{_stage_text(candidate.stage)}]"
+                f"{candidate.score:.2f}  {_trigger_text(candidate)}  [{event.label}]  [{_stage_text(candidate.stage)}]"
             )
         lines.append("")
 
@@ -236,9 +254,16 @@ def format_strategy_comparison_markdown(
             industry = str(sector_map.get(candidate.code, "") or "未知行业").strip()
             stage = _stage_text(candidate.stage)
             channel = candidate.channel or "-"
+            event = classify_wyckoff_event(
+                candidate.triggers,
+                stage=candidate.stage,
+                channel=candidate.channel,
+                score=candidate.score,
+                regime=regime,
+            )
             lines.append(
                 f"{_score_star(candidate.score)} {candidate.code} {name_map.get(candidate.code, candidate.code)}  "
-                f"{candidate.score:.2f}  [{stage}]  {channel}  [{industry}]"
+                f"{candidate.score:.2f}  [{event.label}]  [{stage}]  {channel}  [{industry}]"
             )
         lines.append("")
 

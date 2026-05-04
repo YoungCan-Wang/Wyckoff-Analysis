@@ -155,12 +155,15 @@ def test_shadow_report_uses_standalone_funnel_style():
             "breadth": {"ratio_pct": 55.0},
         },
         input_symbol_count=3,
+        quality_summary={"total": 3, "error_symbols": 0, "warning_symbols": 1},
     )
 
     assert "**股票池**: 影子池 3 只" in report
     assert "**漏斗概览**: 3只 → 结构命中:2" in report
     assert "**【⚡ SOS（强势信号） 量价点火】1 只**" in report
     assert "000001 平安银行" in report
+    assert "数据质量" in report
+    assert "右侧点火" in report
     assert "[银行]" in report
     assert "SOS（强势信号）" in report
     assert "正式" not in report
