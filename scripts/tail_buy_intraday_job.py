@@ -690,7 +690,9 @@ def _load_signal_pending_candidates(target_signal_date: str, logs_path: str | No
 
 
 def _parse_rec_rows(
-    rows: list[dict[str, Any]], target_yyyymmdd: str, target_signal_date: str,
+    rows: list[dict[str, Any]],
+    target_yyyymmdd: str,
+    target_signal_date: str,
 ) -> list[TailBuyCandidate]:
     picked_map: dict[str, TailBuyCandidate] = {}
     for row in rows:
@@ -779,7 +781,9 @@ def _load_tail_candidates(target_signal_date: str, logs_path: str | None = None)
 
     try:
         springboard = _load_recommendation_tracking_candidates(
-            target_signal_date, logs_path, springboard_only=True,
+            target_signal_date,
+            logs_path,
+            springboard_only=True,
         )
     except Exception as e:
         springboard_err = str(e)
@@ -792,9 +796,7 @@ def _load_tail_candidates(target_signal_date: str, logs_path: str | None = None)
         _log(f"signal_pending 加载失败（降级继续）: {e}", logs_path)
 
     if springboard_err and pending_err:
-        raise RuntimeError(
-            f"候选池双源都失败: springboard={springboard_err}; signal_pending={pending_err}"
-        )
+        raise RuntimeError(f"候选池双源都失败: springboard={springboard_err}; signal_pending={pending_err}")
 
     springboard_codes = {c.code for c in springboard}
     supplement = [c for c in pending if c.code not in springboard_codes]
@@ -1092,6 +1094,7 @@ def _run_llm_overlay(
     route_hits: dict[str, int] = {}
     llm_error_counter: Counter[str] = Counter()
     max_workers = max(1, int(llm_concurrency))
+    verbose_llm_errors = _env_flag("TAIL_BUY_LOG_LLM_PER_SYMBOL_ERRORS", True)
 
     def _judge_one(item: TailBuyCandidate) -> tuple[str, dict | None, str | None]:
         di = (depth_map or {}).get(item.code)
@@ -1122,7 +1125,8 @@ def _run_llm_overlay(
                 last_err = f"{route_name}:llm_parse_failed"
             except Exception as e:
                 last_err = f"{route_name}:{e}"
-                _log(f"LLM路由失败: code={item.code}, route={route_name}, err={e}", logs_path)
+                if verbose_llm_errors:
+                    _log(f"LLM路由失败: code={item.code}, route={route_name}, err={e}", logs_path)
                 continue
         return item.code, None, last_err or "all_routes_failed"
 
@@ -1141,10 +1145,12 @@ def _run_llm_overlay(
                         route_hits[route] = route_hits.get(route, 0) + 1
                     elif err:
                         llm_error_counter[str(err)] += 1
-                        _log(f"LLM二判失败: {code}, err={err}", logs_path)
+                        if verbose_llm_errors:
+                            _log(f"LLM二判失败: {code}, err={err}", logs_path)
                 except Exception as e:
                     llm_error_counter[f"FutureException:{type(e).__name__}"] += 1
-                    _log(f"LLM二判异常: {code}, err={e}", logs_path)
+                    if verbose_llm_errors:
+                        _log(f"LLM二判异常: {code}, err={e}", logs_path)
         except FutureTimeout:
             _log("LLM 二判触发 deadline 保护：停止等待剩余结果。", logs_path)
             for fut, code in futures.items():
@@ -1152,7 +1158,8 @@ def _run_llm_overlay(
                     continue
                 fut.cancel()
                 llm_error_counter["deadline_cancelled"] += 1
-                _log(f"LLM二判取消: {code}", logs_path)
+                if verbose_llm_errors:
+                    _log(f"LLM二判取消: {code}", logs_path)
 
     if llm_error_counter:
         top_err = " | ".join([f"{k} x{v}" for k, v in llm_error_counter.most_common(5)])

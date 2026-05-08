@@ -109,6 +109,13 @@ _GEMINI_TRUNCATION_REASONS = {
 }
 
 
+def _env_enabled(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 def call_llm(
     provider: str,
     model: str,
@@ -320,19 +327,21 @@ def _call_gemini(
             completion_tokens = getattr(usage, "candidates_token_count", None) if usage else None
             total_tokens = getattr(usage, "total_token_count", None) if usage else None
             finish_reason_norm = finish_reason.strip().upper()
-            print(
-                "[llm] gemini model={} finish_reason={} prompt_tokens={} completion_tokens={} total_tokens={} max_output_tokens={}".format(
-                    model,
-                    finish_reason or "unknown",
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                    config.max_output_tokens,
+            if _env_enabled("LLM_LOG_USAGE", True):
+                print(
+                    "[llm] gemini model={} finish_reason={} prompt_tokens={} completion_tokens={} total_tokens={} max_output_tokens={}".format(
+                        model,
+                        finish_reason or "unknown",
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                        config.max_output_tokens,
+                    )
                 )
-            )
             if finish_reason_norm in _GEMINI_TRUNCATION_REASONS:
                 if allow_truncated_text and text.strip():
-                    print("[llm] gemini truncation tolerated: using returned text because allow_truncated_text=1")
+                    if _env_enabled("LLM_LOG_USAGE", True):
+                        print("[llm] gemini truncation tolerated: using returned text because allow_truncated_text=1")
                     return text
                 raise RuntimeError(
                     f"Gemini 输出被截断(finish_reason={finish_reason or 'unknown'})，请缩短输入或提升输出上限后重试"
@@ -344,7 +353,8 @@ def _call_gemini(
                 break
             sleep_s = GEMINI_RETRY_DELAY * (2 ** (attempt - 1))
             sleep_s = min(sleep_s, 30.0)
-            print(f"[llm] gemini attempt {attempt}/{GEMINI_MAX_RETRIES} failed: {e}; retry in {sleep_s:.1f}s")
+            if _env_enabled("LLM_LOG_RETRY_ERRORS", True):
+                print(f"[llm] gemini attempt {attempt}/{GEMINI_MAX_RETRIES} failed: {e}; retry in {sleep_s:.1f}s")
             time.sleep(sleep_s)
 
     raise RuntimeError(f"Gemini 调用失败: {last_err}")
