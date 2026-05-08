@@ -28,8 +28,14 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
+
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[1])
+if _PACKAGE_ROOT in sys.path:
+    sys.path.remove(_PACKAGE_ROOT)
+sys.path.insert(0, _PACKAGE_ROOT)
 
 # 加载 .env（项目根目录）
 load_dotenv()
