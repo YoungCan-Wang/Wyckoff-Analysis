@@ -256,8 +256,8 @@ class TestCheckDoomLoop:
         recent: list[tuple[str, int]] = []
         recent_texts: list[str] = []
 
-        base = "请基于威科夫方法分析成交量结构和关键支撑压力，股票代码 "
-        for code in ("600001", "600002"):
+        base = "请基于威科夫方法分析成交量结构、关键支撑压力、筹码吸收以及供需转换，场景编号 "
+        for code in ("A", "B"):
             assert not check_doom_loop(
                 recent,
                 "analyze_stock",
@@ -267,7 +267,7 @@ class TestCheckDoomLoop:
         assert check_doom_loop(
             recent,
             "analyze_stock",
-            {"prompt": f"{base}600003"},
+            {"prompt": f"{base}C"},
             recent_args_texts=recent_texts,
         )
 
