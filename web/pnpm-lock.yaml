@@ -14,8 +14,8 @@ importers:
         specifier: ^2.49.0
         version: 2.105.1
       hono:
-        specifier: ^4.6.0
-        version: 4.12.16
+        specifier: ^4.12.18
+        version: 4.12.18
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -1209,8 +1209,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  hono@4.12.16:
-    resolution: {integrity: sha512-jN0ZewiNAWSe5khM3EyCmBb250+b40wWbwNILNfEvq84VREWwOIkuUsFONk/3i3nqkz7Oe1PcpM2mwQEK2L9Kg==}
+  hono@4.12.18:
+    resolution: {integrity: sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ==}
     engines: {node: '>=16.9.0'}
 
   iceberg-js@0.8.1:
@@ -2536,7 +2536,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  hono@4.12.16: {}
+  hono@4.12.18: {}
 
   iceberg-js@0.8.1: {}
 

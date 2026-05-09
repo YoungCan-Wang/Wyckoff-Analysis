@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",
-    "hono": "^4.6.0",
+    "hono": "^4.12.18",
     "zod": "^3.25.76"
   },
   "devDependencies": {
