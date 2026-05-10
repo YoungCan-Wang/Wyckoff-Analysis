@@ -29,6 +29,7 @@ const RETENTION_DATES = 30
 const AVG_WINDOWS = [5, 10, 15, 20, 25, 30] as const
 type RecommendationWindow = (typeof AVG_WINDOWS)[number]
 type SortBy = 'date' | 'change' | 'score'
+type SortOrder = 'desc' | 'asc'
 
 async function fetchTracking(): Promise<Recommendation[]> {
   const { data } = await supabase
@@ -43,6 +44,7 @@ export function TrackingPage() {
   const [search, setSearch] = useState('')
   const [onlyAI, setOnlyAI] = useState(false)
   const [sortBy, setSortBy] = useState<SortBy>('date')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
   const [selectedWindow, setSelectedWindow] = useState<RecommendationWindow>(30)
 
   const { data = [], isLoading: loading } = useQuery({
@@ -69,13 +71,8 @@ export function TrackingPage() {
     if (onlyAI) {
       result = result.filter((r) => r.is_ai_recommended)
     }
-    if (sortBy === 'change') {
-      result = [...result].sort((a, b) => nullableNumberDesc(a.change_pct, b.change_pct))
-    } else if (sortBy === 'score') {
-      result = [...result].sort((a, b) => nullableNumberDesc(a.funnel_score, b.funnel_score))
-    }
-    return result
-  }, [visibleData, search, onlyAI, sortBy])
+    return sortRecommendations(result, sortBy, sortOrder)
+  }, [visibleData, search, onlyAI, sortBy, sortOrder])
 
   const stats = useMemo(() => buildSummaryStats(visibleData), [visibleData])
   const latestDate = latestDates[0] ?? null
@@ -103,12 +100,26 @@ export function TrackingPage() {
         onlyAI={onlyAI}
         search={search}
         sortBy={sortBy}
+        sortOrder={sortOrder}
         visibleCount={visibleData.length}
         onOnlyAIChange={setOnlyAI}
         onSearchChange={setSearch}
         onSortByChange={setSortBy}
+        onSortOrderChange={setSortOrder}
       />
-      <TrackingTable rows={filtered} />
+      <TrackingTable
+        rows={filtered}
+        sortBy={sortBy}
+        sortOrder={sortOrder}
+        onSortChange={(nextSortBy) => {
+          if (nextSortBy === sortBy) {
+            setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')
+            return
+          }
+          setSortBy(nextSortBy)
+          setSortOrder('desc')
+        }}
+      />
     </div>
   )
 }
@@ -197,19 +208,23 @@ function TrackingFilters({
   onlyAI,
   search,
   sortBy,
+  sortOrder,
   visibleCount,
   onOnlyAIChange,
   onSearchChange,
   onSortByChange,
+  onSortOrderChange,
 }: {
   filteredCount: number
   onlyAI: boolean
   search: string
   sortBy: SortBy
+  sortOrder: SortOrder
   visibleCount: number
   onOnlyAIChange: (value: boolean) => void
   onSearchChange: (value: string) => void
   onSortByChange: (value: SortBy) => void
+  onSortOrderChange: (value: SortOrder) => void
 }) {
   const { t } = usePreferences()
 
@@ -240,6 +255,14 @@ function TrackingFilters({
         <option value="change">{t('tracking.sortChange')}</option>
         <option value="score">{t('tracking.sortScore')}</option>
       </select>
+      <select
+        value={sortOrder}
+        onChange={(event) => onSortOrderChange(event.target.value as SortOrder)}
+        className="rounded-lg border border-border px-2 py-1.5 text-sm"
+      >
+        <option value="desc">{t('tracking.sortDesc')}</option>
+        <option value="asc">{t('tracking.sortAsc')}</option>
+      </select>
       <span className="text-xs text-muted-foreground">
         {filteredCount} / {visibleCount} {t('common.stocks')}
       </span>
@@ -247,7 +270,17 @@ function TrackingFilters({
   )
 }
 
-function TrackingTable({ rows }: { rows: Recommendation[] }) {
+function TrackingTable({
+  rows,
+  sortBy,
+  sortOrder,
+  onSortChange,
+}: {
+  rows: Recommendation[]
+  sortBy: SortBy
+  sortOrder: SortOrder
+  onSortChange: (sortBy: SortBy) => void
+}) {
   const { t } = usePreferences()
 
   return (
@@ -258,11 +291,29 @@ function TrackingTable({ rows }: { rows: Recommendation[] }) {
             <tr>
               <th className="px-3 py-2 text-left font-medium">{t('common.code')}</th>
               <th className="px-3 py-2 text-left font-medium">{t('common.name')}</th>
-              <th className="px-3 py-2 text-right font-medium">{t('tracking.recommendDate')}</th>
+              <SortableHeader
+                align="right"
+                active={sortBy === 'date'}
+                label={t('tracking.recommendDate')}
+                order={sortOrder}
+                onClick={() => onSortChange('date')}
+              />
               <th className="px-3 py-2 text-right font-medium">{t('tracking.initialPrice')}</th>
               <th className="px-3 py-2 text-right font-medium">{t('tracking.currentPrice')}</th>
-              <th className="px-3 py-2 text-right font-medium">{t('tracking.changePct')}</th>
-              <th className="px-3 py-2 text-right font-medium">{t('tracking.score')}</th>
+              <SortableHeader
+                align="right"
+                active={sortBy === 'change'}
+                label={t('tracking.changePct')}
+                order={sortOrder}
+                onClick={() => onSortChange('change')}
+              />
+              <SortableHeader
+                align="right"
+                active={sortBy === 'score'}
+                label={t('tracking.score')}
+                order={sortOrder}
+                onClick={() => onSortChange('score')}
+              />
               <th className="px-3 py-2 text-center font-medium">AI</th>
             </tr>
           </thead>
@@ -280,6 +331,35 @@ function TrackingTable({ rows }: { rows: Recommendation[] }) {
         </table>
       </div>
     </div>
+  )
+}
+
+function SortableHeader({
+  active,
+  align,
+  label,
+  order,
+  onClick,
+}: {
+  active: boolean
+  align: 'left' | 'right'
+  label: string
+  order: SortOrder
+  onClick: () => void
+}) {
+  return (
+    <th className={`px-3 py-2 font-medium ${align === 'right' ? 'text-right' : 'text-left'}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-muted"
+      >
+        <span>{label}</span>
+        <span className={`text-[10px] ${active ? 'text-primary' : 'text-muted-foreground'}`}>
+          {active ? order.toUpperCase() : '--'}
+        </span>
+      </button>
+    </th>
   )
 }
 
@@ -362,8 +442,17 @@ function isFiniteNumber(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-function nullableNumberDesc(a: number | null, b: number | null): number {
-  if (isFiniteNumber(a) && isFiniteNumber(b)) return b - a
+function sortRecommendations(rows: Recommendation[], sortBy: SortBy, sortOrder: SortOrder): Recommendation[] {
+  const direction = sortOrder === 'desc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    if (sortBy === 'date') return nullableNumberCompare(a.recommend_date, b.recommend_date, direction)
+    if (sortBy === 'change') return nullableNumberCompare(a.change_pct, b.change_pct, direction)
+    return nullableNumberCompare(a.funnel_score, b.funnel_score, direction)
+  })
+}
+
+function nullableNumberCompare(a: number | null | undefined, b: number | null | undefined, direction: number): number {
+  if (isFiniteNumber(a) && isFiniteNumber(b)) return (b - a) * direction
   if (isFiniteNumber(a)) return -1
   if (isFiniteNumber(b)) return 1
   return 0
