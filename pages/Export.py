@@ -84,12 +84,14 @@ def _should_retry_fetch(e: Exception) -> bool:
     reraise=True,
 )
 def _fetch_hist_with_retry(symbol, window, adjust):
+    uid = st.session_state.get("user", {}).get("id", "")
     return get_stock_hist(
         symbol=symbol,
         start_date=window.start_trade_date,
         end_date=window.end_trade_date,
         adjust=adjust or "",
         context="web",
+        user_id=uid,
     )
 
 

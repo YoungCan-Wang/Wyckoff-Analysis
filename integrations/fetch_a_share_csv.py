@@ -362,7 +362,7 @@ def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
     return out
 
 
-def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame:
+def _fetch_hist(symbol: str, window: TradingWindow, adjust: str, *, user_id: str = "") -> pd.DataFrame:
     """个股日线：tickflow 优先（qfq），失败再回退其它数据源"""
     from integrations.stock_hist_repository import get_stock_hist
 
@@ -375,7 +375,6 @@ def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame
         else:
             context = "web"
     except Exception:
-        # 非 Streamlit 运行环境（CLI/GitHub Actions）默认按后台模式处理
         context = "background"
 
     return get_stock_hist(
@@ -384,6 +383,7 @@ def _fetch_hist(symbol: str, window: TradingWindow, adjust: str) -> pd.DataFrame
         end_date=window.end_trade_date,
         adjust=adjust or "",
         context=context,
+        user_id=user_id,
     )
 
 

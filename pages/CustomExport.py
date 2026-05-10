@@ -184,6 +184,7 @@ with content_col:
                             end_date=end_date,
                             adjust=adjust,
                             context="web",
+                            user_id=st.session_state.get("user", {}).get("id", ""),
                         )
                     elif source["id"] == "index_zh_a_hist":
                         df = source["fn"](symbol=symbol, period="daily", start_date=sd, end_date=ed)

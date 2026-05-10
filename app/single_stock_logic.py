@@ -448,7 +448,7 @@ def _run_analysis(
         df_hist = _run_with_timeout(
             "历史行情拉取",
             SINGLE_STOCK_FETCH_TIMEOUT_S,
-            lambda: _fetch_hist(symbol, window, ADJUST),
+            lambda: _fetch_hist(symbol, window, ADJUST, user_id=st.session_state.get("user", {}).get("id", "")),
         )
         try:
             sector = _run_with_timeout(

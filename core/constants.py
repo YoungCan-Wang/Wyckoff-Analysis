@@ -17,6 +17,7 @@ TABLE_PORTFOLIO_POSITIONS = "portfolio_positions"
 TABLE_TRADE_ORDERS = "trade_orders"
 TABLE_DAILY_NAV = "daily_nav"
 TABLE_TAIL_BUY_HISTORY = "tail_buy_history"
+TABLE_WHITELIST = "whitelist"
 
 # Local SQLite DB path
 from pathlib import Path as _Path

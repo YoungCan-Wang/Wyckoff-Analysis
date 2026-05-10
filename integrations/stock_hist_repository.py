@@ -17,6 +17,19 @@ from integrations.data_source import fetch_stock_hist as fetch_stock_hist_from_s
 
 AdjustType = Literal["", "qfq", "hfq"]
 
+_LOCAL_USER_ID = "local"
+
+
+def _is_cache_allowed(user_id: str, context: str) -> bool:
+    ctx = str(context or "auto").strip().lower()
+    if ctx in ("background", "admin"):
+        return True
+    if not user_id or user_id == _LOCAL_USER_ID:
+        return True
+    from core.cache_whitelist import is_user_in_cache_whitelist
+
+    return is_user_in_cache_whitelist(user_id)
+
 
 def _collect_tickflow_limit_hints(df: pd.DataFrame | None) -> list[str]:
     if df is None:
@@ -122,6 +135,7 @@ def get_stock_hist(
     *,
     context: str = "auto",
     cache_only: bool = False,
+    user_id: str = "",
 ) -> pd.DataFrame:
     """
     统一股票历史数据入口：
@@ -152,6 +166,22 @@ def get_stock_hist(
         result.attrs["source"] = "realtime"
         result.attrs["upstream_source"] = str(df.attrs.get("source", "") or "realtime")
         result.attrs["cache_status"] = "bypass"
+        hints = _collect_tickflow_limit_hints(df)
+        if hints:
+            result.attrs["tickflow_limit_hints"] = hints
+            result.attrs["tickflow_limit_hint"] = hints[0]
+            print(f"[stock_repo] ⚠️ {hints[0]}")
+        return result
+
+    # 白名单检查：非白名单用户直接走数据源，不读写 Supabase 缓存
+    if not _is_cache_allowed(user_id, context):
+        df = fetch_stock_hist_from_source(symbol=symbol, start=start_d, end=end_d, adjust=adjust)
+        norm = normalize_hist_df(df)
+        result_norm = _slice_df_by_date(norm, start_d, end_d)
+        result = denormalize_hist_df(result_norm)
+        result.attrs["source"] = "realtime"
+        result.attrs["upstream_source"] = str(df.attrs.get("source", "") or "realtime")
+        result.attrs["cache_status"] = "whitelist_bypass"
         hints = _collect_tickflow_limit_hints(df)
         if hints:
             result.attrs["tickflow_limit_hints"] = hints
