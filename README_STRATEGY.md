@@ -8,6 +8,7 @@
 - Step2 漏斗选股：`core/wyckoff_engine.py`（L1-L5 筛选与打分）
 - Step3 AI 研报：`core/batch_report.py`（三阵营审判）
 - Step4 持仓决断：`core/strategy.py`（持仓管理与风控）
+- 跨市场扫描：`scripts/market_funnel_job.py`（港股 / 美股独立 universe + TickFlow 日线）
 
 > 架构、数据表、定时任务见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。术语速查见 [GLOSSARY.md](GLOSSARY.md)。
 
@@ -42,6 +43,10 @@
 ### 快照机制
 
 每轮全量拉取后，行情数据序列化到 `data/funnel_snapshots`。这使得计算与网络完全分离——回测和调参全程离线，不需要重复拉数据。
+
+### 跨市场 universe
+
+A 股主漏斗仍使用本地股票池和行业映射；港股、美股、ETF 的代码与名称元数据维护在 `data/market_universes/*.json`。港股 / 美股漏斗使用 TickFlow 批量日线接口拉取 320 个交易日窗口，和 A 股主流程保持相同的结构识别口径，但不走 A 股专属的 Tushare 兜底。
 
 ### 盘前风控
 

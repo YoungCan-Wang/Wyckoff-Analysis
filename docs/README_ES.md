@@ -2,7 +2,7 @@
 
 # Wyckoff Trading Agent
 
-**Sistema cuantitativo Wyckoff para acciones A de China — hablas con naturalidad, el agente lee el mercado**
+**Sistema cuantitativo Wyckoff para acciones A, Hong Kong y EE. UU. — hablas con naturalidad, el agente lee el mercado**
 
 [![PyPI](https://img.shields.io/pypi/v/youngcan-wyckoff-analysis?color=blue)](https://pypi.org/project/youngcan-wyckoff-analysis/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
@@ -80,7 +80,7 @@ Streamlit sostuvo el MVP inicial y sigue disponible para exportacion de datos, a
 |-----------|-------------|
 | Agente conversacional | Diagnosticos, filtros y reportes activados con lenguaje natural; el LLM orquesta herramientas de forma autonoma; tambien lee/escribe archivos, ejecuta comandos y obtiene contenido web |
 | Skills | Comandos slash integrados (`/screen`, `/checkup`, `/report`, `/strategy`, `/backtest`) para flujos complejos con un toque; extensible por el usuario via `~/.wyckoff/skills/*.md` |
-| Embudo de 5 capas | ~4 500 acciones del mercado completo se reducen a ~30 candidatas mediante seis canales + resonancia sectorial + micro-disparo |
+| Embudo de 5 capas | Escaneo completo de acciones A y universos independientes de Hong Kong / EE. UU. mediante seis canales + resonancia sectorial + micro-disparo |
 | Reporte IA de 3 campamentos | Logica rota / Reserva / Plataforma de despegue — el LLM clasifica de forma independiente |
 | Diagnostico de cartera | Escaneo masivo: estructura de medias moviles, fase de acumulacion, senales de activacion, estado de stop-loss |
 | Rebalanceo privado | Combina posiciones + candidatas y emite ordenes EXIT / TRIM / HOLD / PROBE / ATTACK, con push a Telegram |
@@ -119,7 +119,7 @@ Flujo nativo de terminal con el conjunto de funciones mas completo. Soporta tare
 ### Instalacion en una linea (recomendado)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/Wyckoff-Analysis/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/WyckoffTradingAgent/main/install.sh | bash
 ```
 
 Detecta Python, instala uv y crea un entorno aislado. Al finalizar, ejecuta `wyckoff`.
@@ -198,8 +198,8 @@ pnpm dev
 Ejecucion local legacy de Streamlit:
 
 ```bash
-git clone https://github.com/YoungCan-Wang/Wyckoff-Analysis.git
-cd Wyckoff-Analysis
+git clone https://github.com/YoungCan-Wang/WyckoffTradingAgent.git
+cd WyckoffTradingAgent
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run streamlit_app.py
@@ -342,4 +342,4 @@ Si el proyecto te ayuda, una Star se agradece. Si te ayuda a ganar dinero, invit
 
 ---
 
-[![Star History Chart](https://api.star-history.com/svg?repos=YoungCan-Wang/Wyckoff-Analysis&type=Date)](https://star-history.com/#YoungCan-Wang/Wyckoff-Analysis&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=YoungCan-Wang/WyckoffTradingAgent&type=Date)](https://star-history.com/#YoungCan-Wang/WyckoffTradingAgent&Date)

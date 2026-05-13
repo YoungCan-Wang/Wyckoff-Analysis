@@ -2,7 +2,7 @@
 
 # WyckoffAgent — Open-Source Wyckoff Trading Agent
 
-**A 股威科夫量价分析智能体 — 你说人话，他读盘面。**
+**A 股 / 港股 / 美股威科夫量价分析智能体 — 你说人话，他读盘面。**
 
 [![PyPI](https://img.shields.io/pypi/v/youngcan-wyckoff-analysis?color=blue)](https://pypi.org/project/youngcan-wyckoff-analysis/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
@@ -70,7 +70,7 @@ React Web、CLI、MCP 与 GitHub Actions 共同组成当前产品形态；行情
 
 ```bash
 # 一键安装
-curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/Wyckoff-Analysis/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/WyckoffTradingAgent/main/install.sh | bash
 
 # 或 Homebrew / pip
 brew tap YoungCan-Wang/wyckoff && brew install wyckoff
@@ -182,7 +182,7 @@ wyckoff dashboard
 ## 功能亮点
 
 - **对话式 Agent** — 用自然语言触发诊断、筛选、研报，LLM 自主编排 15 个工具
-- **五层漏斗筛选** — 全市场 ~4500 股 → ~30 候选（六通道 + 板块共振 + 微观狙击 + AI 审判）
+- **五层漏斗筛选** — A 股全市场约 4500 股，港股 / 美股独立 universe 扫描（六通道 + 板块共振 + 微观狙击 + AI 审判）
 - **跨市场** — A 股 / 港股 / 美股漏斗独立 workflow
 - **AI 三阵营研报** — 逻辑破产 / 储备营地 / 起跳板，LLM 独立审判
 - **持仓诊断 & 私人决断** — 批量体检 + EXIT/TRIM/HOLD/PROBE/ATTACK 指令
@@ -222,7 +222,7 @@ wyckoff dashboard
 | 术语速查 | [GLOSSARY.md](GLOSSARY.md) |
 | MCP Server 配置 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#mcp-server) |
 
-> **Wiki 深度阅读**：[交易方法论 Wiki](https://github.com/YoungCan-Wang/Wyckoff-Analysis/wiki/01_Finance_Wyckoff_Method) ｜ [技术架构 Wiki](https://github.com/YoungCan-Wang/Wyckoff-Analysis/wiki/03_Tech_Architecture)
+> **Wiki 深度阅读**：[交易方法论 Wiki](https://github.com/YoungCan-Wang/WyckoffTradingAgent/wiki/01_Finance_Wyckoff_Method) ｜ [技术架构 Wiki](https://github.com/YoungCan-Wang/WyckoffTradingAgent/wiki/03_Tech_Architecture)
 
 ---
 
@@ -256,4 +256,4 @@ wyckoff dashboard
 
 ---
 
-[![Star History Chart](https://api.star-history.com/svg?repos=YoungCan-Wang/Wyckoff-Analysis&type=Date)](https://star-history.com/#YoungCan-Wang/Wyckoff-Analysis&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=YoungCan-Wang/WyckoffTradingAgent&type=Date)](https://star-history.com/#YoungCan-Wang/WyckoffTradingAgent&Date)

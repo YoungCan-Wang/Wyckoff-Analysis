@@ -12,7 +12,7 @@
 - 股票池: main_chinext (sample=0)
 - 每日候选上限: 2
 - 参数单元: 18 组；正夏普 8 组，非正夏普 10 组
-- GitHub Actions: https://github.com/YoungCan-Wang/Wyckoff-Analysis/actions/runs/25299826431
+- GitHub Actions: https://github.com/YoungCan-Wang/WyckoffTradingAgent/actions/runs/25299826431
 
 ## 本次结论
 
@@ -98,4 +98,3 @@
 - 回测使用信号日收盘后出信号、次日开盘买入、T+1 后检查止损/止盈的口径，并包含买卖双边摩擦成本。
 - `可完整验证信号期` 会早于回测结束日，因为持有窗口需要足够后续交易日完成离场验证。
 - 本结果仍可能包含当前股票池幸存者偏差，以及当前截面市值/行业映射带来的前视偏差；用于参数方向和市场周期适配判断，不等同于实盘承诺。
-

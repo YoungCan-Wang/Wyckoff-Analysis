@@ -1,9 +1,9 @@
 # Project Architecture & Workflow Conventions
 
-## 1. Frontend Architecture & Grey-Release Strategy
-*   **Streamlit (`app/`) is NOT legacy code to be deleted.** It serves as the project's **grey-release (canary) testing environment**.
-*   **Workflow:** New capabilities, logic updates, and features must first be verified in the Streamlit app. Only after their functionality is proven correct and stable should they be migrated to the production React application (`web/`) on Cloudflare Pages.
-*   **Agent Rule:** Do NOT suggest deleting the `app/` directory or flagging it as redundant code.
+## 1. Frontend Architecture
+*   **React (`web/`) is the production web surface.** New user-facing capabilities should be implemented in the Agent/chat experience rather than new standalone routes.
+*   **Streamlit (`app/` and `streamlit_app.py`) is maintenance-only.** It can keep historical export or diagnostic utilities, but it is not the grey-release path for new product features.
+*   **Agent Rule:** Do not suggest deleting `app/` just because it is maintenance code, but do not route new feature work through Streamlit first.
 
 ## 2. Documentation Structure
 *   **Wiki Visibility:** The `wiki_repo_new/` directory is **intentionally kept hidden** (ignored via `.gitignore`).

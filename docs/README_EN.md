@@ -2,7 +2,7 @@
 
 # Wyckoff Trading Agent
 
-**Wyckoff Volume-Price Analysis Agent for China A-Shares — Talk to it like a human, it reads the tape**
+**Wyckoff Volume-Price Analysis Agent for A-shares / Hong Kong stocks / US stocks — Talk to it like a human, it reads the tape**
 
 [![PyPI](https://img.shields.io/pypi/v/youngcan-wyckoff-analysis?color=blue)](https://pypi.org/project/youngcan-wyckoff-analysis/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
@@ -80,7 +80,7 @@ Streamlit powered the early MVP and remains available for data export, single-st
 |---|---|
 | Conversational Agent | Trigger diagnosis, screening, and reports in plain language; the LLM orchestrates tools autonomously; also reads/writes files, executes commands, and fetches web pages |
 | Skills | Built-in slash commands (`/screen`, `/checkup`, `/report`, `/strategy`, `/backtest`) for one-tap complex workflows; user-extensible via `~/.wyckoff/skills/*.md` |
-| Five-Layer Funnel | Full market ~4 500 stocks -> ~30 candidates via six channels + sector resonance + micro triggers |
+| Five-Layer Funnel | A-share full-market scan plus independent Hong Kong / US universes via six channels + sector resonance + micro triggers |
 | AI Three-Camp Report | Logic Bankrupt / Reserve Camp / Springboard — LLM renders an independent verdict |
 | Portfolio Diagnosis | Batch health check: MA structure, accumulation phase, trigger signals, stop-loss status |
 | Private Rebalance | Synthesizes holdings + candidates, outputs EXIT / TRIM / HOLD / PROBE / ATTACK orders, pushes to Telegram |
@@ -119,7 +119,7 @@ Native terminal workflow with the most complete feature set. Supports background
 ### One-line Install (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/Wyckoff-Analysis/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/WyckoffTradingAgent/main/install.sh | bash
 ```
 
 Detects Python, installs uv, creates an isolated environment. Run `wyckoff` when done.
@@ -198,8 +198,8 @@ pnpm dev
 Legacy Streamlit local run:
 
 ```bash
-git clone https://github.com/YoungCan-Wang/Wyckoff-Analysis.git
-cd Wyckoff-Analysis
+git clone https://github.com/YoungCan-Wang/WyckoffTradingAgent.git
+cd WyckoffTradingAgent
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run streamlit_app.py
@@ -342,4 +342,4 @@ If this project helps, a GitHub Star is appreciated. If it helps you make money,
 
 ---
 
-[![Star History Chart](https://api.star-history.com/svg?repos=YoungCan-Wang/Wyckoff-Analysis&type=Date)](https://star-history.com/#YoungCan-Wang/Wyckoff-Analysis&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=YoungCan-Wang/WyckoffTradingAgent&type=Date)](https://star-history.com/#YoungCan-Wang/WyckoffTradingAgent&Date)

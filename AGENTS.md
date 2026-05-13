@@ -5,7 +5,7 @@
 
 ## Project Overview
 
-A-share quantitative analysis system based on Wyckoff method. Python backend (CLI + Streamlit + MCP) + React/TypeScript web frontend.
+Multi-market quantitative analysis system based on Wyckoff method, covering A-shares, Hong Kong stocks, US stocks, and ETFs. Python backend (CLI + MCP + maintenance Streamlit) + React/TypeScript web frontend.
 
 ## Quick Commands
 
