@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from datetime import date
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pandas as pd
 
@@ -214,6 +216,33 @@ class TestSymbolPool:
         from tools.symbol_pool import _stock_name_map
 
         assert callable(_stock_name_map)
+
+    def test_screen_stocks_accepts_mcp_main_chinext_alias(self, monkeypatch):
+        from agents import chat_tools
+
+        captured_env = {}
+        fake_pipeline = ModuleType("core.funnel_pipeline")
+
+        def fake_run_funnel(*args, **kwargs):
+            captured_env["mode"] = os.environ.get("FUNNEL_POOL_MODE")
+            captured_env["board"] = os.environ.get("FUNNEL_POOL_BOARD")
+            captured_env["executor"] = os.environ.get("FUNNEL_EXECUTOR_MODE")
+            return True, [], {}, {"metrics": {}, "triggers": {}, "name_map": {}}
+
+        fake_pipeline.run_funnel = fake_run_funnel
+        monkeypatch.setitem(sys.modules, "core.funnel_pipeline", fake_pipeline)
+        monkeypatch.setattr(chat_tools, "_ensure_tushare_token", lambda tool_context: None)
+        monkeypatch.setenv("FUNNEL_POOL_MODE", "manual")
+        monkeypatch.setenv("FUNNEL_POOL_BOARD", "chinext")
+        monkeypatch.setenv("FUNNEL_EXECUTOR_MODE", "process")
+
+        result = chat_tools.screen_stocks(board="main_chinext")
+
+        assert "error" not in result
+        assert captured_env == {"mode": "board", "board": "all", "executor": "thread"}
+        assert os.environ["FUNNEL_POOL_MODE"] == "manual"
+        assert os.environ["FUNNEL_POOL_BOARD"] == "chinext"
+        assert os.environ["FUNNEL_EXECUTOR_MODE"] == "process"
 
 
 # ── core/strategy bridge ──

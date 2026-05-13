@@ -1039,7 +1039,15 @@ def get_market_overview(tool_context: ToolContext) -> dict:
 # ---------------------------------------------------------------------------
 
 _VALID_BOARDS = {"all", "main", "chinext"}
-_BOARD_ALIAS = {"gem": "chinext", "创业板": "chinext", "主板": "main", "全部": "all"}
+_BOARD_ALIAS = {
+    "gem": "chinext",
+    "创业板": "chinext",
+    "主板": "main",
+    "全部": "all",
+    "main_chinext": "all",
+    "main-chinext": "all",
+    "main+chinext": "all",
+}
 
 
 def screen_stocks(board: str = "all", tool_context: ToolContext = None) -> dict:

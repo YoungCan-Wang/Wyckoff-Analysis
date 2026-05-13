@@ -241,13 +241,37 @@ def run_funnel_simulation(board: Literal["all", "main_chinext"] = "all") -> dict
     """
     import os
 
-    os.environ.setdefault("FUNNEL_EXECUTOR_MODE", "thread")
-    if board != "all":
-        os.environ["FUNNEL_POOL_MODE"] = board
+    board_name = str(board or "all").strip().lower()
+    if board_name == "main_chinext":
+        board_name = "all"
+    if board_name not in {"all", "main", "chinext"}:
+        return {"error": f"不支持的 board 值 '{board}'，可选: all / main_chinext"}
+
+    prev_mode = os.environ.get("FUNNEL_POOL_MODE")
+    prev_board = os.environ.get("FUNNEL_POOL_BOARD")
+    prev_exec = os.environ.get("FUNNEL_EXECUTOR_MODE")
+    os.environ["FUNNEL_POOL_MODE"] = "board"
+    os.environ["FUNNEL_POOL_BOARD"] = board_name
+    os.environ["FUNNEL_EXECUTOR_MODE"] = "thread"
 
     from core.funnel_pipeline import run_funnel
 
-    ok, symbols, bench_ctx, details = run_funnel("", notify=False, return_details=True)
+    try:
+        ok, symbols, bench_ctx, details = run_funnel("", notify=False, return_details=True)
+    finally:
+        if prev_mode is None:
+            os.environ.pop("FUNNEL_POOL_MODE", None)
+        else:
+            os.environ["FUNNEL_POOL_MODE"] = prev_mode
+        if prev_board is None:
+            os.environ.pop("FUNNEL_POOL_BOARD", None)
+        else:
+            os.environ["FUNNEL_POOL_BOARD"] = prev_board
+        if prev_exec is None:
+            os.environ.pop("FUNNEL_EXECUTOR_MODE", None)
+        else:
+            os.environ["FUNNEL_EXECUTOR_MODE"] = prev_exec
+
     if not ok:
         return {"error": "漏斗运行失败", "details": details}
     return {
