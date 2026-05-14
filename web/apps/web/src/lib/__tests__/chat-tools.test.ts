@@ -16,14 +16,29 @@ import {
 function createMockChain(resolvedData: unknown = null, error: unknown = null) {
   const chain: Record<string, unknown> = {}
   const terminal = () => Promise.resolve({ data: resolvedData, error })
-  for (const method of ['select', 'eq', 'ilike', 'order', 'limit', 'delete']) {
+  for (const method of ['select', 'eq', 'ilike', 'order', 'limit', 'delete', 'update']) {
     chain[method] = vi.fn().mockReturnValue(chain)
   }
+  chain['insert'] = vi.fn().mockImplementation(terminal)
   chain['single'] = vi.fn().mockImplementation(terminal)
   chain['upsert'] = vi.fn().mockImplementation(terminal)
   // make the chain itself thenable for queries without .single()
   chain['then'] = (resolve: (v: unknown) => void) => resolve({ data: resolvedData, error })
   return chain
+}
+
+function createPortfolioWriteDeps(updateRows: unknown[]) {
+  const updateChain = createMockChain(updateRows)
+  const insertChain = createMockChain(null)
+  const mockFrom = vi.fn()
+    .mockReturnValueOnce(updateChain)
+    .mockReturnValueOnce(insertChain)
+  const deps = {
+    supabase: { from: mockFrom } as unknown as ToolDeps['supabase'],
+    fetch: vi.fn(),
+    generateText: vi.fn(),
+  } as unknown as ToolDeps
+  return { deps, updateChain, insertChain }
 }
 
 function createMockDeps(tableData: Record<string, unknown> = {}): ToolDeps {
@@ -234,6 +249,27 @@ describe('execExecutePortfolioUpdate', () => {
     const result = await execExecutePortfolioUpdate(deps, 'user1', 'add', '600519', '贵州茅台', 100, 1800, 1700)
     expect(result).toContain('已新增')
     expect(result).toContain('100股')
+  })
+
+  it('updates an existing position without inserting a duplicate row', async () => {
+    const { deps, updateChain, insertChain } = createPortfolioWriteDeps([{ id: 'pos-1' }])
+
+    const result = await execExecutePortfolioUpdate(deps, 'user1', 'update', '600519', '贵州茅台', 200, 1810, 1700)
+
+    expect(result).toContain('已更新')
+    expect(updateChain.update).toHaveBeenCalledWith(expect.objectContaining({ code: '600519', shares: 200 }))
+    expect(updateChain.eq).toHaveBeenCalledWith('portfolio_id', 'USER_LIVE:user1')
+    expect(updateChain.eq).toHaveBeenCalledWith('code', '600519')
+    expect(insertChain.insert).not.toHaveBeenCalled()
+  })
+
+  it('inserts a position only when no existing row matches', async () => {
+    const { deps, insertChain } = createPortfolioWriteDeps([])
+
+    const result = await execExecutePortfolioUpdate(deps, 'user1', 'add', '600519', '贵州茅台', 100, 1800, 1700)
+
+    expect(result).toContain('已新增')
+    expect(insertChain.insert).toHaveBeenCalledWith(expect.objectContaining({ portfolio_id: 'USER_LIVE:user1', code: '600519' }))
   })
 })
 

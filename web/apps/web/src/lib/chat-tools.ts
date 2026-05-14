@@ -503,13 +503,33 @@ export async function execExecutePortfolioUpdate(
       buy_dt: new Date().toISOString().slice(0, 10),
     }
     if (stop_loss !== undefined) record.stop_loss = stop_loss
-    const { error } = await deps.supabase.from('portfolio_positions').upsert(record)
+    const error = await savePortfolioPosition(deps, portfolioId, code, record)
     return error
-      ? `执行失败: ${error.message}`
+      ? `执行失败: ${error}`
       : `✅ 已${action === 'add' ? '新增' : '更新'} ${code} ${name} ${shares}股 @¥${cost_price}${stop_loss ? ` 止损¥${stop_loss}` : ''}`
   }
 
   return '未知操作'
+}
+
+async function savePortfolioPosition(
+  deps: ToolDeps,
+  portfolioId: string,
+  code: string,
+  record: Record<string, unknown>,
+): Promise<string | null> {
+  const { data, error } = await deps.supabase
+    .from('portfolio_positions')
+    .update(record)
+    .eq('portfolio_id', portfolioId)
+    .eq('code', code)
+    .select('id')
+    .limit(1)
+  if (error) return error.message
+  if (Array.isArray(data) && data.length > 0) return null
+
+  const { error: insertError } = await deps.supabase.from('portfolio_positions').insert(record)
+  return insertError?.message || null
 }
 
 export interface ScreenStockItem {
