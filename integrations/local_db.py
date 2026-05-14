@@ -8,12 +8,15 @@ GitHub Actions 不用此模块。
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timedelta
 from typing import Any
 
 from core import constants as core_constants
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
@@ -197,7 +200,7 @@ def init_db() -> None:
         try:
             conn.execute("ALTER TABLE portfolio_position ADD COLUMN buy_dt TEXT DEFAULT ''")
         except Exception:
-            pass
+            logger.warning("migration: add buy_dt column failed", exc_info=True)
     if current < 5:
         _backfill_background_tasks_from_chat_log(conn)
     if current < 6:
@@ -206,7 +209,7 @@ def init_db() -> None:
         try:
             conn.execute("ALTER TABLE chat_log ADD COLUMN metadata TEXT DEFAULT ''")
         except Exception:
-            pass
+            logger.warning("migration: add metadata column failed", exc_info=True)
     if current < _SCHEMA_VERSION:
         conn.execute(
             "INSERT OR REPLACE INTO schema_version(version) VALUES(?)",
@@ -282,9 +285,9 @@ def _migrate_fts5_memory(conn: sqlite3.Connection) -> None:
                     (row["id"], row["content"]),
                 )
             except Exception:
-                pass
+                logger.warning("fts5 backfill row failed", exc_info=True)
     except Exception:
-        pass
+        logger.warning("fts5 memory migration failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

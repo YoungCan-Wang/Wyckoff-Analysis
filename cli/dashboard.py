@@ -8,10 +8,13 @@ stdlib http.server 提供 JSON API + 嵌入式 HTML/CSS/JS SPA。
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data access layer (thin wrappers over local_db)
@@ -412,7 +415,7 @@ def start_dashboard(port: int = 8765):
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        logger.debug("dashboard server stopped by user", exc_info=True)
     finally:
         server.server_close()
 

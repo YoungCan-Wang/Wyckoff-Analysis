@@ -10,11 +10,14 @@ Layer 4: 威科夫狙击（Spring / SOS / LPS / Effort vs Result）
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_hist_from_fetch(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,7 +47,7 @@ def _sorted_if_needed(df: pd.DataFrame) -> pd.DataFrame:
         if df["date"].is_monotonic_increasing:
             return df
     except Exception:
-        pass
+        logger.debug("Monotonic check failed, falling back to sort", exc_info=True)
     return df.sort_values("date")
 
 
@@ -630,13 +633,12 @@ def layer2_strength_detailed(
 
             # 条件 4：均线即将穿越——MA50 即将穿过或刚穿过 MA200（吸筹完成信号）
             accum_ma_ok = False
-            if accum_vol_ok:
-                if pd.notna(last_ma_short) and pd.notna(last_ma_long) and float(last_ma_long) > 0:
-                    # MA50 与 MA200 的差距百分比：允许在 ±accum_ma_gap_max 之间
-                    # 即 MA50 可以在 MA200 下方 N% 以内（即将穿），或在上方 N% 以内（刚穿）
-                    ma_gap_pct = (float(last_ma_short) - float(last_ma_long)) / float(last_ma_long) * 100.0
-                    ma_gap_limit = cfg.accum_ma_gap_max * 100.0  # 配置值为小数（如 0.06 → 6%）
-                    accum_ma_ok = -ma_gap_limit <= ma_gap_pct <= ma_gap_limit
+            if accum_vol_ok and pd.notna(last_ma_short) and pd.notna(last_ma_long) and float(last_ma_long) > 0:
+                # MA50 与 MA200 的差距百分比：允许在 ±accum_ma_gap_max 之间
+                # 即 MA50 可以在 MA200 下方 N% 以内（即将穿），或在上方 N% 以内（刚穿）
+                ma_gap_pct = (float(last_ma_short) - float(last_ma_long)) / float(last_ma_long) * 100.0
+                ma_gap_limit = cfg.accum_ma_gap_max * 100.0  # 配置值为小数（如 0.06 → 6%）
+                accum_ma_ok = -ma_gap_limit <= ma_gap_pct <= ma_gap_limit
 
             accum_ok = accum_low_ok and accum_range_ok and accum_vol_ok and accum_ma_ok
 
@@ -980,9 +982,7 @@ def _is_trading_range_context(zone: pd.DataFrame, cfg: FunnelConfig, df_full: pd
     if c_start <= 0:
         return False
     drift_pct = abs((c_end - c_start) / c_start * 100.0)
-    if drift_pct > cfg.spring_tr_max_drift_pct:
-        return False
-    return True
+    return not drift_pct > cfg.spring_tr_max_drift_pct
 
 
 def _detect_spring(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
@@ -1538,10 +1538,7 @@ def _detect_distribution_start(df: pd.DataFrame, cfg: FunnelConfig) -> bool:
     if ref_vol <= 0:
         return False
 
-    if recent_vol / ref_vol > cfg.dist_vol_dry_ratio:
-        return False
-
-    return True
+    return not recent_vol / ref_vol > cfg.dist_vol_dry_ratio
 
 
 def _is_holiday_grace(df_s: pd.DataFrame, grace_days: int) -> bool:
@@ -1740,9 +1737,9 @@ def allocate_ai_candidates(
                 out.append(c)
         return out
 
-    sos_hit_set = set(str(c).strip() for c, _ in result.triggers.get("sos", []))
-    spring_hit_set = set(str(c).strip() for c, _ in result.triggers.get("spring", []))
-    lps_hit_set = set(str(c).strip() for c, _ in result.triggers.get("lps", []))
+    sos_hit_set = {str(c).strip() for c, _ in result.triggers.get("sos", [])}
+    spring_hit_set = {str(c).strip() for c, _ in result.triggers.get("spring", [])}
+    lps_hit_set = {str(c).strip() for c, _ in result.triggers.get("lps", [])}
     # evr_hit_set = set(str(c).strip() for c, _ in result.triggers.get("evr", []))
     blocked_exit_signals = {"stop_loss", "distribution_warning"}
 

@@ -22,8 +22,8 @@ from zoneinfo import ZoneInfo
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.fetch_a_share_csv import _resolve_trading_window
-from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.supabase_market_signal import upsert_market_signal_daily
 from integrations.supabase_recommendation import (
     mark_ai_recommendations,
@@ -67,27 +67,23 @@ def _log(msg: str, logs_path: str | None = None) -> None:
 
 def _notify_skip(msg: str, feishu: str = "", wecom: str = "", dingtalk: str = "") -> None:
     """非交易日跳过时，通过已配置的 IM 渠道发送通知。"""
+    from contextlib import suppress
+
     if feishu:
-        try:
+        with suppress(Exception):
             from utils.feishu import send_feishu_notification
 
             send_feishu_notification(feishu, "定时任务跳过", msg)
-        except Exception:
-            pass
     if wecom:
-        try:
+        with suppress(Exception):
             from utils.notify import send_wecom_notification
 
             send_wecom_notification(wecom, "定时任务跳过", msg)
-        except Exception:
-            pass
     if dingtalk:
-        try:
+        with suppress(Exception):
             from utils.notify import send_dingtalk_notification
 
             send_dingtalk_notification(dingtalk, "定时任务跳过", msg)
-        except Exception:
-            pass
 
 
 class _TeeStream:

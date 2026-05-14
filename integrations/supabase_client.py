@@ -1,12 +1,15 @@
 import json
+import logging
 
 import streamlit as st
 from postgrest.exceptions import APIError
 from supabase import Client
 
 from core.constants import TABLE_USER_SETTINGS
-from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
+from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.supabase_base import create_anon_client
+
+logger = logging.getLogger(__name__)
 
 CUSTOM_PROVIDER_KEYS = ("1route", "zhipu", "minimax", "qwen", "volcengine")
 
@@ -93,7 +96,7 @@ def _apply_user_session(supabase: Client) -> None:
         try:
             supabase.auth.set_session(access_token, refresh_token)
         except Exception:
-            pass
+            logger.warning("failed to bind auth session to supabase client", exc_info=True)
 
     if access_token:
         supabase.postgrest.auth(access_token)

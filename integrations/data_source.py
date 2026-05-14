@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import re
 import socket
@@ -19,6 +20,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from http.client import RemoteDisconnected
 from pathlib import Path
@@ -33,6 +35,8 @@ from integrations.tickflow_notice import (
     is_tickflow_rate_limited_error,
     record_tickflow_limit_event,
 )
+
+logger = logging.getLogger(__name__)
 
 _BAOSTOCK_LOGGED = False
 _BAOSTOCK_EXIT_HOOKED = False
@@ -316,68 +320,79 @@ def _normalize_spot_turnover(
     return (None, None, False)
 
 
+def _fetch_spot_dataframe():
+    import akshare as ak
+
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(ak.stock_zh_a_spot_em)
+        df = fut.result(timeout=max(_SPOT_SNAPSHOT_TIMEOUT_SECONDS, 1.0))
+    if df is None or df.empty:
+        raise RuntimeError("spot snapshot empty")
+    return df
+
+
+def _parse_spot_dataframe(df) -> dict[str, dict[str, float | None]]:
+    code_col = "代码"
+    if code_col not in df.columns:
+        fallback_cols = [c for c in df.columns if "代码" in str(c)]
+        if fallback_cols:
+            code_col = str(fallback_cols[0])
+        else:
+            raise RuntimeError("spot snapshot code column missing")
+
+    spot_map: dict[str, dict[str, float | None]] = {}
+    for _, row in df.iterrows():
+        symbol = _normalize_spot_symbol(row.get(code_col))
+        if not symbol:
+            continue
+        close_v = _to_float_or_none(_pick_first(row, ("最新价", "最新", "现价", "收盘")))
+        if close_v is None or close_v <= 0:
+            continue
+        open_v = _to_float_or_none(_pick_first(row, ("今开", "开盘")))
+        high_v = _to_float_or_none(_pick_first(row, ("最高",)))
+        low_v = _to_float_or_none(_pick_first(row, ("最低",)))
+        volume_raw = _to_float_or_none(_pick_first(row, ("成交量", "总手", "总量")))
+        amount_raw = _to_float_or_none(_pick_first(row, ("成交额", "金额")))
+        volume_v, amount_v, turnover_unit_ok = _normalize_spot_turnover(
+            close_v=close_v,
+            volume_v=volume_raw,
+            amount_v=amount_raw,
+        )
+        pct_v = _to_float_or_none(_pick_first(row, ("涨跌幅", "涨跌幅%")))
+        spot_map[symbol] = {
+            "open": open_v,
+            "high": high_v,
+            "low": low_v,
+            "close": close_v,
+            "volume": volume_v,
+            "amount": amount_v,
+            "pct_chg": pct_v,
+            "turnover_unit_ok": 1.0 if turnover_unit_ok else 0.0,
+        }
+    if not spot_map:
+        raise RuntimeError("spot snapshot parsed empty")
+    return spot_map
+
+
+def _spot_cache_valid(force_refresh: bool, now_ts: float) -> bool:
+    return (
+        not force_refresh
+        and bool(_SPOT_SNAPSHOT_MAP)
+        and (now_ts - _SPOT_SNAPSHOT_TS) < max(_SPOT_SNAPSHOT_TTL_SECONDS, 1)
+    )
+
+
 def _load_spot_snapshot_map(force_refresh: bool = False) -> dict[str, dict[str, float | None]]:
     global _SPOT_SNAPSHOT_TS, _SPOT_SNAPSHOT_MAP
-    now_ts = time.time()
+    if _spot_cache_valid(force_refresh, time.time()):
+        return _SPOT_SNAPSHOT_MAP
     with _SPOT_SNAPSHOT_LOCK:
-        if (
-            not force_refresh
-            and _SPOT_SNAPSHOT_MAP
-            and (now_ts - _SPOT_SNAPSHOT_TS) < max(_SPOT_SNAPSHOT_TTL_SECONDS, 1)
-        ):
+        now_ts = time.time()
+        if _spot_cache_valid(force_refresh, now_ts):
             return _SPOT_SNAPSHOT_MAP
-
         try:
-            import akshare as ak
-
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(ak.stock_zh_a_spot_em)
-                df = fut.result(timeout=max(_SPOT_SNAPSHOT_TIMEOUT_SECONDS, 1.0))
-            if df is None or df.empty:
-                raise RuntimeError("spot snapshot empty")
-
-            code_col = "代码"
-            if code_col not in df.columns:
-                fallback_cols = [c for c in df.columns if "代码" in str(c)]
-                if fallback_cols:
-                    code_col = str(fallback_cols[0])
-                else:
-                    raise RuntimeError("spot snapshot code column missing")
-
-            spot_map: dict[str, dict[str, float | None]] = {}
-            for _, row in df.iterrows():
-                symbol = _normalize_spot_symbol(row.get(code_col))
-                if not symbol:
-                    continue
-                close_v = _to_float_or_none(_pick_first(row, ("最新价", "最新", "现价", "收盘")))
-                if close_v is None or close_v <= 0:
-                    continue
-                open_v = _to_float_or_none(_pick_first(row, ("今开", "开盘")))
-                high_v = _to_float_or_none(_pick_first(row, ("最高",)))
-                low_v = _to_float_or_none(_pick_first(row, ("最低",)))
-                volume_raw = _to_float_or_none(_pick_first(row, ("成交量", "总手", "总量")))
-                amount_raw = _to_float_or_none(_pick_first(row, ("成交额", "金额")))
-                volume_v, amount_v, turnover_unit_ok = _normalize_spot_turnover(
-                    close_v=close_v,
-                    volume_v=volume_raw,
-                    amount_v=amount_raw,
-                )
-                pct_v = _to_float_or_none(_pick_first(row, ("涨跌幅", "涨跌幅%")))
-
-                spot_map[symbol] = {
-                    "open": open_v,
-                    "high": high_v,
-                    "low": low_v,
-                    "close": close_v,
-                    "volume": volume_v,
-                    "amount": amount_v,
-                    "pct_chg": pct_v,
-                    "turnover_unit_ok": 1.0 if turnover_unit_ok else 0.0,
-                }
-            if not spot_map:
-                raise RuntimeError("spot snapshot parsed empty")
-
-            _SPOT_SNAPSHOT_MAP = spot_map
+            df = _fetch_spot_dataframe()
+            _SPOT_SNAPSHOT_MAP = _parse_spot_dataframe(df)
             _SPOT_SNAPSHOT_TS = now_ts
             return _SPOT_SNAPSHOT_MAP
         except FuturesTimeoutError:
@@ -429,10 +444,7 @@ def _fetch_stock_akshare(symbol: str, start: str, end: str, adjust: str) -> pd.D
 
 
 def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
-    if symbol.startswith(_SH_PREFIXES):
-        bs_code = f"sh.{symbol}"
-    else:
-        bs_code = f"sz.{symbol}"
+    bs_code = f"sh.{symbol}" if symbol.startswith(_SH_PREFIXES) else f"sz.{symbol}"
     start_dash = f"{start[:4]}-{start[4:6]}-{start[6:]}"
     end_dash = f"{end[:4]}-{end[4:6]}-{end[6:]}"
     with _BAOSTOCK_LOCK:
@@ -489,10 +501,8 @@ def _baostock_logout_on_exit() -> None:
         bs = _BAOSTOCK_MODULE
         if not _BAOSTOCK_LOGGED or bs is None:
             return
-        try:
+        with suppress(BaseException):
             bs.logout()
-        except BaseException:
-            pass
         _BAOSTOCK_LOGGED = False
 
 
@@ -550,10 +560,8 @@ def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
         pathlib.Path.mkdir = orig_mkdir
 
     cache_dir = Path(tempfile.gettempdir()) / "efinance-cache"
-    try:
+    with suppress(Exception):
         cache_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
     ef_cfg.DATA_DIR = cache_dir
     ef_cfg.SEARCH_RESULT_CACHE_PATH = str(cache_dir / "search-cache.json")
 
@@ -563,10 +571,7 @@ def _fetch_stock_efinance(symbol: str, start: str, end: str) -> pd.DataFrame:
     # fqt: 0 不复权, 1 前复权, 2 后复权
     fqt = 1  # 默认前复权
     result = ef.stock.get_quote_history(symbol, beg=start, end=end, klt=101, fqt=fqt)
-    if isinstance(result, dict):
-        df = result.get(str(symbol))
-    else:
-        df = result
+    df = result.get(str(symbol)) if isinstance(result, dict) else result
     if df is None or (hasattr(df, "empty") and df.empty):
         raise RuntimeError("efinance empty")
 
@@ -647,7 +652,7 @@ def _fetch_stock_tushare(symbol: str, start: str, end: str, adjust: str) -> pd.D
             if df_no_adj is not None and not df_no_adj.empty:
                 raise RuntimeError("tushare empty (qfq auth limit?)")
         except Exception:
-            pass
+            logger.debug("tushare qfq diagnosis probe failed", exc_info=True)
         raise RuntimeError("tushare empty")
 
     df = df.rename(
@@ -1126,10 +1131,8 @@ def _atomic_write_json(path: Path, payload: object) -> None:
         tmp_name = None
     finally:
         if tmp_name and os.path.exists(tmp_name):
-            try:
+            with suppress(Exception):
                 os.remove(tmp_name)
-            except Exception:
-                pass
 
 
 def _ts_code_to_symbol(ts_code: str) -> str:

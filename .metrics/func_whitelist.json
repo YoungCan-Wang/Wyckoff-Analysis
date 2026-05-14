@@ -64,7 +64,6 @@
   "core/wyckoff_events.py::classify_wyckoff_event": 103,
   "core/wyckoff_v2_structure.py::identify_trading_range": 75,
   "core/wyckoff_v2_structure.py::detect_structure_triggers": 96,
-  "integrations/data_source.py::_load_spot_snapshot_map": 73,
   "integrations/data_source.py::_fetch_stock_baostock": 53,
   "integrations/data_source.py::_fetch_stock_efinance": 100,
   "integrations/data_source.py::_fetch_stock_tushare": 60,

@@ -4,8 +4,11 @@ Agent 跨会话记忆 — 会话摘要提取 + 记忆注入。
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _SESSION_SUMMARY_PROMPT = """请将以下对话提取为结构化记忆（中文，≤300字）：
 1. 讨论了哪些股票（代码+结论）
@@ -106,7 +109,7 @@ def save_session_summary(messages: list[dict], provider: Any) -> None:
         if session_text and len(session_text) >= 10:
             save_memory("session", session_text, codes=codes_str)
     except Exception:
-        pass
+        logger.debug("save session summary failed", exc_info=True)
 
 
 def build_memory_context(user_message: str) -> str:

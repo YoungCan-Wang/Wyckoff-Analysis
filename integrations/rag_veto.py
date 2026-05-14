@@ -138,7 +138,7 @@ def _fetch_news_akshare(code: str) -> list[dict[str, str]]:
                 if dt < cutoff:
                     continue
             except Exception:
-                pass
+                logger.debug("failed to parse news publish time", exc_info=True)
         results.append(
             {
                 "title": str(row.get("新闻标题", "")).strip(),
@@ -159,7 +159,7 @@ def _parse_semantic_judgement(raw: str) -> tuple[bool | None, str]:
         if isinstance(v, bool):
             return (v, reason)
     except Exception:
-        pass
+        logger.debug("failed to parse semantic judgement JSON", exc_info=True)
 
     m = re.search(r'"is_extreme_negative"\s*:\s*(true|false)', text, flags=re.IGNORECASE)
     if m:

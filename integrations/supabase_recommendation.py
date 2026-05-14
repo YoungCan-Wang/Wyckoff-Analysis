@@ -4,6 +4,7 @@ Supabase 形态复盘数据存取模块
 
 from __future__ import annotations
 
+import logging
 import os
 from bisect import bisect_right
 from datetime import UTC, date, datetime, timedelta
@@ -15,6 +16,8 @@ import pandas as pd
 from core.constants import TABLE_RECOMMENDATION_TRACKING
 from integrations.supabase_base import create_admin_client as _get_supabase_admin_client
 from integrations.supabase_base import is_admin_configured as is_supabase_configured
+
+logger = logging.getLogger(__name__)
 
 
 def _fetch_all_tracking_records(client, select_expr: str = "*", page_size: int = 1000) -> list[dict[str, Any]]:
@@ -190,7 +193,7 @@ def _parse_write_date(record: dict[str, Any]) -> date | None:
                 return datetime.strptime(s, "%Y%m%d").date()
             return datetime.fromisoformat(s).date()
         except Exception:
-            pass
+            logger.debug("failed to parse created_at date: %s", created, exc_info=True)
     return None
 
 
@@ -243,27 +246,22 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
     try:
         client = _get_supabase_admin_client()
 
-        # 预读已有记录（按 code 聚合），用于维护 recommend_count。
-        # 规则：仅当 recommend_date 变化时才 +1，同日重跑不重复累计。
         existing_counts: dict[int, int] = {}
         existing_code_dates: dict[int, set[int]] = {}
         try:
-            resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("code,recommend_count,recommend_date").execute()
-            for row in resp.data or []:
+            all_rows = _fetch_all_tracking_records(client, "code,recommend_count,recommend_date")
+            for row in all_rows:
                 try:
                     code_int = int(row.get("code"))
-                except Exception:
+                except (TypeError, ValueError):
                     continue
-                try:
-                    cnt = int(row.get("recommend_count") or 1)
-                except Exception:
-                    cnt = 1
+                cnt = int(row.get("recommend_count") or 1) if row.get("recommend_count") else 1
                 existing_counts[code_int] = max(existing_counts.get(code_int, 0), cnt)
                 try:
                     d = int(row.get("recommend_date"))
                     existing_code_dates.setdefault(code_int, set()).add(d)
-                except Exception:
-                    pass
+                except (TypeError, ValueError):
+                    logger.debug("invalid recommend_date for code %s", row.get("code"), exc_info=True)
         except Exception:
             existing_counts = {}
             existing_code_dates = {}
@@ -397,6 +395,35 @@ def mark_ai_recommendations(recommend_date: int, ai_codes: list[str]) -> bool:
         return False
 
 
+def _resolve_price(code_str, price_map, history_fn, spot_fn) -> float | None:
+    if price_map:
+        try:
+            px = float(price_map.get(code_str) or 0)
+        except (TypeError, ValueError):
+            px = 0.0
+        if px > 0:
+            return px
+    px = history_fn(code_str)
+    if px is not None:
+        return px
+    return spot_fn(code_str)
+
+
+def _build_price_update_row(record: dict, new_price: float, code_str: str, now_iso: str) -> dict:
+    row: dict = {"id": record["id"], "current_price": new_price, "updated_at": now_iso}
+    initial_price = float(record.get("initial_price") or 0.0)
+    if initial_price > 0:
+        row["change_pct"] = round((new_price - initial_price) / initial_price * 100.0, 2)
+    else:
+        rec_date = _parse_recommend_date(record.get("recommend_date"))
+        backfill = _resolve_initial_price_from_history(code_str, rec_date) if rec_date else 0.0
+        if backfill <= 0:
+            backfill = new_price
+        row["initial_price"] = backfill
+        row["change_pct"] = round((new_price - backfill) / backfill * 100.0, 2) if backfill > 0 else 0.0
+    return row
+
+
 def sync_all_tracking_prices(
     price_map: dict[str, float] | None = None,
 ) -> int:
@@ -489,54 +516,35 @@ def sync_all_tracking_prices(
             except Exception:
                 return None
 
+        all_records = _fetch_all_tracking_records(client, "*")
+        records_by_code: dict[int, list[dict]] = {}
+        for rec in all_records:
+            try:
+                c = int(rec.get("code"))
+            except (TypeError, ValueError):
+                continue
+            records_by_code.setdefault(c, []).append(rec)
+
         updated_count = 0
+        upsert_batch: list[dict] = []
+        now_iso = datetime.now(UTC).isoformat()
+
         for code_int in unique_codes:
             code_str = f"{code_int:06d}"
-            new_current_price: float | None = None
-
-            if price_map:
-                raw_px = price_map.get(code_str)
-                try:
-                    parsed_px = float(raw_px) if raw_px is not None else 0.0
-                except Exception:
-                    parsed_px = 0.0
-                if parsed_px > 0:
-                    new_current_price = parsed_px
-
-            if new_current_price is None:
-                new_current_price = _price_from_history(code_str)
-            if new_current_price is None:
-                new_current_price = _price_from_spot(code_str)
+            new_current_price = _resolve_price(code_str, price_map, _price_from_history, _price_from_spot)
             if new_current_price is None:
                 continue
+            for record in records_by_code.get(code_int, []):
+                row = _build_price_update_row(record, new_current_price, code_str, now_iso)
+                upsert_batch.append(row)
+                if len(upsert_batch) >= 50:
+                    client.table(TABLE_RECOMMENDATION_TRACKING).upsert(upsert_batch, on_conflict="id").execute()
+                    updated_count += len(upsert_batch)
+                    upsert_batch = []
 
-            # 该股票可能有多条推荐记录（不同日期），逐条更新价格与涨跌幅
-            rec_resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("*").eq("code", code_int).execute()
-            for record in rec_resp.data:
-                initial_price = float(record.get("initial_price") or 0.0)
-                rec_date = _parse_recommend_date(record.get("recommend_date"))
-                update_payload = {
-                    "current_price": new_current_price,
-                    "updated_at": datetime.now(UTC).isoformat(),
-                }
-                if initial_price > 0:
-                    change_pct = (new_current_price - initial_price) / initial_price * 100.0
-                    update_payload["change_pct"] = round(change_pct, 2)
-                else:
-                    backfill_price = _resolve_initial_price_from_history(code_str, rec_date) if rec_date else 0.0
-                    if backfill_price <= 0:
-                        backfill_price = new_current_price
-                    update_payload["initial_price"] = backfill_price
-                    update_payload["change_pct"] = (
-                        round(
-                            (new_current_price - backfill_price) / backfill_price * 100.0,
-                            2,
-                        )
-                        if backfill_price > 0
-                        else 0.0
-                    )
-                client.table(TABLE_RECOMMENDATION_TRACKING).update(update_payload).eq("id", record["id"]).execute()
-                updated_count += 1
+        if upsert_batch:
+            client.table(TABLE_RECOMMENDATION_TRACKING).upsert(upsert_batch, on_conflict="id").execute()
+            updated_count += len(upsert_batch)
 
         if unique_codes and updated_count == 0:
             print(

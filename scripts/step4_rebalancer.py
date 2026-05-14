@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -51,6 +52,8 @@ from tools.data_fetcher import (
 from tools.report_builder import _extract_json_block
 from utils.notify import send_to_telegram
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
+
+logger = logging.getLogger(__name__)
 
 _append_spot_bar_if_needed = partial(
     append_spot_bar_if_needed,
@@ -221,6 +224,7 @@ def _parse_float_like(raw: object) -> float | None:
             return None
         return float(text)
     except Exception:
+        logger.debug("_parse_float_like failed for %s", raw, exc_info=True)
         return None
 
 
@@ -252,7 +256,7 @@ def _load_market_signal_for_trade_date(trade_date: str) -> dict[str, object] | N
     try:
         return load_market_signal_daily(trade_date)
     except Exception as e:
-        print(f"[step4] 读取 market_signal_daily 失败: trade_date={trade_date}, err={e}")
+        logger.warning("读取 market_signal_daily 失败: trade_date=%s, err=%s", trade_date, e)
         return None
 
 
@@ -329,10 +333,7 @@ def _build_market_guardrail(
 
 def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
     text_norm = text.lower()
-    for keyword in keywords:
-        if keyword.lower() in text_norm:
-            return True
-    return False
+    return any(keyword.lower() in text_norm for keyword in keywords)
 
 
 def _normalize_track(raw: object) -> str:
@@ -632,7 +633,7 @@ class WyckoffOrderEngine:
                         effective_stop_loss = hard_stop
                         audit_parts.append(f"hard_stop_fixed_init({effective_stop_loss:.2f})")
                     elif prev_stop < hard_stop:
-                        # fixed 模式也不允许放宽已有更紧止损，最多只做风控兜底上调。
+                        # 固定止损模式只能抬高风险底线，不能放宽既有止损。
                         effective_stop_loss = hard_stop
                         audit_parts.append(f"hard_stop_fixed_raise({prev_stop:.2f}->{hard_stop:.2f})")
                     else:
@@ -1020,7 +1021,7 @@ def _calc_holding_trade_days(
     dates = pd.to_datetime(df["date"], errors="coerce").dropna().dt.date.tolist()
     if not dates:
         return None
-    dates = sorted(set(d for d in dates if d <= end_trade_date))
+    dates = sorted({d for d in dates if d <= end_trade_date})
     if not dates:
         return None
     entry_trade_date = next((d for d in dates if d >= buy_date), None)
@@ -1048,6 +1049,7 @@ def _fetch_latest_real_close(code: str, window) -> float | None:
                     continue
             return float(df.iloc[-1]["close"])
         except Exception:
+            logger.debug("%s fetch_latest_real_close failed (%s)", code, label, exc_info=True)
             continue
     return None
 
@@ -1152,7 +1154,6 @@ def _process_one_position(
                 cfg=FunnelConfig(),
             )
             diag_text = f"- {format_diagnostic_for_llm(diag)}\n"
-            # 将诊断结果传入 payload 生成，让 AI 看到退出预警
             payload = generate_stock_payload(
                 stock_code=pos.code,
                 stock_name=pos.name,
@@ -1165,6 +1166,7 @@ def _process_one_position(
                 exit_reason=diag.exit_reason,
             )
         except Exception:
+            logger.debug("%s diagnostic formatting failed, using fallback", pos.code, exc_info=True)
             diag_text = ""
             payload = generate_stock_payload(
                 stock_code=pos.code,
@@ -1209,7 +1211,7 @@ def _format_position_payload(
                 meta_block, fail_msg, val, close, atr, _ = future.result()
             except Exception as e:
                 failures.append(f"{pos.code} {pos.name}: 数据处理异常 {e}")
-                print(f"[step4] ⚠ 持仓 {pos.code} 处理异常: {e}")
+                logger.warning("持仓 %s 处理异常: %s", pos.code, e, exc_info=True)
                 continue
             if fail_msg:
                 failures.append(fail_msg)
@@ -1337,6 +1339,7 @@ def _parse_confidence_like(v: object) -> float | None:
         if 1.0 < x <= 100.0:
             return x / 100.0
     except Exception:
+        logger.debug("_parse_confidence_like failed for %s", v, exc_info=True)
         return None
     return None
 
@@ -1380,22 +1383,21 @@ def _parse_decisions(
                 entry_zone_min = min(z1, z2)
                 entry_zone_max = max(z1, z2)
             except Exception:
-                entry_zone_min = None
-                entry_zone_max = None
+                logger.debug("entry_zone parse failed for %s", code, exc_info=True)
 
         stop_loss = None
         if item.get("stop_loss") is not None:
             try:
                 stop_loss = float(item.get("stop_loss"))
             except Exception:
-                stop_loss = None
+                logger.debug("stop_loss parse failed for %s", code, exc_info=True)
 
         trim_ratio = None
         if item.get("trim_ratio") is not None:
             try:
                 trim_ratio = float(item.get("trim_ratio"))
             except Exception:
-                trim_ratio = None
+                logger.debug("trim_ratio parse failed for %s", code, exc_info=True)
 
         confidence = _parse_confidence_like(item.get("confidence"))
 
@@ -1555,7 +1557,6 @@ def _render_trade_ticket(
                 lines.append(f"  分层：{t.chase_profile}")
             if t.wyckoff_context:
                 lines.append(f"  结构：{t.wyckoff_context}")
-            # ---> 新增这一行红色高亮提示 <---
             if t.max_entry_price is not None:
                 lines.append(f"  🛑 【防追高限价】明日开盘价若 > {t.max_entry_price:.2f} 元，请放弃买入！")
 
@@ -1608,7 +1609,7 @@ def run(
     try:
         portfolio, portfolio_source, state_signature = load_portfolio_from_supabase(portfolio_id)
     except Exception as e:
-        print(f"[step4] 持仓读取失败: {e}")
+        logger.error("持仓读取失败: %s", e, exc_info=True)
         return (True, "skipped_invalid_portfolio")
     print(f"[step4] 持仓来源: {portfolio_source} | portfolio_id={portfolio_id} | state_sig={state_signature or '-'}")
     from cli.progress import report_progress
@@ -1749,12 +1750,12 @@ def run(
             max_output_tokens=STEP4_MAX_OUTPUT_TOKENS,
         )
     except Exception as e:
-        print(f"[step4] 模型调用失败: {e}")
+        logger.error("模型调用失败: %s", e, exc_info=True)
         return (False, "llm_failed")
 
     market_view, decisions, parse_err = _parse_decisions(raw, allowed_codes, name_map)
     if parse_err:
-        print(f"[step4] 决策 JSON 解析失败: {parse_err}")
+        logger.error("决策 JSON 解析失败: %s", parse_err)
         return (False, "llm_failed")
     if not decisions:
         print("[step4] 模型未产出有效决策，跳过")
@@ -1816,7 +1817,7 @@ def run(
             else:
                 atr_v = _calc_atr(df_qfq, STEP4_ATR_PERIOD)
         except Exception as e:
-            print(f"[step4] {d_code} ATR 计算异常: {e}")
+            logger.warning("%s ATR 计算异常: %s", d_code, e)
         px = _fetch_latest_real_close(d_code, window)
         return (d_code, atr_v, px)
 
@@ -1851,7 +1852,7 @@ def run(
         if update_position_stops(portfolio_id, updates):
             print(f"[step4] 已更新 {len(updates)} 个持仓的止损价 | portfolio_id={portfolio_id}")
         else:
-            print(f"[step4] 持仓止损价更新失败 | portfolio_id={portfolio_id}")
+            logger.error("持仓止损价更新失败 | portfolio_id=%s", portfolio_id)
 
     run_id = datetime.now(CN_TZ).strftime("%Y%m%d_%H%M%S") + "_" + str(uuid4())[:8]
     if state_signature:
@@ -1915,7 +1916,7 @@ def run(
         if cancelled:
             print(f"[step4] 已作废同日旧 AI 订单: cancelled={cancelled}, portfolio_id={portfolio_id}")
     else:
-        print(f"[step4] AI 订单记录写入失败（已忽略，不阻断流程） | portfolio_id={portfolio_id}")
+        logger.warning("AI 订单记录写入失败（已忽略，不阻断流程） | portfolio_id=%s", portfolio_id)
 
     positions_value = max(float(total_equity) - float(free_cash_after), 0.0)
     if upsert_daily_nav(
@@ -1927,7 +1928,7 @@ def run(
     ):
         print(f"[step4] 已写入 {portfolio_id} 日净值快照: {trade_date}")
     else:
-        print(f"[step4] {portfolio_id} 日净值快照写入失败（已忽略）")
+        logger.warning("%s 日净值快照写入失败（已忽略）", portfolio_id)
 
     print(
         f"[step4] 交易工单发送成功: decisions={len(decisions)}, tickets={len(tickets)}, "

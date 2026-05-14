@@ -8,6 +8,7 @@ Supabase 最新交易日市场信号读写
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -16,6 +17,8 @@ from supabase import Client
 from core.constants import TABLE_MARKET_SIGNAL_DAILY
 from integrations.supabase_base import create_admin_client as _get_supabase_admin_client
 from integrations.supabase_base import is_admin_configured as is_supabase_admin_configured
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_trade_date(raw: Any) -> str:
@@ -385,7 +388,7 @@ def _iter_market_signal_clients(client: Client | None = None) -> list[Client]:
         try:
             clients.append(_get_supabase_admin_client())
         except Exception:
-            pass
+            logger.debug("failed to create supabase admin client", exc_info=True)
     try:
         from integrations.supabase_client import get_supabase_client
 
@@ -393,7 +396,7 @@ def _iter_market_signal_clients(client: Client | None = None) -> list[Client]:
         if session_client is not None:
             clients.append(session_client)
     except Exception:
-        pass
+        logger.debug("failed to get supabase session client", exc_info=True)
     return clients
 
 

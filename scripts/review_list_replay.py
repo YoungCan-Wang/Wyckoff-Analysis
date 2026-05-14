@@ -18,8 +18,11 @@ import pandas as pd
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.funnel_pipeline import TRIGGER_LABELS, run_funnel_job
+import contextlib
+
+from core.funnel_pipeline import TRIGGER_LABELS
 from core.wyckoff_engine import FunnelConfig, _sorted_if_needed
+from scripts.wyckoff_funnel import run_funnel_job
 from utils.feishu import send_feishu_notification
 
 
@@ -252,10 +255,8 @@ def _explain_risk_reject(
 
     parts = [signal_label]
     if price is not None:
-        try:
+        with contextlib.suppress(Exception):
             parts.append(f"参考价={float(price):.2f}")
-        except Exception:
-            pass
     if trigger_labels:
         parts.append(f"L4命中={trigger_labels}")
     if reason:
@@ -273,10 +274,7 @@ def _normalize_recommend_date(raw: object) -> str:
     if not s:
         return "日期未知"
     try:
-        if len(s) == 8 and s.isdigit():
-            d = pd.to_datetime(s, format="%Y%m%d")
-        else:
-            d = pd.to_datetime(s)
+        d = pd.to_datetime(s, format="%Y%m%d") if len(s) == 8 and s.isdigit() else pd.to_datetime(s)
         if pd.isna(d):
             return s
         return d.strftime("%Y-%m-%d")
@@ -331,10 +329,8 @@ def _format_recommendation_history(code: str, lookup: dict[str, list[dict]], loa
     dates = sorted({_normalize_recommend_date(row.get("recommend_date")) for row in records}, reverse=True)
     parsed_counts = []
     for row in records:
-        try:
+        with contextlib.suppress(Exception):
             parsed_counts.append(int(row.get("recommend_count") or 0))
-        except Exception:
-            pass
     count = max([len(dates), *parsed_counts]) if parsed_counts else len(dates)
     return f"推荐记录: {'、'.join(dates)} 被推荐过；累计推荐{count}次"
 

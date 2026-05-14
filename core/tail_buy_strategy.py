@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 DECISION_BUY = "BUY"
@@ -509,7 +512,7 @@ def parse_llm_decision(raw_text: str) -> dict[str, Any] | None:
     try:
         parsed = json.loads(text)
     except Exception:
-        pass
+        logger.debug("Direct JSON parse failed, trying regex extraction", exc_info=True)
     if parsed is None:
         match = re.search(r"\{[\s\S]*\}", text)
         if match:

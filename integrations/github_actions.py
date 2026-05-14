@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import uuid
 import zipfile
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_OWNER = "YoungCan-Wang"
 DEFAULT_REPO = "Wyckoff-Analysis"
@@ -48,7 +51,7 @@ def _secrets_get(name: str, default: str = "") -> str:
         if hasattr(st, "secrets") and name in st.secrets:
             return str(st.secrets.get(name) or "").strip()
     except Exception:
-        pass
+        logger.debug("streamlit secrets lookup failed for %s", name, exc_info=True)
     return default
 
 

@@ -97,9 +97,11 @@ class TestRunJob:
         from app.agent_jobs import _run_job, _store_get
 
         fake_result = {"request_id": "test_rj_001", "ok": True, "job_kind": "funnel_screen"}
-        with patch("scripts.web_background_job._run_funnel_screen", return_value=fake_result):
-            with patch("scripts.web_background_job._apply_funnel_env"):
-                _run_job("funnel_screen", "test_rj_001", {})
+        with (
+            patch("scripts.web_background_job._run_funnel_screen", return_value=fake_result),
+            patch("scripts.web_background_job._apply_funnel_env"),
+        ):
+            _run_job("funnel_screen", "test_rj_001", {})
 
         job = _store_get("test_rj_001")
         assert job is not None

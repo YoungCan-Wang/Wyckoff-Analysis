@@ -26,7 +26,9 @@ def _build_ctx():
 
     # 如果没有注入环境变量，尝试读取本地的 CLI 登录态
     if not state["access_token"]:
-        try:
+        from contextlib import suppress
+
+        with suppress(Exception):
             from cli.auth import load_session
 
             sess = load_session()
@@ -34,8 +36,6 @@ def _build_ctx():
                 state["user_id"] = sess.get("user", {}).get("id", "")
                 state["access_token"] = sess.get("access_token", "")
                 state["refresh_token"] = sess.get("refresh_token", "")
-        except Exception:
-            pass
 
     return ToolContext(state=state)
 
@@ -254,7 +254,7 @@ def run_funnel_simulation(board: Literal["all", "main_chinext"] = "all") -> dict
     os.environ["FUNNEL_POOL_BOARD"] = board_name
     os.environ["FUNNEL_EXECUTOR_MODE"] = "thread"
 
-    from core.funnel_pipeline import run_funnel
+    from scripts.wyckoff_funnel import run as run_funnel
 
     try:
         ok, symbols, bench_ctx, details = run_funnel("", notify=False, return_details=True)

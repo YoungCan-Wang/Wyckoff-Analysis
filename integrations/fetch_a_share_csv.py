@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import re
 import time
@@ -15,6 +16,8 @@ import pandas as pd
 import requests
 
 from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -47,7 +50,7 @@ def _atomic_json_dump(path: Path, payload: object) -> None:
             try:
                 os.remove(tmp_name)
             except Exception:
-                pass
+                logger.debug("failed to remove temp file %s", tmp_name, exc_info=True)
 
 
 def _trade_dates() -> list[date]:
@@ -152,7 +155,7 @@ def _trade_dates() -> list[date]:
                 if cached:
                     return cached
     except Exception:
-        pass
+        logger.debug("trade dates cache read failed", exc_info=True)
 
     last_err: Exception | None = None
     # tushare 优先；失败后回退到 akshare/sina。
@@ -266,8 +269,7 @@ def get_all_stocks() -> list[dict[str, str]]:
                 if cached:
                     return cached
     except Exception:
-        # 缓存读取异常不应阻塞后续网络尝试
-        pass
+        logger.debug("stock list cache read failed", exc_info=True)
 
     # 1. tushare 优先
     try:
@@ -288,7 +290,7 @@ def get_all_stocks() -> list[dict[str, str]]:
             try:
                 _atomic_json_dump(cache_path, records)
             except Exception:
-                pass
+                logger.debug("failed to write tushare stock list cache", exc_info=True)
             return records
     except Exception as e:
         print(f"Tushare error fetching stock list: {e}. Trying akshare...")
@@ -304,7 +306,7 @@ def get_all_stocks() -> list[dict[str, str]]:
         try:
             _atomic_json_dump(cache_path, records)
         except Exception:
-            pass
+            logger.debug("failed to write akshare stock list cache", exc_info=True)
 
         return records
     except Exception as e:
@@ -354,11 +356,8 @@ def get_stocks_by_board(board_name: str = "all") -> list[dict[str, str]]:
         elif board == "bse":  # 北交所
             if code.startswith(("43", "83", "87", "88", "92")):
                 out.append(s)
-        elif board == "main":  # 主板 (沪深)
-            # 沪市主板: 600, 601, 603, 605
-            # 深市主板: 000, 001, 002, 003
-            if code.startswith(("600", "601", "603", "605", "000", "001", "002", "003")):
-                out.append(s)
+        elif board == "main" and code.startswith(("600", "601", "603", "605", "000", "001", "002", "003")):
+            out.append(s)
     return out
 
 
@@ -370,10 +369,7 @@ def _fetch_hist(symbol: str, window: TradingWindow, adjust: str, *, user_id: str
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-        if get_script_run_ctx() is None:
-            context = "background"
-        else:
-            context = "web"
+        context = "background" if get_script_run_ctx() is None else "web"
     except Exception:
         context = "background"
 

@@ -15,12 +15,15 @@ Tushare Pro 客户端封装（含全局限流）
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 import warnings
 from threading import Lock
 
 # ── 全局滑动窗口限流器（进程级单例，线程安全） ──
+logger = logging.getLogger(__name__)
+
 _RATE_LIMIT = int(os.getenv("TUSHARE_RATE_LIMIT", "400"))  # 次/分钟
 _call_times: list[float] = []
 _call_lock = Lock()
@@ -67,7 +70,7 @@ def get_pro():
 
         token = (st.session_state.get("tushare_token") or "").strip()
     except Exception:
-        pass
+        logger.debug("streamlit session unavailable for tushare token", exc_info=True)
 
     # 如果 session 中没有，再尝试从环境变量获取
     if not token:

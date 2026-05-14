@@ -401,12 +401,12 @@ def cancel_trade_orders(
         if exclude_run_id:
             query = query.neq("run_id", exclude_run_id)
         rows = query.execute().data or []
-        active_rows = [row for row in rows if _is_active_trade_order_status(row.get("status"))]
-        for row in active_rows:
-            (client.table(TABLE_TRADE_ORDERS).update({"status": "CANCELLED"}).eq("id", row.get("id")).execute())
-        return len(active_rows)
+        active_ids = [row["id"] for row in rows if _is_active_trade_order_status(row.get("status"))]
+        if active_ids:
+            client.table(TABLE_TRADE_ORDERS).update({"status": "CANCELLED"}).in_("id", active_ids).execute()
+        return len(active_ids)
     except Exception:
-        logger.debug("[supabase_portfolio] cancel_trade_orders failed: {e}")
+        logger.debug("[supabase_portfolio] cancel_trade_orders failed")
         return 0
 
 

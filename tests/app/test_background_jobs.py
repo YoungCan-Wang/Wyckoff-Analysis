@@ -89,13 +89,15 @@ class TestBackgroundJobsAgentModeSwitch:
         """AGENT_MODE=1 时，submit 走 agent_jobs。"""
         _mock_st.session_state["user"] = {"id": "test-user-001"}
 
-        with patch.dict(os.environ, {"AGENT_MODE": "1"}):
-            with patch("app.agent_jobs.submit_agent_job", return_value="funnel_screen_abc123") as mock_submit:
-                from app.background_jobs import submit_background_job
+        with (
+            patch.dict(os.environ, {"AGENT_MODE": "1"}),
+            patch("app.agent_jobs.submit_agent_job", return_value="funnel_screen_abc123") as mock_submit,
+        ):
+            from app.background_jobs import submit_background_job
 
-                rid = submit_background_job("funnel_screen", {"board": "all"}, state_key="test_key")
-                assert rid == "funnel_screen_abc123"
-                mock_submit.assert_called_once()
+            rid = submit_background_job("funnel_screen", {"board": "all"}, state_key="test_key")
+            assert rid == "funnel_screen_abc123"
+            mock_submit.assert_called_once()
 
     def test_submit_gh_actions_mode(self):
         """AGENT_MODE 关闭时，submit 走 trigger_web_job。"""

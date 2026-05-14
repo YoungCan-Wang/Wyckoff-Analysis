@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import logging
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -49,17 +50,19 @@ from integrations.data_source import fetch_index_hist, fetch_market_cap_map, fet
 from integrations.fetch_a_share_csv import _normalize_symbols, get_stocks_by_board
 from tools.funnel_config import apply_funnel_cfg_overrides as _shared_apply_funnel_cfg_overrides
 
-DEFAULT_HOLD_DAYS = 30  # 网格优化：30天夏普2.493 > 25天1.967 > 20天1.413
+logger = logging.getLogger(__name__)
+
+DEFAULT_HOLD_DAYS = 30
 DEFAULT_EXIT_MODE = "sltp"
-DEFAULT_STOP_LOSS_PCT = -7.0  # 网格优化最佳：SL7/TP18（夏普1.928 > SL6/TP15的1.679 > SL8/TP20的1.466）
+DEFAULT_STOP_LOSS_PCT = -7.0
 DEFAULT_TAKE_PROFIT_PCT = 18.0
 DEFAULT_TRAILING_STOP_PCT = 0.0  # 0 = 不启用移动止盈；如 -5.0 表示从最高点回撤 5% 卖出
 DEFAULT_TRAILING_ACTIVATE_PCT = 0.0  # 移动止盈激活门槛(%)，如 10.0 表示浮盈 ≥10% 后才启用移动止盈
 
-# ── ATR 模式常量（对齐实盘 step4_rebalancer） ──
+# ── ATR 模式常量：与实盘再平衡风控共用含义 ──
 DEFAULT_ATR_PERIOD = 14
-DEFAULT_ATR_MULTIPLIER = 2.0  # 实盘 STEP4_ATR_MULTIPLIER = 2.0
-DEFAULT_ATR_HARD_STOP_PCT = -9.0  # 极限止损地板(%)，实盘 STEP4_BUY_HARD_STOP_PCT = 9.0
+DEFAULT_ATR_MULTIPLIER = 2.0
+DEFAULT_ATR_HARD_STOP_PCT = -9.0  # 极限止损地板(%)
 DEFAULT_ATR_MAX_HOLD_DAYS = 120  # ATR 模式下最大持有天数（安全网）
 
 DEFAULT_USE_CURRENT_META = True
@@ -75,12 +78,10 @@ BACKTEST_CACHE_ONLY_FIRST = os.getenv("BACKTEST_CACHE_ONLY_FIRST", "").strip().l
     "on",
 }
 
-# ── 大盘水温仓位控制 ──
-# 回测数据显示 NEUTRAL 下策略盈利（+1.17%），CRASH/RISK_ON 下亏损严重。
-# 通过 regime 动态调节每日候选上限（相当于仓位控制），减少逆势开仓。
+# ── 大盘水温仓位控制：根据 regime 调节每日候选上限，减少逆势开仓。 ──
 REGIME_POSITION_RATIO: dict[str, float] = {
-    "NEUTRAL": 1.0,  # 震荡市 → 全仓（回测显示唯一盈利环境）
-    "RISK_ON": 0.2,  # 热点追涨期反转率高 → 轻仓试探（回测 Sharpe -0.88，大幅缩仓）
+    "NEUTRAL": 1.0,  # 震荡市 → 全仓
+    "RISK_ON": 0.2,  # 热点追涨期反转率高 → 轻仓试探
     "PANIC_REPAIR": 0.5,  # 恐慌修复 → 半仓试探
     "RISK_OFF": 0.2,  # 避险 → 轻仓（回测 Sharpe -0.48）
     "CRASH": 0.0,  # 崩盘 → 不开仓
@@ -184,6 +185,29 @@ def _build_universe(board: str, sample_size: int) -> tuple[list[str], dict[str, 
     return symbols, name_map
 
 
+_HIST_CANDIDATE_COLS = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
+
+
+def _process_hist_chunk(chunk: pd.DataFrame, symbols_filter: set[str] | None, out: dict[str, pd.DataFrame]) -> int:
+    chunk["symbol"] = chunk["symbol"].astype(str).str.strip().str.zfill(6)
+    if symbols_filter:
+        chunk = chunk[chunk["symbol"].isin(symbols_filter)]
+    if chunk.empty:
+        return 0
+    chunk["date"] = pd.to_datetime(chunk["date"], errors="coerce").dt.date
+    chunk = chunk.dropna(subset=["symbol", "date"])
+    for c in ["open", "high", "low", "close", "volume", "amount", "pct_chg"]:
+        if c in chunk.columns:
+            chunk[c] = pd.to_numeric(chunk[c], errors="coerce")
+    for sym, g in chunk.groupby("symbol", sort=False):
+        part = g.drop(columns=["symbol"]).reset_index(drop=True)
+        if sym in out:
+            out[sym] = pd.concat([out[sym], part], ignore_index=True)
+        else:
+            out[sym] = part
+    return len(chunk)
+
+
 def _load_snapshot_hist_map(
     snapshot_dir: Path,
     symbols_filter: set[str] | None = None,
@@ -191,40 +215,20 @@ def _load_snapshot_hist_map(
     full_path = snapshot_dir / "hist_full.csv.gz"
     if not full_path.exists():
         raise FileNotFoundError(f"snapshot missing file: {full_path}")
-    # Keep stock codes as strings; otherwise pandas may drop leading zeros (000001 -> 1).
-    df = pd.read_csv(
-        full_path,
-        compression="gzip",
-        low_memory=False,
-        dtype={"symbol": str},
-    )
-    if df.empty:
-        return {}, 0
-    if "symbol" not in df.columns:
+
+    keep_cols = [c for c in _HIST_CANDIDATE_COLS if c in pd.read_csv(full_path, compression="gzip", nrows=0).columns]
+    if "symbol" not in keep_cols:
         raise RuntimeError(f"snapshot file missing symbol column: {full_path}")
 
-    if symbols_filter:
-        df = df[df["symbol"].astype(str).isin(symbols_filter)]
-    if df.empty:
-        return {}, 0
-
-    keep_cols = [
-        c for c in ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "pct_chg"] if c in df.columns
-    ]
-    df = df[keep_cols].copy()
-    df["symbol"] = df["symbol"].astype(str).str.strip().str.zfill(6)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    df = df.dropna(subset=["symbol", "date"]).reset_index(drop=True)
-    for c in ["open", "high", "low", "close", "volume", "amount", "pct_chg"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
     out: dict[str, pd.DataFrame] = {}
-    for sym, g in df.groupby("symbol", sort=False):
-        one = g.drop(columns=["symbol"]).sort_values("date").reset_index(drop=True)
-        if not one.empty:
-            out[sym] = one
-    return out, int(len(df))
+    total_rows = 0
+    reader = pd.read_csv(full_path, compression="gzip", chunksize=200_000, dtype={"symbol": str}, usecols=keep_cols)
+    for chunk in reader:
+        total_rows += _process_hist_chunk(chunk, symbols_filter, out)
+
+    for sym in out:
+        out[sym] = out[sym].sort_values("date").reset_index(drop=True)
+    return out, total_rows
 
 
 def _load_snapshot_benchmark(
@@ -246,7 +250,7 @@ def _load_snapshot_benchmark(
 
 
 def _load_snapshot_name_map(snapshot_dir: Path) -> dict[str, str] | None:
-    """从快照加载股票列表 {code: name}，Phase 1 导出。"""
+    """从快照加载股票列表 {code: name}。"""
     p = snapshot_dir / "name_map.json"
     if not p.exists():
         return None
@@ -257,12 +261,12 @@ def _load_snapshot_name_map(snapshot_dir: Path) -> dict[str, str] | None:
         if isinstance(data, dict) and data:
             return {str(k): str(v) for k, v in data.items()}
     except Exception:
-        pass
+        logger.debug("failed to load snapshot name_map: %s", p, exc_info=True)
     return None
 
 
 def _load_snapshot_sector_map(snapshot_dir: Path) -> dict[str, str] | None:
-    """从快照加载行业映射 {code: industry}，Phase 1 导出。"""
+    """从快照加载行业映射 {code: industry}。"""
     p = snapshot_dir / "sector_map.json"
     if not p.exists():
         return None
@@ -273,12 +277,12 @@ def _load_snapshot_sector_map(snapshot_dir: Path) -> dict[str, str] | None:
         if isinstance(data, dict) and data:
             return {str(k): str(v) for k, v in data.items()}
     except Exception:
-        pass
+        logger.debug("failed to load snapshot sector_map: %s", p, exc_info=True)
     return None
 
 
 def _load_snapshot_market_cap_map(snapshot_dir: Path) -> dict[str, float] | None:
-    """从快照加载市值映射 {code: total_mv_亿}，Phase 1 导出。"""
+    """从快照加载市值映射 {code: total_mv_亿}。"""
     p = snapshot_dir / "market_cap_map.json"
     if not p.exists():
         return None
@@ -289,7 +293,7 @@ def _load_snapshot_market_cap_map(snapshot_dir: Path) -> dict[str, float] | None
         if isinstance(data, dict) and data:
             return {str(k): float(v) for k, v in data.items() if v is not None}
     except Exception:
-        pass
+        logger.debug("failed to load snapshot market_cap_map: %s", p, exc_info=True)
     return None
 
 
@@ -410,10 +414,10 @@ def _select_ai_input_codes(
         key=lambda c: -hit_score_map.get(c, 0.0),
     )
 
-    sos_hit_set = set(str(c).strip() for c, _ in result.triggers.get("sos", []))
-    evr_hit_set = set(str(c).strip() for c, _ in result.triggers.get("evr", []))
-    spring_hit_set = set(str(c).strip() for c, _ in result.triggers.get("spring", []))
-    lps_hit_set = set(str(c).strip() for c, _ in result.triggers.get("lps", []))
+    sos_hit_set = {str(c).strip() for c, _ in result.triggers.get("sos", [])}
+    evr_hit_set = {str(c).strip() for c, _ in result.triggers.get("evr", [])}
+    spring_hit_set = {str(c).strip() for c, _ in result.triggers.get("spring", [])}
+    lps_hit_set = {str(c).strip() for c, _ in result.triggers.get("lps", [])}
 
     if selection_mode in _LEGACY_SELECTION_MODES:
         track_map = {}
@@ -561,6 +565,19 @@ def _build_daily_ohlc_lookup(
     return out
 
 
+def _ensure_ohlc_lookup_cache(
+    records: list[TradeRecord],
+    all_df_map: dict[str, pd.DataFrame],
+    ohlc_cache: dict[str, dict[date, tuple[float, float, float, float]]],
+) -> None:
+    for record in records:
+        if record.code in ohlc_cache:
+            continue
+        df = all_df_map.get(record.code)
+        if df is not None and not df.empty:
+            ohlc_cache[record.code] = _build_daily_ohlc_lookup(df)
+
+
 def _calc_atr_from_ohlc(
     sorted_dates: list[date],
     day_ohlc: dict[date, tuple[float, float, float, float]],
@@ -663,10 +680,10 @@ def run_backtest(
         ]
         if sample_size > 0:
             symbols = symbols[:sample_size]
-        print(f"[backtest] 股票池={len(symbols)} (快照 name_map, board={board}, sample_size={sample_size})")
+        logger.info("股票池=%d (快照 name_map, board=%s, sample_size=%s)", len(symbols), board, sample_size)
     else:
         symbols, name_map = _build_universe(board=board, sample_size=sample_size)
-        print(f"[backtest] 股票池={len(symbols)} (网络拉取, board={board}, sample_size={sample_size})")
+        logger.info("股票池=%d (网络拉取, board=%s, sample_size=%s)", len(symbols), board, sample_size)
     from cli.progress import report_progress
 
     report_progress("股票池建立", f"共{len(symbols)}只", 0.0)
@@ -683,21 +700,19 @@ def run_backtest(
     snapshot_used = False
 
     if snapshot_dir is not None:
-        print(f"[backtest] 使用本地快照: {snapshot_dir}")
+        logger.info("使用本地快照: %s", snapshot_dir)
         all_df_map, snapshot_rows_total = _load_snapshot_hist_map(snapshot_dir, symbols_filter=set(symbols))
         bench_df = _load_snapshot_benchmark(snapshot_dir)
         snapshot_used = True
         if not all_df_map:
             raise RuntimeError(f"快照无可用历史数据: {snapshot_dir}")
-        print(f"[backtest] 快照载入完成: ok={len(all_df_map)}, rows={snapshot_rows_total}")
+        logger.info("快照载入完成: ok=%d, rows=%d", len(all_df_map), snapshot_rows_total)
     else:
-        print(f"[backtest] 开始拉取历史日线: symbols={len(symbols)}, workers={max_workers}")
+        logger.info("开始拉取历史日线: symbols=%d, workers=%s", len(symbols), max_workers)
         report_progress("拉取历史", f"共{len(symbols)}只", 0.0)
         with ThreadPoolExecutor(max_workers=max(int(max_workers), 1)) as ex:
             futures = {ex.submit(_fetch_hist_norm, sym, prefetch_start, prefetch_end): sym for sym in symbols}
-            done = 0
-            for ft in as_completed(futures):
-                done += 1
+            for done, ft in enumerate(as_completed(futures), 1):
                 sym = futures[ft]
                 code, df, err = ft.result()
                 if df is not None and not df.empty:
@@ -705,9 +720,9 @@ def run_backtest(
                 else:
                     failures.append(f"{sym}:{err or 'unknown'}")
                 if done % 200 == 0 or done == len(futures):
-                    print(f"[backtest] 拉取进度 {done}/{len(futures)}")
+                    logger.info("拉取进度 %d/%d", done, len(futures))
                     report_progress("拉取历史", f"{done}/{len(futures)}", done / len(futures) * 0.4)
-        print(f"[backtest] 历史拉取完成: ok={len(all_df_map)}, fail={len(failures)}")
+        logger.info("历史拉取完成: ok=%d, fail=%d", len(all_df_map), len(failures))
         report_progress("拉取完成", f"成功={len(all_df_map)}", 0.4)
 
     if bench_df is None or bench_df.empty:
@@ -720,35 +735,33 @@ def run_backtest(
         bench_df = bench_df.dropna(subset=["date"]).reset_index(drop=True)
 
     trade_dates = [d for d in bench_df["date"].tolist() if start_dt <= d <= end_dt]
-    print(
-        f"[backtest] DEBUG: start={start_dt}, end={end_dt}, bench_min={bench_df['date'].min()}, bench_max={bench_df['date'].max()}"
-    )
-    print(f"[backtest] DEBUG: trade_dates count={len(trade_dates)}")
+    bench_min, bench_max = bench_df["date"].min(), bench_df["date"].max()
+    logger.debug("start=%s, end=%s, bench_min=%s, bench_max=%s", start_dt, end_dt, bench_min, bench_max)
+    logger.debug("trade_dates count=%d", len(trade_dates))
     if len(trade_dates) <= hold_days + 1:
         raise RuntimeError(
             f"回测区间交易日过少({len(trade_dates)})，无法计算 forward return (hold_days={hold_days}，需至少 {hold_days + 2} 个交易日)"
         )
 
     if use_current_meta:
-        # 快照优先：从快照加载 sector_map / market_cap_map（Phase 1 已导出）
-        # 仅在快照不存在时 fallback 到网络拉取
+        # 快照元数据可避免回测过程中额外拉取网络数据。
         _snap_sector = _load_snapshot_sector_map(snapshot_dir) if snapshot_dir is not None else None
         _snap_cap = _load_snapshot_market_cap_map(snapshot_dir) if snapshot_dir is not None else None
 
         if _snap_sector is not None or _snap_cap is not None:
             sector_map = _snap_sector or {}
             market_cap_map = _snap_cap or {}
-            print(f"[backtest] 元数据从快照加载: sector_map={len(sector_map)}, market_cap_map={len(market_cap_map)}")
+            logger.info("元数据从快照加载: sector_map=%d, market_cap_map=%d", len(sector_map), len(market_cap_map))
         else:
             market_cap_map = fetch_market_cap_map()
             sector_map = fetch_sector_map()
-            print("[backtest] ⚠️ 使用当前截面市值/行业映射（会引入 look-ahead bias）")
+            logger.warning("使用当前截面市值/行业映射（会引入 look-ahead bias）")
         if not market_cap_map:
-            print("[backtest] ⚠️ 当前市值映射为空，Layer1 市值过滤将被跳过")
+            logger.warning("当前市值映射为空，Layer1 市值过滤将被跳过")
     else:
         market_cap_map = {}
         sector_map = {}
-        print("[backtest] 偏差抑制口径：关闭当前截面市值/行业映射过滤 (L1 市值过滤 + L3 行业共振过滤)")
+        logger.info("偏差抑制口径：关闭当前截面市值/行业映射过滤 (L1 市值过滤 + L3 行业共振过滤)")
     base_cfg = FunnelConfig(trading_days=trading_days)
     _apply_funnel_cfg_overrides(base_cfg)
 
@@ -1024,10 +1037,7 @@ def run_backtest(
                     atr_val = _calc_atr_from_ohlc(sorted_ohlc_dates, day_ohlc, mkt_day, atr_period)
                     if atr_val and atr_val > 0:
                         new_atr_stop = close_px - atr_multiplier * atr_val
-                        if atr_stop is None:
-                            atr_stop = new_atr_stop
-                        else:
-                            atr_stop = max(atr_stop, new_atr_stop)  # ratchet up
+                        atr_stop = new_atr_stop if atr_stop is None else max(atr_stop, new_atr_stop)
 
                     # 2. 有效止损 = max(ATR 动态止损, 极限地板)
                     effective_stop = max(atr_stop or hard_floor, hard_floor)
@@ -1090,7 +1100,7 @@ def run_backtest(
             )
 
         if (idx + 1) % 20 == 0 or (idx + 1) == max_idx:
-            print(f"[backtest] 回放进度 {idx + 1}/{max_idx}, trades={len(records)}")
+            logger.info("回放进度 %d/%d, trades=%d", idx + 1, max_idx, len(records))
             report_progress("回放交易", f"{idx + 1}/{max_idx}", 0.4 + (idx + 1) / max_idx * 0.6)
 
     trades_df = pd.DataFrame([r.__dict__ for r in records])
@@ -1139,10 +1149,10 @@ def run_backtest(
         ret = pd.to_numeric(trades_df["ret_pct"], errors="coerce").dropna()
         var95_ret_pct, cvar95_ret_pct = _calc_cvar95_pct(ret)
 
-        # 组合级 NAV 曲线 → 正确的 Sharpe/MDD/Calmar
+        _ensure_ohlc_lookup_cache(records, all_df_map, ohlc_lookup_cache)
+
         nav_df = _build_daily_nav(
             records,
-            all_df_map,
             ohlc_lookup_cache,
             trade_dates,
             start_dt,
@@ -1413,7 +1423,6 @@ def _calc_stratified_stats(trades_df: pd.DataFrame, hold_days: int = DEFAULT_HOL
 
 def _build_daily_nav(
     records: list[TradeRecord],
-    all_df_map: dict[str, pd.DataFrame],
     ohlc_cache: dict[str, dict[date, tuple[float, float, float, float]]],
     trade_dates: list[date],
     start_dt: date,
@@ -1432,14 +1441,10 @@ def _build_daily_nav(
     if not records:
         return pd.DataFrame(columns=["date", "nav", "daily_ret_pct", "positions_count"])
 
-    # 为每笔交易建立持仓信息
-    # entry_date = signal 次日（实际买入日），exit_date = 实际卖出日
-    # entry_exec = entry_close × (1 + friction)，与 ret_pct 口径一致
     positions: list[dict] = []
     for r in records:
         entry_date = r.entry_date
         if entry_date is None:
-            # 兼容旧 trades：entry_target = signal_date 的下一个交易日。
             try:
                 sig_idx = next(i for i, d in enumerate(trade_dates) if d >= r.signal_date)
                 entry_date = trade_dates[sig_idx + 1] if sig_idx + 1 < len(trade_dates) else None
@@ -1450,11 +1455,6 @@ def _build_daily_nav(
         entry_exec = r.entry_close * (1.0 + buy_friction_pct / 100.0)
         if entry_exec <= 0:
             continue
-        # 确保 ohlc_cache 有此 code
-        if r.code not in ohlc_cache:
-            df = all_df_map.get(r.code)
-            if df is not None and not df.empty:
-                ohlc_cache[r.code] = _build_daily_ohlc_lookup(df)
         positions.append(
             {
                 "code": r.code,
@@ -1499,10 +1499,7 @@ def _build_daily_nav(
             prev_mtm[idx] = close_today
 
         n_open = len(open_indices)
-        if n_open > 0 and daily_rets:
-            port_ret = sum(daily_rets) / n_open
-        else:
-            port_ret = 0.0
+        port_ret = sum(daily_rets) / n_open if n_open > 0 and daily_rets else 0.0
 
         cum_ret += port_ret
         nav = 1.0 + cum_ret
@@ -1557,16 +1554,10 @@ def _calc_portfolio_metrics(
     rf_daily = risk_free_annual / 100.0 / 250.0
     excess = daily_ret - rf_daily
     std_daily = float(excess.std(ddof=1))
-    if std_daily > 0 and len(excess) >= 3:
-        sharpe = float(excess.mean()) / std_daily * (250.0**0.5)
-    else:
-        sharpe = None
+    sharpe = float(excess.mean()) / std_daily * (250.0**0.5) if std_daily > 0 and len(excess) >= 3 else None
 
     # Calmar
-    if mdd_pct < 0:
-        calmar = ann_ret_pct / abs(mdd_pct)
-    else:
-        calmar = None
+    calmar = ann_ret_pct / abs(mdd_pct) if mdd_pct < 0 else None
 
     avg_pos = float(nav_df["positions_count"].mean()) if "positions_count" in nav_df.columns else 0.0
 
@@ -2043,7 +2034,7 @@ def main() -> int:
         except Exception as exc:
             last_error = exc
             err_msg = str(exc)
-            print(f"[backtest] hold_days={hold_days} 失败: {err_msg}")
+            logger.error("hold_days=%d 失败: %s", hold_days, err_msg, exc_info=True)
             suite_rows.append(
                 {
                     "hold_days": hold_days,
@@ -2071,36 +2062,36 @@ def main() -> int:
         if nav_df is not None and not nav_df.empty:
             nav_path = out_dir / f"nav_{stamp}.csv"
             nav_df.to_csv(nav_path, index=False, encoding="utf-8-sig")
-            print(f"[backtest] nav     -> {nav_path}")
+            logger.info("nav     -> %s", nav_path)
 
         wbt_weight_df = summary.pop("_wbt_weight_df", None)
         if wbt_weight_df is not None and not wbt_weight_df.empty:
             wbt_weight_path = out_dir / f"wbt_weights_{stamp}.csv"
             wbt_weight_df.to_csv(wbt_weight_path, index=False, encoding="utf-8-sig")
-            print(f"[backtest] wbt weights -> {wbt_weight_path}")
+            logger.info("wbt weights -> %s", wbt_weight_path)
 
         wbt_daily_return_df = summary.pop("_wbt_daily_return_df", None)
         if wbt_daily_return_df is not None and not wbt_daily_return_df.empty:
             wbt_daily_path = out_dir / f"wbt_daily_return_{stamp}.csv"
             wbt_daily_return_df.to_csv(wbt_daily_path, index=False, encoding="utf-8-sig")
-            print(f"[backtest] wbt daily -> {wbt_daily_path}")
+            logger.info("wbt daily -> %s", wbt_daily_path)
 
         wbt_dailys_df = summary.pop("_wbt_dailys_df", None)
         if wbt_dailys_df is not None and not wbt_dailys_df.empty:
             wbt_dailys_path = out_dir / f"wbt_dailys_{stamp}.csv"
             wbt_dailys_df.to_csv(wbt_dailys_path, index=False, encoding="utf-8-sig")
-            print(f"[backtest] wbt dailys -> {wbt_dailys_path}")
+            logger.info("wbt dailys -> %s", wbt_dailys_path)
 
         wbt_pairs_df = summary.pop("_wbt_pairs_df", None)
         if wbt_pairs_df is not None and not wbt_pairs_df.empty:
             wbt_pairs_path = out_dir / f"wbt_pairs_{stamp}.csv"
             wbt_pairs_df.to_csv(wbt_pairs_path, index=False, encoding="utf-8-sig")
-            print(f"[backtest] wbt pairs -> {wbt_pairs_path}")
+            logger.info("wbt pairs -> %s", wbt_pairs_path)
 
         print(summary_md)
         print("")
-        print(f"[backtest] summary -> {summary_path}")
-        print(f"[backtest] trades  -> {trades_path}")
+        logger.info("summary -> %s", summary_path)
+        logger.info("trades  -> %s", trades_path)
         success_count += 1
 
         suite_rows.append(
@@ -2149,11 +2140,12 @@ def main() -> int:
                 f"{str(row.get('error', '') or '').replace('|', '/')} |"
             )
         suite_md.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
-        print(f"[backtest] suite summary -> {suite_md}")
-        print(f"[backtest] suite csv     -> {suite_csv}")
+        logger.info("suite summary -> %s", suite_md)
+        logger.info("suite csv     -> %s", suite_csv)
 
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s [%(name)s] %(message)s")
     raise SystemExit(main())

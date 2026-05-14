@@ -13,9 +13,16 @@ import uuid
 from collections import deque
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
+
+import contextlib
+import re
+
+from rich.highlighter import Highlighter
 from rich.markdown import Markdown
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -67,6 +74,40 @@ class StatusBar(Static):
         padding: 0 1;
     }
     """
+
+
+class _PasteHighlighter(Highlighter):
+    def highlight(self, text: Text) -> None:
+        m = re.match(r"^\[Pasted Text: \d+ lines\]$", text.plain)
+        if m:
+            text.stylize("bold magenta", m.start(), m.end())
+
+
+class ChatInput(Input):
+    """支持多行粘贴折叠显示的输入框。"""
+
+    _pasted_text: str | None = None
+
+    def on_paste(self, event: events.Paste) -> None:
+        lines = event.text.splitlines()
+        if len(lines) <= 1:
+            return
+        self._pasted_text = event.text
+        self.value = f"[Pasted Text: {len(lines)} lines]"
+        event.prevent_default()
+        event.stop()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if self._pasted_text is None:
+            return
+        expected = f"[Pasted Text: {len(self._pasted_text.splitlines())} lines]"
+        if event.value != expected:
+            self._pasted_text = None
+
+    def consume_pasted(self) -> str | None:
+        text = self._pasted_text
+        self._pasted_text = None
+        return text
 
 
 class BackgroundTaskPanel(Static):
@@ -300,10 +341,8 @@ class ToolConfirmScreen(ModalScreen[dict]):
         elif self.tool_name == "write_file":
             modified["path"] = event.value
         else:
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 modified = json.loads(event.value)
-            except json.JSONDecodeError:
-                pass
         self.dismiss({"action": "edit", "modified_args": modified})
 
     def action_cancel(self) -> None:
@@ -379,7 +418,7 @@ class WyckoffTUI(App):
                 self._agent_log.addHandler(fh)
                 self._agent_log.propagate = False
             except Exception:
-                pass
+                logger.debug("agent log file handler setup failed", exc_info=True)
         # 后台任务管理
         from cli.background import BackgroundTaskManager
 
@@ -400,7 +439,11 @@ class WyckoffTUI(App):
         yield StatusBar(self._build_status_text(), id="status-bar")
         yield BackgroundTaskPanel(self._bg_manager, id="bg-panel")
         yield ChatLog(id="chat-log", highlight=True, markup=True, wrap=True)
-        yield Input(placeholder="问我关于股票的任何问题... (/help 查看命令)", id="chat-input")
+        yield ChatInput(
+            placeholder="问我关于股票的任何问题... (/help 查看命令)",
+            id="chat-input",
+            highlighter=_PasteHighlighter(),
+        )
 
     def on_mount(self) -> None:
         # 加载保存的主题
@@ -411,7 +454,7 @@ class WyckoffTUI(App):
             if saved_theme and saved_theme in self.available_themes:
                 self.theme = saved_theme
         except Exception:
-            pass
+            logger.debug("load saved theme failed", exc_info=True)
 
         log = self.query_one("#chat-log", ChatLog)
         log.write(
@@ -489,7 +532,7 @@ class WyckoffTUI(App):
                 t.start()
                 t.join(timeout=5)
             except Exception:
-                pass
+                logger.debug("save session summary on exit failed", exc_info=True)
         self.exit()
 
     def action_quit(self) -> None:
@@ -545,7 +588,7 @@ class WyckoffTUI(App):
 
             save_config_key("theme", new_theme)
         except Exception:
-            pass
+            logger.debug("save theme preference failed", exc_info=True)
 
     # ----- Spinner（ChatLog 底部边框） -----
 
@@ -570,9 +613,10 @@ class WyckoffTUI(App):
     # ----- 输入处理 -----
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
-        inp = event.input
+        inp = self.query_one("#chat-input", ChatInput)
+        text = (inp.consume_pasted() or event.value).strip()
         inp.clear()
+        inp._pasted_text = None
 
         # 交互式多步输入
         if self._input_mode != _InputState.NONE:
@@ -604,7 +648,12 @@ class WyckoffTUI(App):
     def _send_message(self, text: str) -> None:
         log = self.query_one("#chat-log", ChatLog)
         log.write(Text(""))
-        log.write(Text.from_markup(f"[bold cyan]❯[/bold cyan] {text}"))
+        lines = text.splitlines()
+        if len(lines) > 3:
+            preview = "\n".join(lines[:3]) + f"\n... ({len(lines)} lines total)"
+            log.write(Text.from_markup(f"[bold cyan]❯[/bold cyan] {preview}"))
+        else:
+            log.write(Text.from_markup(f"[bold cyan]❯[/bold cyan] {text}"))
         # 注入记忆上下文
         try:
             from cli.memory import build_memory_context
@@ -613,7 +662,7 @@ class WyckoffTUI(App):
             if mem_ctx and mem_ctx not in self._system_prompt:
                 self._system_prompt = self._system_prompt.rstrip() + "\n" + mem_ctx
         except Exception:
-            pass
+            logger.debug("memory context injection failed", exc_info=True)
         self._messages.append({"role": "user", "content": text})
         self._start_spinner("thinking")
         self._run_agent()
@@ -808,7 +857,7 @@ class WyckoffTUI(App):
 
                 logout()
             except Exception:
-                pass
+                logger.warning("logout failed", exc_info=True)
             self._tools.state.update({"user_id": "", "email": "", "access_token": "", "refresh_token": ""})
         log.write(Text.from_markup("[green]已退出登录[/green]"))
         self._update_status()
@@ -862,7 +911,7 @@ class WyckoffTUI(App):
             return
         default_cfg = next((c for c in configs if c["id"] == default_id), configs[0])
         if len(configs) == 1:
-            from cli.__main__ import _create_provider
+            from cli._provider_factory import _create_provider
 
             provider, err = _create_provider(
                 default_cfg["provider_name"],
@@ -1261,7 +1310,7 @@ class WyckoffTUI(App):
 
             save_chat_log(self._session_id, role, content, **kwargs)
         except Exception:
-            pass
+            logger.debug("chat log save failed", exc_info=True)
 
     # ----- Agent 执行（后台 Worker）-----
 
@@ -1642,7 +1691,7 @@ class WyckoffTUI(App):
         try:
             self.call_from_thread(self._refresh_bg_panel)
         except Exception:
-            pass
+            logger.debug("background panel refresh failed", exc_info=True)
 
     def _refresh_bg_panel(self) -> None:
         self.query_one("#bg-panel", BackgroundTaskPanel)._tick()
@@ -1665,7 +1714,7 @@ class WyckoffTUI(App):
                 status="failed" if is_error else "completed",
             )
         except Exception:
-            pass
+            logger.debug("save background task result failed", exc_info=True)
 
         log = self.query_one("#chat-log", ChatLog)
         if is_error:
@@ -1747,7 +1796,7 @@ class WyckoffTUI(App):
                     daemon=True,
                 ).start()
             except Exception:
-                pass
+                logger.debug("save session summary before restore failed", exc_info=True)
 
         self._messages.clear()
         self._queue.clear()
@@ -1805,7 +1854,7 @@ class WyckoffTUI(App):
                     daemon=True,
                 ).start()
             except Exception:
-                pass
+                logger.debug("save session summary before new chat failed", exc_info=True)
         self._messages.clear()
         self._queue.clear()
         self._session_tokens = {"input": 0, "output": 0, "rounds": 0}

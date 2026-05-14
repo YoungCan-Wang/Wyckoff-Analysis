@@ -73,20 +73,22 @@ class TestLiteLLMSwitch:
 
     def test_litellm_enabled_with_images_falls_back(self):
         """LITELLM_ENABLED=1 但带 images 时，降级为原生实现。"""
-        with patch.dict(os.environ, {"LITELLM_ENABLED": "1"}):
-            with patch("integrations.llm_client._call_gemini", return_value="native with images") as mock_native:
-                from integrations.llm_client import call_llm
+        with (
+            patch.dict(os.environ, {"LITELLM_ENABLED": "1"}),
+            patch("integrations.llm_client._call_gemini", return_value="native with images") as mock_native,
+        ):
+            from integrations.llm_client import call_llm
 
-                result = call_llm(
-                    provider="gemini",
-                    model="gemini-3.1-flash-lite-preview",
-                    api_key="fake-key",
-                    system_prompt="test",
-                    user_message="hello",
-                    images=[b"fake_image_bytes"],
-                )
-                assert result == "native with images"
-                mock_native.assert_called_once()
+            result = call_llm(
+                provider="gemini",
+                model="gemini-3.1-flash-lite-preview",
+                api_key="fake-key",
+                system_prompt="test",
+                user_message="hello",
+                images=[b"fake_image_bytes"],
+            )
+            assert result == "native with images"
+            mock_native.assert_called_once()
 
     def test_litellm_import_error_falls_back(self):
         """LiteLLM 未安装时，降级为原生实现。"""
@@ -220,16 +222,16 @@ class TestGeminiTruncationHandling:
         with (
             patch.dict(sys.modules, fake_modules, clear=False),
             patch("integrations.llm_client.time.sleep", return_value=None),
+            pytest.raises(RuntimeError, match="Gemini 调用失败"),
         ):
-            with pytest.raises(RuntimeError, match="Gemini 调用失败"):
-                _call_gemini(
-                    model="gemini-pro-latest",
-                    api_key="fake-key",
-                    system_prompt="test",
-                    user_message="hello",
-                    images=None,
-                    timeout=30,
-                    max_output_tokens=256,
-                    allow_truncated_text=False,
-                    base_url="",
-                )
+            _call_gemini(
+                model="gemini-pro-latest",
+                api_key="fake-key",
+                system_prompt="test",
+                user_message="hello",
+                images=None,
+                timeout=30,
+                max_output_tokens=256,
+                allow_truncated_text=False,
+                base_url="",
+            )

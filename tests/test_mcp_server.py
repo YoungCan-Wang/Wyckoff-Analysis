@@ -32,16 +32,16 @@ def import_mcp_server(monkeypatch):
 def test_run_funnel_simulation_maps_main_chinext_and_restores_env(monkeypatch):
     mcp_server = import_mcp_server(monkeypatch)
     captured_env = {}
-    fake_pipeline = ModuleType("core.funnel_pipeline")
 
-    def fake_run_funnel(*args, **kwargs):
+    def fake_run(*args, **kwargs):
         captured_env["mode"] = os.environ.get("FUNNEL_POOL_MODE")
         captured_env["board"] = os.environ.get("FUNNEL_POOL_BOARD")
         captured_env["executor"] = os.environ.get("FUNNEL_EXECUTOR_MODE")
         return True, [{"code": "000001"}], {"regime": "NEUTRAL"}, {"metrics": {}}
 
-    fake_pipeline.run_funnel = fake_run_funnel
-    monkeypatch.setitem(sys.modules, "core.funnel_pipeline", fake_pipeline)
+    fake_funnel = ModuleType("scripts.wyckoff_funnel")
+    fake_funnel.run = fake_run
+    monkeypatch.setitem(sys.modules, "scripts.wyckoff_funnel", fake_funnel)
     monkeypatch.setenv("FUNNEL_POOL_MODE", "manual")
     monkeypatch.setenv("FUNNEL_POOL_BOARD", "chinext")
     monkeypatch.setenv("FUNNEL_EXECUTOR_MODE", "process")

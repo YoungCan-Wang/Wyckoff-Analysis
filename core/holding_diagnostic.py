@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
 
 import pandas as pd
@@ -33,6 +34,8 @@ from core.wyckoff_engine import (
     layer2_strength_detailed,
     layer5_exit_signals,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -168,7 +171,7 @@ def diagnose_one_stock(
         if code in channel_map:
             l2_channel = channel_map[code]
     except Exception:
-        pass  # 数据不足时降级为"未入选"
+        logger.debug("L2 channel classification failed for %s", code, exc_info=True)
 
     track = _classify_track(l2_channel)
 
@@ -177,7 +180,7 @@ def diagnose_one_stock(
     try:
         accum_stage = _analyze_accum_stage(df_s, cfg)
     except Exception:
-        pass
+        logger.debug("Accumulation stage analysis failed", exc_info=True)
 
     # ── L4 触发检测 ──
     l4_triggers: list[str] = []
@@ -191,7 +194,7 @@ def diagnose_one_stock(
         if _detect_evr(df_s, cfg) is not None:
             l4_triggers.append("EVR")
     except Exception:
-        pass
+        logger.debug("L4 trigger detection failed", exc_info=True)
 
     # ── L5 退出信号（复用引擎函数）──
     exit_signal = None
@@ -206,7 +209,7 @@ def diagnose_one_stock(
             exit_price = sig.get("price")
             exit_reason = sig.get("reason", "")
     except Exception:
-        pass
+        logger.debug("L5 exit signal detection failed", exc_info=True)
 
     # ── 止损参考 ──
     stop_loss_7pct = cost * 0.93

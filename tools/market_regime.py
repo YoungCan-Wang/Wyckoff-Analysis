@@ -230,10 +230,10 @@ def analyze_benchmark_and_tune_cfg(
     if breadth_ratio is not None:
         if float(breadth_ratio) <= BREADTH_RISK_OFF_THRESHOLD:
             regime = "RISK_OFF"
-        elif float(breadth_ratio) >= BREADTH_RISK_ON_THRESHOLD:
-            if breadth_delta is None or float(breadth_delta) >= BREADTH_RISK_ON_MIN_DELTA:
-                regime = "RISK_ON"
-
+        elif float(breadth_ratio) >= BREADTH_RISK_ON_THRESHOLD and (
+            breadth_delta is None or float(breadth_delta) >= BREADTH_RISK_ON_MIN_DELTA
+        ):
+            regime = "RISK_ON"
         # 强力悬崖检测 (Breadth Cliff Drop): 赚了指数不赚钱，暗流涌动的隐性雪崩
         if breadth_delta is not None and float(breadth_delta) <= BREADTH_CLIFF_DROP_PCT:
             regime = "RISK_OFF"

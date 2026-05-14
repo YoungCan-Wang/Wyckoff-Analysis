@@ -20,6 +20,7 @@ import shlex
 import socket
 import threading
 import time
+from contextlib import suppress
 from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -350,7 +351,7 @@ def _load_etf_name_map() -> dict[str, str]:
         if out:
             return out
     except Exception:
-        pass
+        logger.debug("failed to load ETF name map from symbol metadata", exc_info=True)
 
     path = Path(__file__).resolve().parent.parent / "data" / "market_universes" / "etf_cn.txt"
     if not path.is_file():
@@ -398,10 +399,8 @@ def _hist_metadata(df: Any) -> dict[str, Any]:
         clean = [str(x) for x in upstream_sources if str(x or "").strip()]
         if clean:
             meta["upstream_sources"] = clean
-    try:
+    with suppress(Exception):
         meta["row_count"] = int(len(df))
-    except Exception:
-        pass
     return meta
 
 
@@ -494,7 +493,7 @@ def _get_credential(tool_context: ToolContext | None, key: str, env_fallback: st
         if local_val:
             return local_val
     except Exception:
-        pass
+        logger.debug("failed to load credential '%s' from local config", key, exc_info=True)
     # 兜底：环境变量（适用于本地开发 / 未登录场景）
     if env_fallback:
         return os.getenv(env_fallback, "").strip()
@@ -514,12 +513,12 @@ def _resolve_llm_config(tool_context) -> tuple[str, str, str, str]:
         cfg = next((c for c in configs if c["id"] == default_id), None)
         if cfg and cfg.get("api_key"):
             prov = cfg.get("provider_name", "openai")
-            from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS
+            from integrations._llm_types import OPENAI_COMPATIBLE_BASE_URLS
 
             base = cfg.get("base_url", "") or OPENAI_COMPATIBLE_BASE_URLS.get(prov, "")
             return prov, cfg["api_key"], cfg.get("model", ""), base
     except Exception:
-        pass
+        logger.debug("failed to load LLM provider config from local config", exc_info=True)
     api_key = _get_credential(tool_context, "gemini_api_key", "GEMINI_API_KEY")
     model = _get_credential(tool_context, "gemini_model", "GEMINI_MODEL") or "gemini-2.0-flash"
     base_url = _get_credential(tool_context, "gemini_base_url", "")
@@ -614,7 +613,7 @@ def _enrich_search_results(items: list[dict]) -> None:
 
         cap_map = fetch_market_cap_map()
     except Exception:
-        pass
+        logger.debug("failed to fetch market cap map", exc_info=True)
 
     for item in items:
         code = item["code"]
@@ -625,7 +624,7 @@ def _enrich_search_results(items: list[dict]) -> None:
                     item["price"] = snap.get("close")
                     item["pct_chg"] = snap.get("pct_chg")
             except Exception:
-                pass
+                logger.debug("failed to fetch spot snapshot for %s", code, exc_info=True)
         if cap_map:
             item["market_cap_yi"] = cap_map.get(code)
         item["news"] = _fetch_news_with_timeout(code)
@@ -813,7 +812,7 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
                         ],
                     )
                 except Exception:
-                    pass
+                    logger.warning("failed to cache portfolio %s locally", portfolio_id, exc_info=True)
 
         if state is None:
             try:
@@ -821,7 +820,7 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
 
                 state = load_portfolio(portfolio_id)
             except Exception:
-                pass
+                logger.warning("failed to load portfolio %s from local DB", portfolio_id, exc_info=True)
 
         if state is None:
             return {"message": "未找到持仓记录，可通过 update_portfolio 添加", "positions": [], "free_cash": 0}
@@ -1256,7 +1255,7 @@ def screen_stocks(board: str = "all", tool_context: ToolContext = None) -> dict:
         # CLI 后台线程中 fork 子进程会触发 Python 3.13+ fds_to_keep 错误，强制用 thread
         os.environ["FUNNEL_EXECUTOR_MODE"] = "thread"
 
-        from core.funnel_pipeline import run_funnel
+        from scripts.wyckoff_funnel import run as run_funnel
 
         try:
             ok, symbols, bench_ctx, details = run_funnel(
@@ -1498,7 +1497,7 @@ def _query_recommendation(limit: int) -> dict:
 
             records = load_recommendations(limit=limit)
         except Exception:
-            pass
+            logger.warning("failed to load recommendations from local DB", exc_info=True)
         if not records:
             from integrations.supabase_recommendation import load_recommendation_tracking
 
@@ -1509,7 +1508,7 @@ def _query_recommendation(limit: int) -> dict:
 
                     save_recommendations(records)
                 except Exception:
-                    pass
+                    logger.warning("failed to cache recommendations locally", exc_info=True)
         if not records:
             return {"message": "暂无复盘记录", "records": []}
         simplified = [
@@ -1542,7 +1541,7 @@ def _query_signal(status: str, limit: int) -> dict:
             st = status if status in ("pending", "confirmed", "expired") else None
             rows = load_signals(status=st, limit=limit)
         except Exception:
-            pass
+            logger.warning("failed to load signals from local DB", exc_info=True)
         if not rows:
             from core.constants import TABLE_SIGNAL_PENDING
             from integrations.supabase_base import create_admin_client, is_admin_configured
@@ -1560,7 +1559,7 @@ def _query_signal(status: str, limit: int) -> dict:
 
                     save_signals(rows)
                 except Exception:
-                    pass
+                    logger.warning("failed to cache signals locally", exc_info=True)
         if not rows:
             status_label = {"pending": "待确认", "confirmed": "已确认", "expired": "已过期"}.get(status, "")
             return {"message": f"暂无{status_label}信号记录", "records": []}
@@ -1844,7 +1843,7 @@ def update_portfolio(
                         ],
                     )
             except Exception:
-                pass
+                logger.warning("failed to cache portfolio %s locally after update", portfolio_id, exc_info=True)
 
         # 读本地最新状态返回
         from integrations.local_db import load_portfolio
@@ -1973,14 +1972,8 @@ def run_backtest(
 
         _ensure_tushare_token(tool_context)
 
-        if start:
-            start_dt = date.fromisoformat(str(start).strip()[:10])
-        else:
-            start_dt = date.today() - timedelta(days=180)
-        if end:
-            end_dt = date.fromisoformat(str(end).strip()[:10])
-        else:
-            end_dt = date.today() - timedelta(days=1)
+        start_dt = date.fromisoformat(str(start).strip()[:10]) if start else date.today() - timedelta(days=180)
+        end_dt = date.fromisoformat(str(end).strip()[:10]) if end else date.today() - timedelta(days=1)
 
         hold_days = max(1, min(int(hold_days), 60))
         top_n = max(0, min(int(top_n), 20))

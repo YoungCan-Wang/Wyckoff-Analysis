@@ -38,7 +38,7 @@ def _clear_session() -> None:
     try:
         SESSION_FILE.unlink(missing_ok=True)
     except OSError:
-        pass
+        logger.warning("failed to clear session file", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ def _load_config() -> dict[str, Any]:
         try:
             _OLD_CONFIG_FILE.rename(CONFIG_FILE)
         except OSError:
-            pass
+            logger.warning("config migration rename failed", exc_info=True)
     if not CONFIG_FILE.exists():
         return {}
     try:

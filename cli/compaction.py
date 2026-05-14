@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 模型 context window 映射（按前缀匹配，单位 token）
@@ -257,7 +260,7 @@ def flush_memory_before_compaction(
                 continue
             save_memory("preference", line, codes=",".join(codes[:10]))
     except Exception:
-        pass
+        logger.debug("memory flush before compaction failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +352,6 @@ def compact_messages(
             ] + tail
             return compacted, True
     except Exception:
-        pass
+        logger.debug("compaction LLM call failed", exc_info=True)
 
     return messages, False

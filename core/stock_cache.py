@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
@@ -9,6 +10,8 @@ from supabase import Client
 
 from core.constants import TABLE_STOCK_HIST_CACHE
 from integrations.supabase_base import create_admin_client as _create_admin_client
+
+logger = logging.getLogger(__name__)
 
 _ADMIN_CLIENT: Client | None = None
 _CLI_CLIENT: Client | None = None
@@ -119,7 +122,7 @@ def _get_stock_cache_client(context: str = "auto") -> Client | None:
             if client is not None:
                 return client
         except Exception:
-            pass
+            logger.warning("Failed to get Supabase session client", exc_info=True)
         # 2) CLI user client (access_token)
         cli = _get_cli_user_client()
         if cli is not None:
@@ -260,7 +263,7 @@ def _trim_symbol_history_window(
             .execute()
         )
     except Exception:
-        pass
+        logger.warning("Failed to trim history for %s", symbol, exc_info=True)
 
 
 def cleanup_cache(ttl_days: int = _STOCK_HIST_RETENTION_DAYS, *, context: str = "auto") -> None:
@@ -271,4 +274,4 @@ def cleanup_cache(ttl_days: int = _STOCK_HIST_RETENTION_DAYS, *, context: str = 
     try:
         supabase.table(TABLE_STOCK_HIST_CACHE).delete().lt("date", cutoff).execute()
     except Exception:
-        pass
+        logger.warning("Cache cleanup failed", exc_info=True)

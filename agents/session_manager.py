@@ -86,8 +86,7 @@ class ChatSessionManager:
         self.agent = agent
         self._api_key = api_key
 
-        # API Key 已通过 create_agent(api_key=...) 注入 Gemini 实例，
-        # 不再写入 os.environ，避免多用户并发时互相覆盖。
+        # API Key 通过 agent 实例传递，避免使用进程级环境变量承载用户凭证。
 
         # InMemory Session Service（进程级，重启丢失）
         self._session_service = InMemorySessionService()
@@ -99,7 +98,6 @@ class ChatSessionManager:
             session_service=self._session_service,
         )
 
-        # 当前活跃 session_id
         self._current_session_id: str | None = None
 
     @property
@@ -151,7 +149,7 @@ class ChatSessionManager:
             if session:
                 session.state.update(patch)
         except Exception:
-            pass
+            logger.warning("failed to update session state for %s", session_id, exc_info=True)
         finally:
             loop.close()
 

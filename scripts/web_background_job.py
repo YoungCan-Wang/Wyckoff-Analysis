@@ -23,10 +23,10 @@ def _sanitize(obj: Any) -> Any:
     if isinstance(obj, (list, tuple, set)):
         return [_sanitize(x) for x in obj]
     if hasattr(obj, "item"):
-        try:
+        from contextlib import suppress
+
+        with suppress(Exception):
             return obj.item()
-        except Exception:
-            pass
     return str(obj)
 
 
@@ -136,7 +136,7 @@ def _run_funnel_screen(request_id: str, payload: dict[str, Any]) -> dict[str, An
 
 
 def _resolve_model_credentials(payload: dict[str, Any]) -> tuple[str, str, str, str]:
-    from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS, SUPPORTED_PROVIDERS
+    from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS, SUPPORTED_PROVIDERS
 
     user_id = str(payload.get("user_id", "") or "").strip()
     provider = str(payload.get("provider", "") or "gemini").strip().lower()

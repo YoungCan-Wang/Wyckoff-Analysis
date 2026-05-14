@@ -11,10 +11,13 @@ Token 持久化 — 服务端缓存 + URL query_params 双通道。
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 _QP_KEY = "sk"  # URL 里的 query param 名称
 _MAX_ENTRIES = 500  # 最大缓存条目（防内存泄漏）
@@ -99,7 +102,7 @@ def restore_tokens_from_storage() -> tuple[str | None, str | None]:
             st.session_state["_session_key"] = sk
             return (access, refresh)
     except Exception:
-        pass
+        logger.warning("Token restore from storage failed", exc_info=True)
     return (None, None)
 
 

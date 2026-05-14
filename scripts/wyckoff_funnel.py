@@ -11,6 +11,7 @@ Layer 4: 威科夫狙击（Spring / SOS / LPS / Effort vs Result）
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
@@ -60,6 +61,8 @@ from tools.candidate_ranker import (
 from utils.feishu import send_feishu_notification
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
+logger = logging.getLogger(__name__)
+
 TRADING_DAYS = int(os.getenv("FUNNEL_TRADING_DAYS", "320"))
 MAX_RETRIES = int(os.getenv("FUNNEL_FETCH_RETRIES", "2"))
 RETRY_BASE_DELAY = float(os.getenv("FUNNEL_RETRY_BASE_DELAY", "1.0"))
@@ -108,10 +111,23 @@ FUNNEL_EVR_POLICY = os.getenv("FUNNEL_EVR_POLICY", "all_regimes").strip().lower(
 try:
     FUNNEL_BYPASS_DISPLAY_LIMIT = max(int(float(os.getenv("FUNNEL_BYPASS_DISPLAY_LIMIT", "20"))), 0)
 except Exception:
+    logger.debug("FUNNEL_BYPASS_DISPLAY_LIMIT parse failed, using default", exc_info=True)
     FUNNEL_BYPASS_DISPLAY_LIMIT = 20
+FUNNEL_L2_BYPASS_AI_ENABLED = os.getenv("FUNNEL_L2_BYPASS_AI_ENABLED", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+try:
+    FUNNEL_L2_BYPASS_AI_CAP = max(int(float(os.getenv("FUNNEL_L2_BYPASS_AI_CAP", "30"))), 0)
+except Exception:
+    logger.debug("FUNNEL_L2_BYPASS_AI_CAP parse failed, using default", exc_info=True)
+    FUNNEL_L2_BYPASS_AI_CAP = 30
 try:
     FUNNEL_ETF_DISPLAY_LIMIT = max(int(float(os.getenv("FUNNEL_ETF_DISPLAY_LIMIT", "8"))), 0)
 except Exception:
+    logger.debug("FUNNEL_ETF_DISPLAY_LIMIT parse failed, using default", exc_info=True)
     FUNNEL_ETF_DISPLAY_LIMIT = 8
 
 
@@ -122,7 +138,7 @@ def _resolve_funnel_end_calendar_day() -> date:
         try:
             return pd.to_datetime(raw).date()
         except Exception as e:
-            print(f"[funnel] END_CALENDAR_DAY={raw!r} 解析失败，回退自动日期: {e}")
+            logger.warning("END_CALENDAR_DAY=%r 解析失败，回退自动日期: %s", raw, e)
     return resolve_end_calendar_day()
 
 
@@ -267,7 +283,7 @@ def _dump_full_fetch_snapshot(
         )
         return str(run_dir)
     except Exception as e:
-        print(f"[funnel] ⚠️ 全量快照落盘失败: {e}")
+        logger.error("全量快照落盘失败: %s", e, exc_info=True)
         return None
 
 
@@ -416,12 +432,12 @@ def _load_benchmark_indices(start_s: str, end_s: str):
         bench_df = fetch_index_hist("000001", start_s, end_s)
         print("[funnel] 大盘基准加载成功")
     except Exception as e:
-        print(f"[funnel] 大盘基准加载失败: {e}")
+        logger.error("大盘基准加载失败: %s", e, exc_info=True)
     try:
         smallcap_df = fetch_index_hist(SMALLCAP_BENCH_CODE, start_s, end_s)
         print(f"[funnel] 小盘基准加载成功: {SMALLCAP_BENCH_CODE}")
     except Exception as e:
-        print(f"[funnel] 小盘基准加载失败 {SMALLCAP_BENCH_CODE}: {e}")
+        logger.error("小盘基准加载失败 %s: %s", SMALLCAP_BENCH_CODE, e, exc_info=True)
     return bench_df, smallcap_df
 
 
@@ -466,7 +482,7 @@ def _etf_metrics(syms, df_map, l2_passed, sector_map, candidates=None) -> dict:
         "fetched": len(df_map),
         "l2_passed": len(l2_passed),
         "strong_candidates": len(candidates or []),
-        "boosted_sectors": sorted(set(sector_map.get(s, "") for s in l2_passed) - {""}),
+        "boosted_sectors": sorted({sector_map.get(s, "") for s in l2_passed} - {""}),
     }
 
 
@@ -513,6 +529,64 @@ def _append_etf_section(lines: list[str], etf_metrics: dict, etf_candidates: lis
         lines.append(f"  ... 另 {omitted} 只略")
 
 
+def _merge_trigger_maps(*trigger_maps: dict[str, list[tuple[str, float]]]) -> dict[str, list[tuple[str, float]]]:
+    merged: dict[str, list[tuple[str, float]]] = {key: [] for key in TRIGGER_LABELS}
+    seen: set[tuple[str, str]] = set()
+    for source in trigger_maps:
+        for key, hits in (source or {}).items():
+            bucket = merged.setdefault(str(key), [])
+            for code, score in hits or []:
+                code_s = str(code).strip()
+                dedupe_key = (str(key), code_s)
+                if not code_s or dedupe_key in seen:
+                    continue
+                bucket.append((code_s, float(score or 0.0)))
+                seen.add(dedupe_key)
+    return merged
+
+
+def _is_accum_trigger(keys: list[str]) -> bool:
+    key_set = {str(k).strip().lower() for k in keys}
+    return bool(key_set & {"spring", "lps"}) and not bool(key_set & {"sos", "evr", "compression"})
+
+
+def _rank_l2_bypass_pool(l2_bypass_pool: list[str], code_to_total_score: dict[str, float]) -> list[str]:
+    clean_pool = {str(code).strip() for code in l2_bypass_pool if str(code).strip()}
+    return sorted(clean_pool, key=lambda c: (-code_to_total_score.get(c, 0.0), c))
+
+
+def _promote_l2_bypass_for_ai(
+    selected_for_ai: list[str],
+    trend_selected: list[str],
+    accum_selected: list[str],
+    l2_bypass_pool: list[str],
+    code_to_total_score: dict[str, float],
+    code_to_trigger_keys: dict[str, list[str]],
+    score_map: dict[str, float],
+) -> int:
+    if not FUNNEL_L2_BYPASS_AI_ENABLED or not l2_bypass_pool:
+        return 0
+    ranked = _rank_l2_bypass_pool(l2_bypass_pool, code_to_total_score)
+    ranked = ranked if FUNNEL_L2_BYPASS_AI_CAP <= 0 else ranked[:FUNNEL_L2_BYPASS_AI_CAP]
+    selected_seen = set(selected_for_ai)
+    track_seen = set(trend_selected) | set(accum_selected)
+    added = 0
+    for code in ranked:
+        if code not in selected_seen:
+            selected_for_ai.append(code)
+            selected_seen.add(code)
+            added += 1
+        score_map.setdefault(code, float(code_to_total_score.get(code, 0.0) or 0.0))
+        if code in track_seen:
+            continue
+        if _is_accum_trigger(code_to_trigger_keys.get(code, [])):
+            accum_selected.append(code)
+        else:
+            trend_selected.append(code)
+        track_seen.add(code)
+    return added
+
+
 def run_funnel_job(
     include_debug_context: bool = False,
     direct_source: bool = False,
@@ -548,13 +622,13 @@ def run_funnel_job(
     try:
         sector_map = fetch_sector_map()
     except Exception as e:
-        print(f"[funnel] 行业映射加载失败，降级为空映射: {e}")
+        logger.warning("行业映射加载失败，降级为空映射: %s", e)
         sector_map = {}
     print("[funnel] 加载市值数据...")
     try:
         market_cap_map = fetch_market_cap_map()
     except Exception as e:
-        print(f"[funnel] 市值数据加载失败，降级为空映射: {e}")
+        logger.warning("市值数据加载失败，降级为空映射: %s", e)
         market_cap_map = {}
     if not market_cap_map:
         print("[funnel] ⚠️ 市值数据为空（TUSHARE_TOKEN 可能缺失/失效），Layer1 将跳过市值过滤")
@@ -578,12 +652,12 @@ def run_funnel_job(
                 f"missing={missing}, sample_missing={sample_missing or '-'}"
             )
         except Exception as e:
-            print(f"[funnel] TickFlow 财务指标加载失败，跳过财务过滤: {e}")
+            logger.warning("TickFlow 财务指标加载失败，跳过财务过滤: %s", e)
     print("[funnel] 加载股票名称...")
     try:
         name_map = _stock_name_map()
     except Exception as e:
-        print(f"[funnel] 股票名称加载失败，降级为代码展示: {e}")
+        logger.warning("股票名称加载失败，降级为代码展示: %s", e)
         name_map = {}
 
     bench_df, smallcap_df = _load_benchmark_indices(start_s, end_s)
@@ -708,6 +782,7 @@ def run_funnel_job(
             if pd.notna(last_close):
                 latest_close_map[str(sym).strip()] = float(last_close)
         except Exception:
+            logger.debug("close price parse failed for %s", sym, exc_info=True)
             continue
     ranked_l3_symbols, l3_score_map = _rank_l3_candidates(
         l3_symbols=l3_passed,
@@ -804,22 +879,27 @@ def run(
     try:
         name_map = _stock_name_map()
     except Exception as e:
-        print(f"[funnel] 股票名称加载失败，降级为代码展示: {e}")
+        logger.warning("股票名称加载失败，降级为代码展示: %s", e)
         name_map = {}
     try:
         sector_map = fetch_sector_map()
     except Exception as e:
-        print(f"[funnel] 行业映射加载失败，降级为空映射: {e}")
+        logger.warning("行业映射加载失败，降级为空映射: %s", e)
         sector_map = {}
     latest_close_map = metrics.get("latest_close_map", {}) or {}
     if latest_close_map:
         benchmark_context["latest_close_map"] = latest_close_map
 
+    l2_bypass_pool = metrics.get("l2_bypass_pool", []) or []
+    bypass_triggers = metrics.get("l2_bypass_triggers", {}) or {}
+    review_triggers = _merge_trigger_maps(triggers, bypass_triggers)
+    formal_hit_set = {str(code).strip() for hits in triggers.values() for code, _ in hits if str(code).strip()}
+    l2_bypass_set = set(l2_bypass_pool)
     code_to_reasons: dict[str, list[str]] = {}
     code_to_trigger_keys: dict[str, list[str]] = {}
     code_to_total_score: dict[str, float] = {}
     for key, label in TRIGGER_LABELS.items():
-        for code, score in triggers.get(key, []):
+        for code, score in review_triggers.get(key, []):
             if code not in code_to_reasons:
                 code_to_reasons[code] = []
                 code_to_trigger_keys[code] = []
@@ -834,7 +914,10 @@ def run(
         code_to_reasons.keys(),
         key=lambda c: -code_to_total_score.get(c, 0),
     )
-    unique_hit_count = len(sorted_codes)
+    formal_sorted_codes = [code for code in sorted_codes if code in formal_hit_set]
+    unique_hit_count = len(formal_hit_set)
+    review_unique_count = len(sorted_codes)
+    l2_bypass_ranked = _rank_l2_bypass_pool(l2_bypass_pool, code_to_total_score)
     use_legacy_selection = FUNNEL_AI_SELECTION_MODE in {
         "legacy_full_hits",
         "legacy_hits",
@@ -853,9 +936,6 @@ def run(
     markup_symbols = metrics.get("markup_symbols", []) or []
     accum_stage_map = metrics.get("accum_stage_map", {}) or {}
     exit_signals = metrics.get("exit_signals", {}) or {}
-    # L2 旁路观察池（由 run_funnel_job 汇总进 metrics）
-    l2_bypass_pool = metrics.get("l2_bypass_pool", []) or []
-    bypass_triggers = metrics.get("l2_bypass_triggers", {}) or {}
     sector_rotation = metrics.get("sector_rotation", {}) or {}
     sector_rotation_map = sector_rotation.get("state_map", {}) or {}
     etf_metrics = metrics.get("etf_enhancement", {}) or {}
@@ -865,9 +945,9 @@ def run(
     if use_legacy_selection:
         trend_selected = []
         accum_selected = []
-        score_map = {c: float(code_to_best_score.get(c, 0.0)) for c in sorted_codes}
+        score_map = {c: float(code_to_best_score.get(c, 0.0)) for c in formal_sorted_codes}
         ai_policy = {
-            "total_cap": len(sorted_codes),
+            "total_cap": len(formal_sorted_codes),
             "trend_quota": 0,
             "accum_quota": 0,
             "requested_trend_quota": 0,
@@ -876,7 +956,7 @@ def run(
             "max_trend_l3_fill": 0,
             "max_accum_l3_fill": 0,
         }
-        selected_for_ai = list(sorted_codes)
+        selected_for_ai = list(formal_sorted_codes)
         print(f"[funnel] AI候选分配完成(legacy_full_hits): total={len(selected_for_ai)}")
     else:
         mock_result = FunnelResult(
@@ -906,10 +986,28 @@ def run(
         )
         selected_for_ai = trend_selected + accum_selected
 
+    bypass_added = _promote_l2_bypass_for_ai(
+        selected_for_ai,
+        trend_selected,
+        accum_selected,
+        l2_bypass_pool,
+        code_to_total_score,
+        code_to_trigger_keys,
+        score_map,
+    )
+    if bypass_added:
+        print(
+            f"[funnel] L2明珠旁路送审: added={bypass_added}, "
+            f"budget={FUNNEL_L2_BYPASS_AI_CAP or 'unlimited'}, pool={len(l2_bypass_pool)}"
+        )
+
     min_funnel_score = float(metrics.get("min_funnel_score", 0.0) or 0.0)
     if score_map and min_funnel_score > 0:
         before = len(selected_for_ai)
         selected_for_ai = [c for c in selected_for_ai if score_map.get(c, 0.0) >= min_funnel_score]
+        selected_set = set(selected_for_ai)
+        trend_selected = [c for c in trend_selected if c in selected_set]
+        accum_selected = [c for c in accum_selected if c in selected_set]
         dropped = before - len(selected_for_ai)
         if dropped:
             print(f"[funnel] min_funnel_score={min_funnel_score} 过滤掉 {dropped} 只低质量候选")
@@ -940,7 +1038,11 @@ def run(
             f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
             f"**大盘水温**: {bench_line}",
             f"**大盘量价推演**: {pv_line}",
-            f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)}",
+            f"**候选分层**: 正式L4命中{unique_hit_count}只 / L2明珠池{len(l2_bypass_pool)}只 "
+            f"-> AI输入{len(selected_for_ai)}只 "
+            f"(正式L4 {sum(1 for c in selected_for_ai if c in formal_hit_set)} / "
+            f"L2明珠 {sum(1 for c in selected_for_ai if c in l2_bypass_set)}; "
+            f"旁路预算 {FUNNEL_L2_BYPASS_AI_CAP or 'unlimited'})",
             f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
             "",
         ]
@@ -955,8 +1057,6 @@ def run(
             if s >= 5:
                 return "★ "
             return "  "
-
-        set(selected_for_ai)
 
         # 1) 多信号共振组（置顶）
         multi_signal = [c for c in selected_for_ai if len(code_to_trigger_keys.get(c, [])) > 1]
@@ -995,8 +1095,13 @@ def run(
         if l2_bypass_pool:
             lines.append("")
             lines.append(f"**【👁 L2旁路观察】{len(l2_bypass_pool)} 只**")
-            lines.append("形态先于强度，不进正式推荐")
-            for code in l2_bypass_pool:
+            lines.append(
+                f"未过L2强度，按形态分数排序；送AI复核 {sum(1 for c in selected_for_ai if c in l2_bypass_set)} 只"
+            )
+            display_pool = (
+                l2_bypass_ranked if FUNNEL_BYPASS_DISPLAY_LIMIT <= 0 else l2_bypass_ranked[:FUNNEL_BYPASS_DISPLAY_LIMIT]
+            )
+            for code in display_pool:
                 name = name_map.get(code, code)
                 bp_reasons = []
                 for key, _label in TRIGGER_LABELS.items():
@@ -1005,15 +1110,18 @@ def run(
                             bp_reasons.append(TRIGGER_SHORT_LABELS.get(key, key))
                 industry = str(sector_map.get(code, "") or "")
                 lines.append(f"  {code} {name}  {'+'.join(bp_reasons)}  [{industry}]")
+            omitted = len(l2_bypass_pool) - len(display_pool)
+            if omitted > 0:
+                lines.append(f"  ... 另 {omitted} 只略")
 
         content = "\n".join(lines)
         title = f"🔬 Wyckoff Funnel {date.today().strftime('%Y-%m-%d')}"
         ok = True if not notify else send_feishu_notification(webhook_url, title, content)
 
-        sos_hit_set = set(str(c).strip() for c, _ in triggers.get("sos", []))
-        evr_hit_set = set(str(c).strip() for c, _ in triggers.get("evr", []))
-        spring_hit_set = set(str(c).strip() for c, _ in triggers.get("spring", []))
-        lps_hit_set = set(str(c).strip() for c, _ in triggers.get("lps", []))
+        sos_hit_set = {str(c).strip() for c, _ in review_triggers.get("sos", [])}
+        evr_hit_set = {str(c).strip() for c, _ in review_triggers.get("evr", [])}
+        spring_hit_set = {str(c).strip() for c, _ in review_triggers.get("spring", [])}
+        lps_hit_set = {str(c).strip() for c, _ in review_triggers.get("lps", [])}
 
         def _infer_track(code: str) -> str:
             if code in sos_hit_set or code in evr_hit_set:
@@ -1037,7 +1145,7 @@ def run(
                 "score": float((metrics.get("layer3_score_map", {}) or {}).get(c, 0.0)),
                 "priority_score": float(code_to_best_score.get(c, 0.0)),
                 "priority_rank": idx + 1,
-                "selection_source": "l4_hit",
+                "selection_source": "l2_bypass" if c in l2_bypass_set else "l4_hit",
                 "selection_is_fill": False,
                 "initial_price": float(latest_close_map.get(c, 0.0) or 0.0),
                 "industry": str(sector_map.get(c, "") or "未知行业"),
@@ -1065,7 +1173,12 @@ def run(
         if return_details:
             details = {
                 "metrics": metrics,
-                "triggers": triggers,
+                "triggers": review_triggers,
+                "review_triggers": review_triggers,
+                "formal_triggers": triggers,
+                "l2_bypass_triggers": bypass_triggers,
+                "l2_bypass_selected": [c for c in selected_for_ai if c in l2_bypass_set],
+                "l2_bypass_budget": FUNNEL_L2_BYPASS_AI_CAP,
                 "content": content,
                 "title": title,
                 "symbols_for_report": symbols_for_report,
@@ -1080,15 +1193,16 @@ def run(
             return (ok, symbols_for_report, benchmark_context, details)
         return (ok, symbols_for_report, benchmark_context)
 
-    hit_set = set(sorted_codes)
+    formal_event_count = sum(len(v) for v in triggers.values())
+    bypass_selected_count = sum(1 for c in selected_for_ai if c in l2_bypass_set)
 
     def _stage_name(code: str) -> str:
         if code in markup_symbols:
             return "Markup"
         return str(accum_stage_map.get(code, "") or "").strip()
 
-    hit_selected_count = sum(1 for c in selected_for_ai if c in hit_set)
-    l3_only_count = len(selected_for_ai) - hit_selected_count
+    hit_selected_count = sum(1 for c in selected_for_ai if c in formal_hit_set)
+    l3_only_count = max(len(selected_for_ai) - hit_selected_count - bypass_selected_count, 0)
     l3_score_map = metrics.get("layer3_score_map", {}) or {}
     sector_rotation = metrics.get("sector_rotation", {}) or {}
     sector_rotation_map = sector_rotation.get("state_map", {}) or {}
@@ -1103,7 +1217,8 @@ def run(
     max_accum_l3_fill = int(ai_policy["max_accum_l3_fill"])
 
     print(
-        f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
+        f"[funnel] 候选分层: 正式L4事件={formal_event_count}, 正式命中股票={unique_hit_count}, "
+        f"L2明珠池={len(l2_bypass_pool)}, review候选={review_unique_count}, "
         f"配额配置=[{regime}->{quota_family}: requested Trend={requested_trend_quota}, "
         f"requested Accum={requested_accum_quota}, effective Trend={trend_quota}, "
         f"effective Accum={accum_quota}, 总上限={total_cap}, "
@@ -1132,13 +1247,15 @@ def run(
             f"-> 去重{metrics['pool_merged']} -> 去ST{metrics['pool_st_excluded']} "
             f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
-        f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{unique_hit_count}",
+        f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 正式L4:{unique_hit_count}",
         f"**大盘水温**: {bench_line}",
         f"**大盘量价推演**: {pv_line}",
         (
-            f"**候选分层**: 命中股票{unique_hit_count} -> AI输入{len(selected_for_ai)} "
+            f"**候选分层**: 正式L4命中{unique_hit_count}只 / L2明珠池{len(l2_bypass_pool)}只 "
+            f"-> AI输入{len(selected_for_ai)}只 "
             f"(Trend {len(trend_selected)} / Accum {len(accum_selected)}; "
-            f"L4命中{hit_selected_count} / L3补充{l3_only_count})"
+            f"正式L4 {hit_selected_count} / L3补充{l3_only_count} / "
+            f"L2明珠 {bypass_selected_count}; 旁路预算 {FUNNEL_L2_BYPASS_AI_CAP or 'unlimited'})"
         ),
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
@@ -1201,14 +1318,14 @@ def run(
     if l2_bypass_pool:
         lines.append("")
         lines.append(f"**【👁 L2旁路观察】{len(l2_bypass_pool)} 只**")
-        lines.append("形态先于强度，不进正式推荐")
+        lines.append(f"未过L2强度，按形态分数排序；送AI复核 {bypass_selected_count} 只")
         display_pool = (
-            l2_bypass_pool if FUNNEL_BYPASS_DISPLAY_LIMIT <= 0 else l2_bypass_pool[:FUNNEL_BYPASS_DISPLAY_LIMIT]
+            l2_bypass_ranked if FUNNEL_BYPASS_DISPLAY_LIMIT <= 0 else l2_bypass_ranked[:FUNNEL_BYPASS_DISPLAY_LIMIT]
         )
         for code in display_pool:
             bp_name = name_map.get(code, code)
             bp_reasons = []
-            for key in TRIGGER_LABELS.keys():
+            for key in TRIGGER_LABELS:
                 for c, _ in bypass_triggers.get(key, []):
                     if c == code:
                         bp_reasons.append(TRIGGER_SHORT_LABELS.get(key, key))
@@ -1223,7 +1340,9 @@ def run(
     ok = True if not notify else send_feishu_notification(webhook_url, title, content)
 
     def _selection_source(code: str) -> str:
-        if code in hit_set:
+        if code in l2_bypass_set:
+            return "l2_bypass"
+        if code in formal_hit_set:
             return "l4_hit"
         if code in markup_symbols:
             return "markup"
@@ -1236,7 +1355,8 @@ def run(
             "code": c,
             "name": name_map.get(c, c),
             "tag": (
-                f"{str(l2_channel_map.get(c, '')).strip()} | {'、'.join(code_to_reasons.get(c, [])) or '威科夫候选'}"
+                f"{'L2旁路观察' if c in l2_bypass_set else str(l2_channel_map.get(c, '')).strip()} | "
+                f"{'、'.join(code_to_reasons.get(c, [])) or '威科夫候选'}"
             ).strip(" |"),
             "track": ("Trend" if c in trend_selected else "Accum" if c in accum_selected else ""),
             "stage": _stage_name(c),
@@ -1271,7 +1391,12 @@ def run(
     if return_details:
         details = {
             "metrics": metrics,
-            "triggers": triggers,
+            "triggers": review_triggers,
+            "review_triggers": review_triggers,
+            "formal_triggers": triggers,
+            "l2_bypass_triggers": bypass_triggers,
+            "l2_bypass_selected": [c for c in selected_for_ai if c in l2_bypass_set],
+            "l2_bypass_budget": FUNNEL_L2_BYPASS_AI_CAP,
             "content": content,
             "title": title,
             "symbols_for_report": symbols_for_report,

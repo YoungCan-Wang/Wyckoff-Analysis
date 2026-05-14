@@ -9,11 +9,14 @@ Supabase 客户端工厂 — 不依赖 Streamlit，CLI / 脚本 / Web 通用。
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from supabase import Client
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_credentials() -> tuple[str, str]:
@@ -36,7 +39,7 @@ def _resolve_credentials() -> tuple[str, str]:
         url = url or str(st.secrets.get("SUPABASE_URL", "") or "").strip()
         key = key or str(st.secrets.get("SUPABASE_KEY", "") or "").strip()
     except Exception:
-        pass
+        logger.debug("streamlit secrets unavailable for supabase credentials", exc_info=True)
     return url, key
 
 
@@ -107,7 +110,7 @@ def get_session_tokens(client: Client) -> tuple[str, str]:
         if session:
             return session.access_token or "", session.refresh_token or ""
     except Exception:
-        pass
+        logger.debug("failed to retrieve session tokens", exc_info=True)
     return "", ""
 
 

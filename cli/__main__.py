@@ -44,6 +44,8 @@ load_dotenv()
 os.environ["STREAMLIT_LOG_LEVEL"] = "error"
 import logging as _logging
 
+logger = _logging.getLogger(__name__)
+
 
 def _silence_streamlit():
     for name in list(_logging.Logger.manager.loggerDict):
@@ -57,7 +59,7 @@ def _silence_streamlit():
 try:
     import streamlit  # noqa: F401
 except Exception:
-    pass
+    logger.debug("streamlit import failed", exc_info=True)
 _silence_streamlit()
 
 # CLI 环境：只显示 CRITICAL，不泄漏 traceback 给用户
@@ -73,31 +75,7 @@ _logging.basicConfig(level=_logging.CRITICAL)
 # ---------------------------------------------------------------------------
 
 
-def _create_provider(provider_name: str, api_key: str, model: str = "", base_url: str = ""):
-    import inspect
-
-    from cli.providers import PROVIDERS
-
-    cls = PROVIDERS.get(provider_name)
-    if cls is None:
-        install_hints = {
-            "gemini": "pip install google-genai",
-            "claude": "pip install anthropic",
-            "openai": "pip install openai",
-        }
-        hint = install_hints.get(provider_name, "")
-        return None, f"Provider '{provider_name}' 不可用，请先安装依赖：{hint}"
-
-    kwargs = {"api_key": api_key}
-    if model:
-        kwargs["model"] = model
-    if base_url:
-        kwargs["base_url"] = base_url
-
-    sig = inspect.signature(cls.__init__)
-    kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-
-    return cls(**kwargs), None
+from cli._provider_factory import _create_provider  # noqa: F401
 
 
 def _get_version() -> str:
@@ -132,7 +110,7 @@ def _check_update_async() -> None:
             if latest_parts > local_parts:
                 print(f"\033[33m⬆ 新版本可用: {latest}（当前 {local_ver}），运行 wyckoff update 升级\033[0m")
         except Exception:
-            pass
+            logger.debug("version check failed", exc_info=True)
 
     threading.Thread(target=_check, daemon=True).start()
 
@@ -152,7 +130,7 @@ def _set_terminal_title(title: str) -> None:
         sys.stdout.write(f"\033]0;{title}\007")
         sys.stdout.flush()
     except Exception:
-        pass
+        logger.debug("set terminal title failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +157,7 @@ def _cmd_update(_args):
             try:
                 subprocess.run(["xclip", "-selection", "clipboard"], input=url.encode(), check=True)
             except FileNotFoundError:
-                pass
+                logger.debug("no clipboard tool available", exc_info=True)
         print(f"\n✓ 升级完成！请重新运行 wyckoff。\n  Web 版已复制到剪切板: {url}")
     except subprocess.CalledProcessError as e:
         print(f"\n✗ 升级失败: {e}")
@@ -337,7 +315,7 @@ def _wrap_routing_provider(state: dict) -> None:
 
             state["provider"] = RoutingProvider(state["provider"], light_prov)
     except Exception:
-        pass
+        logger.debug("routing provider setup failed", exc_info=True)
 
 
 def _cmd_model(args):
@@ -957,7 +935,7 @@ def _cmd_tui(_args=None):
         elif had_session:
             session_expired = True
     except Exception:
-        pass
+        logger.warning("session restore failed", exc_info=True)
 
     # 初始化本地 SQLite + 后台同步
     try:
@@ -969,7 +947,7 @@ def _cmd_tui(_args=None):
 
         sync_all_background()
     except Exception:
-        pass
+        logger.warning("local db init or sync failed", exc_info=True)
 
     from core.prompts import CHAT_AGENT_SYSTEM_PROMPT
 
@@ -986,7 +964,7 @@ def _cmd_tui(_args=None):
             if _v:
                 os.environ.setdefault(_env, _v)
     except Exception:
-        pass
+        logger.debug("config env vars load failed", exc_info=True)
 
     try:
         from cli.auth import load_default_model_id, load_model_configs
@@ -1017,7 +995,7 @@ def _cmd_tui(_args=None):
                 state.update(default_cfg)
                 state["provider"] = FallbackProvider(configs, default_id, fallback_id=load_fallback_model_id())
     except Exception:
-        pass
+        logger.warning("model provider init failed", exc_info=True)
 
     _wrap_routing_provider(state)
 
@@ -1034,7 +1012,7 @@ def _cmd_tui(_args=None):
 
             start_dashboard_background()
         except Exception:
-            pass
+            logger.debug("dashboard background start failed", exc_info=True)
 
     threading.Thread(target=_dash_bg, daemon=True).start()
     webbrowser.open("http://127.0.0.1:8765")
@@ -1051,21 +1029,21 @@ def _cmd_tui(_args=None):
     try:
         app.run()
     except KeyboardInterrupt:
-        pass
+        logger.debug("TUI interrupted by user", exc_info=True)
     finally:
         try:
             import baostock as bs
 
             bs.logout()
         except (Exception, KeyboardInterrupt):
-            pass
+            logger.debug("baostock logout failed", exc_info=True)
         try:
             _devnull = os.open(os.devnull, os.O_WRONLY)
             os.dup2(_devnull, 1)
             os.dup2(_devnull, 2)
             os.close(_devnull)
         except Exception:
-            pass
+            logger.debug("devnull redirect failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1222,4 +1200,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        pass
+        logger.debug("main interrupted by user", exc_info=True)

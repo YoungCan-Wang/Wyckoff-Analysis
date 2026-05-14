@@ -79,7 +79,7 @@ class FallbackProvider(LLMProvider):
     def _get_provider(self, model_id: str) -> LLMProvider:
         if model_id not in self._providers:
             cfg = next(c for c in self._configs if c["id"] == model_id)
-            from cli.__main__ import _create_provider
+            from cli._provider_factory import _create_provider
 
             provider, err = _create_provider(
                 cfg["provider_name"],

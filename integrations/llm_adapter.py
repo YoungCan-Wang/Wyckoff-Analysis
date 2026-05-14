@@ -1,13 +1,4 @@
-"""
-LiteLLM 适配层 — 为 Agent 层提供统一的 LLM 调用接口。
-
-当前：
-  - call_llm_via_litellm() 作为 integrations/llm_client.call_llm() 的可选替代
-  - 支持现有全部 provider: Gemini / OpenAI / DeepSeek / Qwen / Zhipu / Volcengine / Minimax
-  - 内部通过 LiteLLM 自动路由，无需手动切分 Gemini vs OpenAI-compat 逻辑
-
-可通过 LITELLM_ENABLED=1 启用，作为 llm_client.call_llm() 的路由替代
-"""
+"""LiteLLM 适配层，为文本模型请求提供统一 provider 路由。"""
 
 from __future__ import annotations
 
@@ -39,9 +30,6 @@ PROVIDER_PREFIX_MAP: dict[str, str] = {
     "minimax": "openai",  # Minimax OpenAI-compatible
 }
 
-# 复用 llm_client.py 的 URL 表，避免重复维护
-from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS as DEFAULT_BASE_URLS
-
 # ---------------------------------------------------------------------------
 # 默认参数
 # ---------------------------------------------------------------------------
@@ -54,7 +42,6 @@ def _resolve_litellm_model(provider: str, model: str) -> str:
     """将 (provider, model) 转换为 LiteLLM 能识别的 model 字符串。"""
     provider = (provider or "gemini").strip().lower()
     prefix = PROVIDER_PREFIX_MAP.get(provider, "openai")
-    # 如果 model 已经带有前缀（如 "gemini/gemini-3.1-..."），直接用
     if "/" in model:
         return model
     return f"{prefix}/{model}"
@@ -67,7 +54,9 @@ def _resolve_base_url(provider: str, base_url: str | None) -> str | None:
     provider = (provider or "gemini").strip().lower()
     if provider == "gemini":
         return None
-    return DEFAULT_BASE_URLS.get(provider)
+    from integrations._llm_types import OPENAI_COMPATIBLE_BASE_URLS
+
+    return OPENAI_COMPATIBLE_BASE_URLS.get(provider)
 
 
 def call_llm_via_litellm(
@@ -115,7 +104,7 @@ def call_llm_via_litellm(
         max_tokens,
     )
 
-    # Gemini 需要通过环境变量传递 API key
+    # LiteLLM reads Gemini credentials from the environment.
     env_backup = {}
     provider_lower = (provider or "gemini").strip().lower()
     if provider_lower == "gemini" and api_key:
@@ -139,7 +128,6 @@ def call_llm_via_litellm(
     except Exception as e:
         raise RuntimeError(f"LiteLLM call failed ({litellm_model}): {e}") from e
     finally:
-        # 恢复环境变量
         for k, v in env_backup.items():
             if v is None:
                 os.environ.pop(k, None)

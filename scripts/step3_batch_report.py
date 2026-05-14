@@ -112,7 +112,7 @@ HIGHLIGHT_PCT_THRESHOLD = 5.0
 HIGHLIGHT_VOL_RATIO = 2.0
 from tools.debug_io import dump_model_input as _dump_model_input_shared
 
-# 已按策略要求关闭"目标交易日强校验"，避免数据源时差导致候选被整批跳过。
+# 目标交易日只用于提示，不作为整批候选过滤条件。
 ENFORCE_TARGET_TRADE_DATE = False
 SUPPLY_HEAVY_VOL_RATIO = 1.5
 SUPPLY_DRY_VOL_RATIO = 0.8
@@ -428,13 +428,15 @@ def _resolve_step3_context_cap(raw_count: int) -> int:
 def _has_upstream_priority_context(candidates_df: pd.DataFrame) -> bool:
     if not STEP3_RESPECT_UPSTREAM_PRIORITY or candidates_df is None or candidates_df.empty:
         return False
-    if "priority_score" in candidates_df.columns:
-        if pd.to_numeric(candidates_df["priority_score"], errors="coerce").notna().any():
-            return True
-    if "selection_source" in candidates_df.columns:
-        if candidates_df["selection_source"].astype(str).str.strip().ne("").any():
-            return True
-    return False
+    if (
+        "priority_score" in candidates_df.columns
+        and pd.to_numeric(candidates_df["priority_score"], errors="coerce").notna().any()
+    ):
+        return True
+    return (
+        "selection_source" in candidates_df.columns
+        and candidates_df["selection_source"].astype(str).str.strip().ne("").any()
+    )
 
 
 def _select_upstream_priority_candidates(
@@ -583,7 +585,7 @@ def _call_track_report(
         report = report.rstrip() + "\n\n" + _build_fallback_sections(selected_df)
 
     # 校验：检测报告中出现但不属于本轨输入集的股票代码（模型幻觉）
-    input_set = set(str(c).strip() for c in selected_codes)
+    input_set = {str(c).strip() for c in selected_codes}
     mentioned = set(re.findall(r"\b(\d{6})\b", report))
     leaked = mentioned - input_set
     if leaked:
