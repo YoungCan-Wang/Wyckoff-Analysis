@@ -366,10 +366,6 @@ def main() -> int:
     step3_err = None
     step3_springboard_codes: list[str] = []
     _regime_for_step3 = (benchmark_context.get("regime") or "").strip().upper() if benchmark_context else ""
-    _step3_block_regimes = {"CRASH", "BLACK_SWAN", "RISK_OFF"}
-    if _regime_for_step3 in _step3_block_regimes:
-        _log(f"Step3 跳过: 当前 regime={_regime_for_step3} 在阻断名单，省略 LLM 推理", logs_path)
-        symbols_info = []
     if symbols_info:
         t0 = datetime.now(TZ)
         try:

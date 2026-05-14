@@ -38,6 +38,82 @@ PANIC_REPAIR_MAIN_REBOUND_PCT = float(os.getenv("FUNNEL_PANIC_REPAIR_MAIN_REBOUN
 PANIC_REPAIR_SMALL_REBOUND_PCT = float(os.getenv("FUNNEL_PANIC_REPAIR_SMALL_REBOUND_PCT", "1.5"))
 FUNNEL_EVR_POLICY = os.getenv("FUNNEL_EVR_POLICY", "all_regimes").strip().lower()
 
+_PV_OUTLOOK_FALLBACK: dict[str, str] = {
+    "RISK_ON": "次日推演：若量能维持在20日均量0.95x上方且不破MA50，偏强震荡延续；若放量跌破MA50，需转入防守。",
+    "PANIC_REPAIR": "次日推演：修复阶段以确认强度为先，若放量站稳MA50可继续修复；若缩量冲高回落，按反抽处理。",
+    "NEUTRAL": "次日推演：中性震荡为主，等待放量突破近高或放量跌破MA50后再确认方向。",
+    "RISK_OFF": "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；仅在缩量止跌后再评估试探。",
+    "CRASH": "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；仅在缩量止跌后再评估试探。",
+}
+
+_PV_SYSTEM_PROMPT = (
+    "你是 Wyckoff 量价分析师。根据以下大盘结构化数据，给出次日操作推演。\n"
+    "要求：1-2句话，不超过80字，纯操作指引（若X则Y格式），不要废话和客套。"
+)
+
+
+def _build_pv_user_message(
+    regime: str,
+    close: float | None,
+    ma50: float | None,
+    ma200: float | None,
+    price_zone: str,
+    vol_ratio_text: str,
+    volume_state: str,
+    recent3_cum: float | None,
+) -> str:
+    parts = [
+        f"Regime: {regime}",
+        f"收盘: {close}",
+        f"MA50: {ma50}, MA200: {ma200}",
+        f"价格区域: {price_zone}",
+        f"5日/20日量比: {vol_ratio_text} ({volume_state})",
+    ]
+    if recent3_cum is not None:
+        parts.append(f"近3日累计涨跌: {recent3_cum:+.2f}%")
+    return "\n".join(parts)
+
+
+def _generate_pv_outlook(
+    *,
+    regime: str,
+    close: float | None,
+    ma50: float | None,
+    ma200: float | None,
+    price_zone: str,
+    vol_ratio_text: str,
+    volume_state: str,
+    recent3_cum: float | None,
+) -> str:
+    fallback = _PV_OUTLOOK_FALLBACK.get(regime, "次日推演：结构信息不足，先观察量能与MA50得失再定方向。")
+    try:
+        from integrations.llm_client import call_llm, get_provider_credentials
+
+        provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
+        api_key, model, base_url = get_provider_credentials(provider)
+        if not api_key:
+            return fallback
+        user_msg = _build_pv_user_message(
+            regime, close, ma50, ma200, price_zone, vol_ratio_text, volume_state, recent3_cum,
+        )
+        raw = call_llm(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            system_prompt=_PV_SYSTEM_PROMPT,
+            user_message=user_msg,
+            base_url=base_url or None,
+            timeout=30,
+            max_output_tokens=200,
+        ).strip()
+        if not raw or len(raw) < 5:
+            return fallback
+        if not raw.startswith("次日推演"):
+            raw = f"次日推演：{raw}"
+        return raw
+    except Exception:
+        return fallback
+
 
 def calc_market_breadth(
     df_map: dict[str, pd.DataFrame],
@@ -334,20 +410,16 @@ def analyze_benchmark_and_tune_cfg(
             price_zone = "震荡博弈区"
     ratio_text = f"{main_vol_ratio_5_20:.2f}x" if main_vol_ratio_5_20 is not None else "未知"
     market_pv_summary = f"沪深300近5日均量/20日均量={ratio_text}（{main_volume_state}），当前位于{price_zone}。"
-    if regime == "RISK_ON":
-        market_pv_outlook = (
-            "次日推演：若量能维持在20日均量0.95x上方且不破MA50，偏强震荡延续概率更高；若放量跌破MA50，需转入防守。"
-        )
-    elif regime == "PANIC_REPAIR":
-        market_pv_outlook = "次日推演：修复阶段以确认强度为先，若放量站稳MA50可继续修复；若缩量冲高回落，按反抽处理。"
-    elif regime == "NEUTRAL":
-        market_pv_outlook = (
-            "次日推演：中性震荡为主，等待\u201c放量突破近高\u201d或\u201c放量跌破MA50\u201d后再确认方向。"
-        )
-    elif regime in {"RISK_OFF", "CRASH"}:
-        market_pv_outlook = "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；仅在缩量止跌后再评估试探。"
-    else:
-        market_pv_outlook = "次日推演：结构信息不足，先观察量能与MA50得失再定方向。"
+    market_pv_outlook = _generate_pv_outlook(
+        regime=regime,
+        close=close,
+        ma50=ma50,
+        ma200=ma200,
+        price_zone=price_zone,
+        vol_ratio_text=ratio_text,
+        volume_state=main_volume_state,
+        recent3_cum=recent3_cum,
+    )
 
     context.update(
         {
