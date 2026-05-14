@@ -524,7 +524,6 @@ async function savePortfolioPosition(
     .eq('portfolio_id', portfolioId)
     .eq('code', code)
     .select('id')
-    .limit(1)
   if (error) return error.message
   if (Array.isArray(data) && data.length > 0) return null
 
