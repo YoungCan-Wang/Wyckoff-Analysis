@@ -44,11 +44,12 @@ type SortBy = 'date' | 'change' | 'score'
 type SortOrder = 'desc' | 'asc'
 
 async function fetchTracking(market: MarketTab): Promise<Recommendation[]> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from(MARKET_TABLE[market])
     .select('*')
     .order('recommend_date', { ascending: false })
     .limit(2000)
+  if (error) throw new Error(`${MARKET_TABLE[market]}: ${error.message}`)
   return data || []
 }
 
@@ -70,10 +71,11 @@ export function TrackingPage() {
   const needsGate = market !== 'cn'
   const isWhitelisted = !needsGate || whitelist.data === true
 
-  const { data = [], isLoading: loading } = useQuery({
+  const { data = [], isLoading: loading, error: fetchError } = useQuery({
     queryKey: ['tracking', market],
     queryFn: () => fetchTracking(market),
     enabled: !needsGate || isWhitelisted,
+    retry: 1,
   })
 
   const latestDates = useMemo(() => getLatestRecommendDates(data, RETENTION_DATES), [data])
@@ -115,6 +117,10 @@ export function TrackingPage() {
       <MarketTabs market={market} onMarketChange={setMarket} />
       {needsGate && !isWhitelisted ? (
         <BetaLocked />
+      ) : fetchError ? (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-sm text-destructive">
+          {fetchError.message}
+        </div>
       ) : loading ? (
         <WyckoffLoading />
       ) : (

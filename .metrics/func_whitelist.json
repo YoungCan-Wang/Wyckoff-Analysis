@@ -172,7 +172,7 @@
   "web/apps/web/src/routes/screener.tsx::ScreenerPage": 141,
   "web/apps/web/src/routes/settings.tsx::SettingsPage": 267,
   "web/apps/web/src/routes/tail-buy.tsx::TailBuyPage": 77,
-  "web/apps/web/src/routes/tracking.tsx::TrackingPage": 95,
+  "web/apps/web/src/routes/tracking.tsx::TrackingPage": 100,
   "web/apps/web/src/routes/tracking.tsx::TrackingFilters": 66,
   "web/apps/web/src/routes/tracking.tsx::TrackingTable": 65
 }

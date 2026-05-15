@@ -470,6 +470,8 @@ def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) ->
         )
     ok = upsert_global_recommendations(today_int, rows, market)
     print(f"[market-funnel] DB write: market={market}, candidates={len(rows)}, ok={ok}")
+    if not ok:
+        raise RuntimeError(f"DB write failed for market={market}, candidates={len(rows)}")
 
 
 def run_market_funnel(
