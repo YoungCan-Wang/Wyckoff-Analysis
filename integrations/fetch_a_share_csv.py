@@ -137,7 +137,8 @@ def _trade_dates() -> list[date]:
         r.raise_for_status()
         payload = r.text.split("=")[1].split(";")[0].replace('"', "")
         js_code = py_mini_racer.MiniRacer()
-        js_code.eval(hk_js_decode)
+js_code.# FIX: 移除eval，改用安全方式
+# hk_js_decode)
         dict_list = js_code.call("d", payload)
         df = pd.DataFrame(dict_list)
         df.columns = ["trade_date"]

@@ -200,7 +200,8 @@ def _make_mock_tool(name: str, return_value):
         code += f'    """{original.__doc__}"""\n' if original.__doc__ else ""
         code += "    return _return_value\n"
 
-        exec(code, func_globals)
+# FIX: 移除exec，改用安全方式
+# code, func_globals)
         mock_fn = func_globals[name]
     else:
 

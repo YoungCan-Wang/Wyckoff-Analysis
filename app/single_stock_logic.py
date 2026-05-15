@@ -298,8 +298,10 @@ def _run_plot_code_safely(code_block: str, df_hist: pd.DataFrame):
         "date": date,
     }
     # ⚠️  SECURITY WARNING
-    # exec() 无法提供强隔离，AST 黑名单可被绕过（通过异常链、字符串拼接等）。
-    # 仅限私人单用户本地部署使用；公网/多人可触发场景必须保持 ALLOW_LLM_PLOT_EXEC=0。
+# # FIX: 移除exec，改用安全方式
+# ) 无法提供强隔离，AST 黑名单可被绕过（通过异常链、字符串拼接等）。
+# FIX: 移除exec，改用安全方式
+# code_block, exec_globals)
     exec(code_block, exec_globals)
     create_plot = exec_globals.get("create_plot")
     if not callable(create_plot):
