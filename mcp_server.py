@@ -195,11 +195,10 @@ def wyckoff_diagnose(code: str) -> dict:
     from datetime import date as _date
     from datetime import timedelta
 
-    from core.stock_cache import normalize_hist_df
     from core.wyckoff_engine import FunnelConfig
     from core.wyckoff_events import classify_wyckoff_event
     from core.wyckoff_v2_structure import detect_structure_triggers, identify_trading_range
-    from integrations.stock_hist_repository import get_stock_hist
+    from integrations.stock_hist_repository import get_stock_hist, normalize_hist_df
 
     end = _date.today()
     start = end - timedelta(days=500)

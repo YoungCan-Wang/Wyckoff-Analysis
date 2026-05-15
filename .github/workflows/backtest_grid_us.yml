@@ -1,100 +1,56 @@
-name: Backtest Grid
+name: Backtest Grid US
 
 on:
-  schedule:
-    # 每月 1 号和 15 号 UTC 20:00（北京时间次日 04:00）自动回测
-    - cron: "0 20 1,15 * *"
   workflow_dispatch:
     inputs:
       period:
-        description: "回测时期（优先；选 custom 时用 start/end）"
+        description: "回测时期"
         required: true
         type: choice
         options:
-          - "recent_6m"
-          - "bull_2020"
           - "bear_2022"
-          - "custom"
-        default: "recent_6m"
-      start:
-        description: "自定义起始日期 (YYYY-MM-DD)，仅 period=custom 时生效"
-        required: false
-        default: ""
-      end:
-        description: "自定义结束日期 (YYYY-MM-DD)，仅 period=custom 时生效"
-        required: false
-        default: ""
+          - "bull_2023"
+        default: "bear_2022"
       top_n:
         description: "每日选股 TopN"
         required: true
         default: "2"
-      board:
-        description: "股票池"
-        required: true
-        default: "main_chinext"
-      sample_size:
-        description: "股票池采样，0 表示全量"
-        required: true
-        default: "0"
       trading_days:
         description: "回看交易日数"
         required: true
         default: "320"
-      trailing_stop:
-        description: "移动止盈(%), 如 -5 表示从最高点回撤5%卖出, 0=关闭"
-        required: true
-        default: "0"
 
 concurrency:
-  group: backtest-grid-${{ github.ref }}
+  group: backtest-grid-us-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: write
 
 env:
-  BT_START: ${{ inputs.start }}
-  BT_END: ${{ inputs.end }}
   BT_TOP_N: ${{ inputs.top_n || '2' }}
-  BT_BOARD: ${{ inputs.board || 'main_chinext' }}
-  BT_SAMPLE_SIZE: ${{ inputs.sample_size || '0' }}
   BT_TRADING_DAYS: ${{ inputs.trading_days || '320' }}
-  BT_TRAILING_STOP: ${{ inputs.trailing_stop || '0' }}
 
 jobs:
   # ────────────────────────────────────────────────
-  # Phase 1: 单 job 拉取全量数据，导出快照 artifact
-  # 解决 tushare IP 限制（最多2个）和频率限制（500次/分钟）
+  # Phase 1: TickFlow 拉取美股全量日 K 快照
   # ────────────────────────────────────────────────
   fetch:
     runs-on: ubuntu-latest
     env:
       PYTHONUNBUFFERED: "1"
       TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
-      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-      TZ: Asia/Shanghai
-      BACKTEST_SNAPSHOT_WORKERS: "6"
+      TZ: America/New_York
     steps:
       - name: Resolve period dates
         run: |
-          PERIOD="${{ inputs.period || 'recent_6m' }}"
-          if [ "$PERIOD" = "bull_2020" ]; then
-            echo "BT_START=2020-07-01" >> "$GITHUB_ENV"
-            echo "BT_END=2021-02-18" >> "$GITHUB_ENV"
-          elif [ "$PERIOD" = "bear_2022" ]; then
-            echo "BT_START=2021-12-13" >> "$GITHUB_ENV"
-            echo "BT_END=2022-10-31" >> "$GITHUB_ENV"
-          elif [ "$PERIOD" = "custom" ]; then
-            if [ -z "$BT_END" ]; then
-              echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            fi
-            if [ -z "$BT_START" ]; then
-              echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            fi
-          else
-            # recent_6m (default)
-            echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          PERIOD="${{ inputs.period || 'bear_2022' }}"
+          if [ "$PERIOD" = "bear_2022" ]; then
+            echo "BT_START=2022-01-03" >> "$GITHUB_ENV"
+            echo "BT_END=2022-10-12" >> "$GITHUB_ENV"
+          elif [ "$PERIOD" = "bull_2023" ]; then
+            echo "BT_START=2023-01-03" >> "$GITHUB_ENV"
+            echo "BT_END=2024-07-31" >> "$GITHUB_ENV"
           fi
 
       - uses: actions/checkout@v4
@@ -110,28 +66,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Fetch data snapshot
+      - name: Fetch US data snapshot
         shell: bash
         run: |
           set -euo pipefail
-          python -u scripts/backtest_snapshot_fetch.py \
+          python -u scripts/backtest_snapshot_fetch_us.py \
             --start "$BT_START" \
             --end "$BT_END" \
-            --board "$BT_BOARD" \
-            --sample-size "$BT_SAMPLE_SIZE" \
             --trading-days "$BT_TRADING_DAYS" \
             --output-dir snapshot_data
 
       - name: Upload snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-snapshot
+          name: backtest-us-snapshot
           path: snapshot_data/*
           retention-days: 3
 
   # ────────────────────────────────────────────────
-  # Phase 2: 18 个并行 job 读快照做回测（无需网络拉取）
-  # 维度: hold_days × stop_loss × take_profit（生产对齐默认关闭 trailing）
+  # Phase 2: 18 并行 job（美股参数网格）
+  # hold_days=[5,10,20] × stop_loss=[-8,-10,-12] × take_profit=[0,25]
   # ────────────────────────────────────────────────
   grid:
     runs-on: ubuntu-latest
@@ -140,34 +94,23 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        hold_days: [5, 10, 15]
-        stop_loss: [-6, -7, -8]
-        take_profit: [0, 18]
-        trailing_stop: [0]
+        hold_days: [5, 10, 20]
+        stop_loss: [-8, -10, -12]
+        take_profit: [0, 25]
     env:
       PYTHONUNBUFFERED: "1"
-      TZ: Asia/Shanghai
+      TZ: America/New_York
 
     steps:
       - name: Resolve period dates
         run: |
-          PERIOD="${{ inputs.period || 'recent_6m' }}"
-          if [ "$PERIOD" = "bull_2020" ]; then
-            echo "BT_START=2020-07-01" >> "$GITHUB_ENV"
-            echo "BT_END=2021-02-18" >> "$GITHUB_ENV"
-          elif [ "$PERIOD" = "bear_2022" ]; then
-            echo "BT_START=2021-12-13" >> "$GITHUB_ENV"
-            echo "BT_END=2022-10-31" >> "$GITHUB_ENV"
-          elif [ "$PERIOD" = "custom" ]; then
-            if [ -z "$BT_END" ]; then
-              echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            fi
-            if [ -z "$BT_START" ]; then
-              echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            fi
-          else
-            echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          PERIOD="${{ inputs.period || 'bear_2022' }}"
+          if [ "$PERIOD" = "bear_2022" ]; then
+            echo "BT_START=2022-01-03" >> "$GITHUB_ENV"
+            echo "BT_END=2022-10-12" >> "$GITHUB_ENV"
+          elif [ "$PERIOD" = "bull_2023" ]; then
+            echo "BT_START=2023-01-03" >> "$GITHUB_ENV"
+            echo "BT_END=2024-07-31" >> "$GITHUB_ENV"
           fi
 
       - uses: actions/checkout@v4
@@ -186,7 +129,7 @@ jobs:
       - name: Download snapshot
         uses: actions/download-artifact@v4
         with:
-          name: backtest-snapshot
+          name: backtest-us-snapshot
           path: snapshot_data/
 
       - name: Run grid backtest cell
@@ -196,10 +139,8 @@ jobs:
           HOLD="${{ matrix.hold_days }}"
           STOP="${{ matrix.stop_loss }}"
           TP="${{ matrix.take_profit }}"
-          TRAIL="${{ matrix.trailing_stop }}"
           STOP_TAG="${STOP#-}"
-          TRAIL_TAG="${TRAIL#-}"
-          OUT_DIR="analysis/backtest_grid_actions/h${HOLD}_sl${STOP_TAG}_tp${TP}_tr${TRAIL_TAG}"
+          OUT_DIR="analysis/backtest_grid_us/h${HOLD}_sl${STOP_TAG}_tp${TP}"
           echo "OUT_DIR=${OUT_DIR}" >> "${GITHUB_ENV}"
           mkdir -p "${OUT_DIR}"
 
@@ -208,8 +149,8 @@ jobs:
             --end "${BT_END}" \
             --hold-days "${HOLD}" \
             --top-n "${BT_TOP_N}" \
-            --board "${BT_BOARD}" \
-            --sample-size "${BT_SAMPLE_SIZE}" \
+            --board us \
+            --benchmark SPY.US \
             --trading-days "${BT_TRADING_DAYS}" \
             --use-current-meta \
             --exit-mode sltp \
@@ -218,7 +159,6 @@ jobs:
             --sltp-priority stop_first \
             --pending-mode both \
             --pending-merge-order funnel_first \
-            --trailing-stop "${TRAIL}" \
             --metrics-engine auto \
             --wbt-n-jobs 2 \
             --snapshot-dir snapshot_data \
@@ -229,7 +169,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-grid-h${{ matrix.hold_days }}-sl${{ matrix.stop_loss }}-tp${{ matrix.take_profit }}-tr${{ matrix.trailing_stop }}-${{ github.run_number }}
+          name: backtest-us-grid-h${{ matrix.hold_days }}-sl${{ matrix.stop_loss }}-tp${{ matrix.take_profit }}-${{ github.run_number }}
           path: ${{ env.OUT_DIR }}/*
           retention-days: 7
           if-no-files-found: warn
@@ -246,23 +186,15 @@ jobs:
     steps:
       - name: Resolve period dates
         run: |
-          PERIOD="${{ inputs.period || 'recent_6m' }}"
-          if [ "$PERIOD" = "bull_2020" ]; then
-            echo "BT_START=2020-07-01" >> "$GITHUB_ENV"
-            echo "BT_END=2021-02-18" >> "$GITHUB_ENV"
-          elif [ "$PERIOD" = "bear_2022" ]; then
-            echo "BT_START=2021-12-13" >> "$GITHUB_ENV"
-            echo "BT_END=2022-10-31" >> "$GITHUB_ENV"
-          elif [ "$PERIOD" = "custom" ]; then
-            if [ -z "$BT_END" ]; then
-              echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            fi
-            if [ -z "$BT_START" ]; then
-              echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            fi
-          else
-            echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
-            echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          PERIOD="${{ inputs.period || 'bear_2022' }}"
+          if [ "$PERIOD" = "bear_2022" ]; then
+            echo "BT_START=2022-01-03" >> "$GITHUB_ENV"
+            echo "BT_END=2022-10-12" >> "$GITHUB_ENV"
+            echo "PERIOD_LABEL=熊市(2022加息周期)" >> "$GITHUB_ENV"
+          elif [ "$PERIOD" = "bull_2023" ]; then
+            echo "BT_START=2023-01-03" >> "$GITHUB_ENV"
+            echo "BT_END=2024-07-31" >> "$GITHUB_ENV"
+            echo "PERIOD_LABEL=牛市(2023-24 AI驱动)" >> "$GITHUB_ENV"
           fi
 
       - uses: actions/checkout@v4
@@ -276,7 +208,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
-          pattern: backtest-grid-*
+          pattern: backtest-us-grid-*
 
       - name: Install dependencies
         run: pip install requests
@@ -287,22 +219,22 @@ jobs:
         run: |
           python3 scripts/update_backtest_market_report.py \
             --artifacts-dir artifacts \
-            --output docs/BACKTEST_MARKET_REPORT.md \
+            --output docs/BACKTEST_US_REPORT.md \
             --run-url "$RUN_URL" \
-            --generated-at "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S Asia/Shanghai')"
+            --generated-at "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
       - name: Upload market backtest report
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-market-report-${{ github.run_number }}
-          path: docs/BACKTEST_MARKET_REPORT.md
+          name: backtest-us-report-${{ github.run_number }}
+          path: docs/BACKTEST_US_REPORT.md
           retention-days: 30
           if-no-files-found: error
 
       - name: Aggregate and notify
         shell: bash
         env:
-          BT_TOP_N: ${{ inputs.top_n || '3' }}
+          BT_TOP_N: ${{ inputs.top_n || '2' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 -u - <<'PYEOF'
@@ -313,25 +245,20 @@ jobs:
               print('FEISHU_WEBHOOK_URL 未配置，跳过通知')
               exit(0)
 
-          # 诊断：打印 artifacts 目录结构
           print('[notify] artifacts 目录结构:')
           for root, dirs, files in os.walk('artifacts'):
               for f in files:
                   print(f'  {os.path.join(root, f)}')
-          if not os.path.isdir('artifacts'):
-              print('[notify] ⚠️ artifacts 目录不存在!')
 
           summaries = sorted(glob.glob('artifacts/**/summary_*.md', recursive=True))
           print(f'[notify] 找到 {len(summaries)} 个 summary 文件: {summaries[:5]}')
 
-          # --- 单个 summary 用 send_backtest_card ---
           if len(summaries) == 1:
               from utils.feishu import send_backtest_card
               ok = send_backtest_card(webhook, summaries[0])
               print(f'send_backtest_card: {ok}')
               exit(0)
 
-          # --- 多单元 grid：紧凑视觉卡片 ---
           def extract(content, keyword):
               for line in content.split('\n'):
                   if keyword in line:
@@ -346,7 +273,6 @@ jobs:
               m_hold = re.search(r'h(\d+)', dirname)
               m_sl = re.search(r'sl-?(\d+)', dirname)
               m_tp = re.search(r'tp(\d+)', dirname)
-              m_tr = re.search(r'tr-?(\d+)', dirname)
               if not m_hold or not m_sl:
                   continue
               with open(sf, 'r') as f:
@@ -355,7 +281,6 @@ jobs:
                   'hold': int(m_hold.group(1)),
                   'sl': int(m_sl.group(1)),
                   'tp': int(m_tp.group(1)) if m_tp else 0,
-                  'tr': int(m_tr.group(1)) if m_tr else 0,
                   'win': extract(content, '胜率'),
                   'avg': extract(content, '平均收益'),
                   'sharpe': extract(content, '夏普比'),
@@ -368,33 +293,23 @@ jobs:
               return format(v, spec) if v is not None else '-'
 
           def sharp_flag(v):
-              if v is None:
-                  return '⚪'
-              if v >= 0.6:
-                  return '🟢'
-              if v >= 0.2:
-                  return '🟡'
-              if v >= 0:
-                  return '🟠'
+              if v is None: return '⚪'
+              if v >= 0.6: return '🟢'
+              if v >= 0.2: return '🟡'
+              if v >= 0: return '🟠'
               return '🔴'
 
           def risk_comment(c):
-              if not c:
-                  return '无有效样本'
+              if not c: return '无有效样本'
               s = c.get('sharpe')
               avg = c.get('avg')
               mdd = c.get('mdd')
               notes = []
-              if s is not None and s < 0:
-                  notes.append('风险收益比偏弱')
-              elif s is not None and s < 0.2:
-                  notes.append('边际优势较薄')
-              else:
-                  notes.append('风险收益尚可')
-              if avg is not None and avg < 0:
-                  notes.append('单笔期望为负')
-              if mdd is not None and mdd <= -15:
-                  notes.append('回撤较大')
+              if s is not None and s < 0: notes.append('风险收益比偏弱')
+              elif s is not None and s < 0.2: notes.append('边际优势较薄')
+              else: notes.append('风险收益尚可')
+              if avg is not None and avg < 0: notes.append('单笔期望为负')
+              if mdd is not None and mdd <= -15: notes.append('回撤较大')
               return '；'.join(notes[:2]) if notes else '指标平衡'
 
           elements = []
@@ -402,9 +317,10 @@ jobs:
           bt_start = os.environ.get('BT_START', '?')
           bt_end = os.environ.get('BT_END', '?')
           bt_topn = os.environ.get('BT_TOP_N', '?')
+          period_label = os.environ.get('PERIOD_LABEL', '?')
 
           elements.append({'tag': 'div', 'text': {'tag': 'lark_md',
-              'content': f'**区间** {bt_start} ~ {bt_end}  ·  **TopN** {bt_topn}  ·  **共 {len(cells)} 单元**\n[查看详情]({run_url})'}})
+              'content': f'**市场** US  ·  **时期** {period_label}\n**区间** {bt_start} ~ {bt_end}  ·  **TopN** {bt_topn}  ·  **共 {len(cells)} 单元**\n[查看详情]({run_url})'}})
 
           best = None
           if not cells:
@@ -424,9 +340,8 @@ jobs:
                   bs = best.get('sharpe', 0) or 0
                   tag = '🏆' if bs > 0 else '📌'
                   tp_str = f'TP{best["tp"]}%' if best['tp'] else '无止盈'
-                  tr_str = f'移动止盈-{best["tr"]}%' if best['tr'] else '无移动止盈'
                   elements.append({'tag': 'div', 'text': {'tag': 'lark_md',
-                      'content': f'{tag} **最优参数**: 持有{best["hold"]}天 / SL-{best["sl"]}% / {tp_str} / {tr_str}'}})
+                      'content': f'{tag} **最优参数**: 持有{best["hold"]}天 / SL-{best["sl"]}% / {tp_str}'}})
 
                   cols = [
                       ('**夏普**', f'{sharp_flag(best.get("sharpe"))} {fmt(best.get("sharpe"), ".3f")}'),
@@ -445,65 +360,31 @@ jobs:
                   elements.append({'tag': 'div', 'text': {'tag': 'lark_md',
                       'content': f'**策略体检**: {risk_comment(best)}  ·  正夏普组合 {pos_cnt} / 负夏普组合 {neg_cnt}'}})
 
-                  # 参数梯队（完整表格：展示全部组合）
                   elements.append({'tag': 'hr'})
                   elements.append({'tag': 'div', 'text': {'tag': 'lark_md', 'content': f'**参数梯队表（共 {len(ranked)} 组）**'}})
 
-                  header_cols = [
-                      ('**#**', 1),
-                      ('**参数组合**', 4),
-                      ('**夏普**', 2),
-                      ('**胜率**', 2),
-                      ('**均收**', 2),
-                      ('**回撤**', 2),
-                      ('**样本**', 2),
-                  ]
+                  header_cols = [('**#**', 1), ('**参数组合**', 4), ('**夏普**', 2), ('**胜率**', 2), ('**均收**', 2), ('**回撤**', 2), ('**样本**', 2)]
                   elements.append({
-                      'tag': 'column_set',
-                      'flex_mode': 'stretch',
-                      'background_style': 'grey',
-                      'columns': [
-                          {
-                              'tag': 'column',
-                              'width': 'weighted',
-                              'weight': w,
-                              'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': t}}],
-                          }
-                          for t, w in header_cols
-                      ],
+                      'tag': 'column_set', 'flex_mode': 'stretch', 'background_style': 'grey',
+                      'columns': [{'tag': 'column', 'width': 'weighted', 'weight': w, 'elements': [
+                          {'tag': 'div', 'text': {'tag': 'lark_md', 'content': t}}]} for t, w in header_cols],
                   })
 
                   for i, c in enumerate(ranked, 1):
-                      is_best = c['hold'] == best['hold'] and c['sl'] == best['sl'] and c['tp'] == best.get('tp') and c['tr'] == best.get('tr')
+                      is_best = c['hold'] == best['hold'] and c['sl'] == best['sl'] and c['tp'] == best.get('tp')
                       mark = '🏆' if is_best else ''
                       tp_s = f'TP{c["tp"]}%' if c['tp'] else '无TP'
-                      tr_s = f'Trail-{c["tr"]}%' if c['tr'] else '无Trail'
-                      combo = f'{c["hold"]}天 / SL-{c["sl"]}% / {tp_s} / {tr_s}'
+                      combo = f'{c["hold"]}天 / SL-{c["sl"]}% / {tp_s}'
                       sharpe_v = f'{sharp_flag(c.get("sharpe"))} {fmt(c.get("sharpe"), ".3f")}{(" " + mark) if mark else ""}'
-                      row = [
-                          (str(i), 1),
-                          (combo, 4),
-                          (sharpe_v, 2),
-                          (f'{fmt(c.get("win"), ".1f")}%', 2),
-                          (f'{fmt(c.get("avg"), "+.2f")}%', 2),
-                          (f'{fmt(c.get("mdd"), ".1f")}%', 2),
-                          (f'{int(c.get("trades") or 0)}笔', 2),
-                      ]
+                      row = [(str(i), 1), (combo, 4), (sharpe_v, 2), (f'{fmt(c.get("win"), ".1f")}%', 2),
+                             (f'{fmt(c.get("avg"), "+.2f")}%', 2), (f'{fmt(c.get("mdd"), ".1f")}%', 2), (f'{int(c.get("trades") or 0)}笔', 2)]
                       elements.append({
-                          'tag': 'column_set',
-                          'flex_mode': 'stretch',
-                          'columns': [
-                              {
-                                  'tag': 'column',
-                                  'width': 'weighted',
-                                  'weight': w,
-                                  'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': txt}}],
-                              }
-                              for txt, w in row
-                          ],
+                          'tag': 'column_set', 'flex_mode': 'stretch',
+                          'columns': [{'tag': 'column', 'width': 'weighted', 'weight': w, 'elements': [
+                              {'tag': 'div', 'text': {'tag': 'lark_md', 'content': txt}}]} for txt, w in row],
                       })
 
-                  # 夏普矩阵（每格取 TP/Trail 最优）
+                  # 夏普矩阵
                   holds = sorted(set(c['hold'] for c in cells))
                   sls = sorted(set(c['sl'] for c in cells))
                   agg = {}
@@ -516,23 +397,20 @@ jobs:
                   if len(holds) > 1 and len(sls) > 1:
                       elements.append({'tag': 'hr'})
                       elements.append({'tag': 'div', 'text': {'tag': 'lark_md',
-                          'content': '**最优夏普矩阵** (每格取 TP/Trail 最优)'}})
-                      # Header row
+                          'content': '**最优夏普矩阵** (每格取 TP 最优)'}})
                       hdr_cols = [{'tag': 'column', 'width': 'weighted', 'weight': 1, 'elements': [
                           {'tag': 'div', 'text': {'tag': 'lark_md', 'content': '**持有\\\\SL**'}}]}]
                       for s in sls:
                           hdr_cols.append({'tag': 'column', 'width': 'weighted', 'weight': 1, 'elements': [
                               {'tag': 'div', 'text': {'tag': 'lark_md', 'content': f'**-{s}%**'}}]})
-                      elements.append({'tag': 'column_set', 'flex_mode': 'stretch',
-                          'background_style': 'grey', 'columns': hdr_cols})
-                      # Data rows
+                      elements.append({'tag': 'column_set', 'flex_mode': 'stretch', 'background_style': 'grey', 'columns': hdr_cols})
                       for h in holds:
                           row_cols = [{'tag': 'column', 'width': 'weighted', 'weight': 1, 'elements': [
                               {'tag': 'div', 'text': {'tag': 'lark_md', 'content': f'**{h}天**'}}]}]
                           for s in sls:
                               c = agg.get((h, s))
                               v = fmt(c.get('sharpe') if c else None, '.3f')
-                              is_b = c and c.get('hold') == best.get('hold') and c.get('sl') == best.get('sl') and c.get('tp') == best.get('tp') and c.get('tr') == best.get('tr')
+                              is_b = c and c.get('hold') == best.get('hold') and c.get('sl') == best.get('sl') and c.get('tp') == best.get('tp')
                               cell_text = f'**{v}** 🏆' if is_b and v != '-' else v
                               row_cols.append({'tag': 'column', 'width': 'weighted', 'weight': 1, 'elements': [
                                   {'tag': 'div', 'text': {'tag': 'lark_md', 'content': cell_text}}]})
@@ -542,7 +420,7 @@ jobs:
           payload = {
               'msg_type': 'interactive',
               'card': {
-                  'header': {'title': {'tag': 'plain_text', 'content': '📊 Backtest Grid 回测完成'}, 'template': template},
+                  'header': {'title': {'tag': 'plain_text', 'content': '📊 US Backtest Grid 美股回测完成'}, 'template': template},
                   'elements': elements,
               },
           }
@@ -550,16 +428,16 @@ jobs:
           print(f'飞书通知: status={resp.status_code}, body={resp.text[:200]}')
           PYEOF
 
-      - name: Commit market backtest report
+      - name: Commit US backtest report
         if: always() && github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/BACKTEST_MARKET_REPORT.md
+          git add docs/BACKTEST_US_REPORT.md
           if git diff --cached --quiet; then
-            echo "Backtest market report unchanged"
+            echo "US backtest report unchanged"
           else
-            git commit -m "docs: update backtest market report"
+            git commit -m "docs: update US backtest report"
             git push
           fi
 
@@ -574,11 +452,11 @@ jobs:
               print('FEISHU_WEBHOOK_URL 未配置，跳过失败通知')
               exit(0)
           run_url = os.environ.get('RUN_URL', '')
-          content = '**Backtest Grid 回测失败**\n**Run**: ' + run_url
+          content = '**US Backtest Grid 美股回测失败**\n**Run**: ' + run_url
           payload = {
               'msg_type': 'interactive',
               'card': {
-                  'header': {'title': {'tag': 'plain_text', 'content': '❌ Backtest Grid 失败'}, 'template': 'red'},
+                  'header': {'title': {'tag': 'plain_text', 'content': '❌ US Backtest Grid 失败'}, 'template': 'red'},
                   'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}}],
               },
           }

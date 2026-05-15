@@ -1047,9 +1047,6 @@ class WyckoffTUI(App):
                         "refresh_token": session.get("refresh_token", ""),
                     }
                 )
-                from core.stock_cache import set_cli_tokens
-
-                set_cli_tokens(session.get("access_token", ""), session.get("refresh_token", ""))
                 log.write(Text.from_markup(f"  [green]✓ 登录成功 ({session['email']})[/green]"))
                 self._update_status()
             except Exception as e:

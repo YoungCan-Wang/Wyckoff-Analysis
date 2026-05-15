@@ -15,7 +15,6 @@ import pandas as pd
 from core.wyckoff_engine import normalize_hist_from_fetch
 from integrations.data_source import fetch_index_hist, fetch_market_cap_map, fetch_sector_map, fetch_stock_hist
 from integrations.fetch_a_share_csv import _normalize_symbols, get_stocks_by_board
-from integrations.stock_hist_repository import get_stock_hist as get_stock_hist_cached
 
 
 def _as_yyyymmdd(text: str) -> str:
@@ -56,45 +55,16 @@ def _load_symbols(board: str, sample_size: int) -> tuple[list[str], list[dict]]:
     return symbols, filtered_pool
 
 
-def _bool_env(name: str, default: bool = False) -> bool:
-    val = str(os.getenv(name, "1" if default else "0")).strip().lower()
-    return val in {"1", "true", "yes", "on"}
-
-
 def _fetch_one(
     symbol: str,
     prefetch_start: str,
     end_s: str,
-    *,
-    allow_network_fallback: bool,
 ) -> tuple[str, pd.DataFrame | None, str | None, float]:
     t0 = time.monotonic()
     try:
-        raw = None
-        # 1) 缓存优先；cache_only=True 不触发外部数据源补拉，避免单票慢调用拖垮整批任务
-        try:
-            raw = get_stock_hist_cached(
-                symbol,
-                prefetch_start,
-                end_s,
-                adjust="qfq",
-                context="background",
-                cache_only=True,
-            )
-        except Exception:
-            raw = None
-
-        # 2) 可选网络回退（默认关闭）
-        if (raw is None or raw.empty) and allow_network_fallback:
-            try:
-                raw = fetch_stock_hist(symbol, prefetch_start, end_s, adjust="qfq")
-            except Exception:
-                raw = None
-
+        raw = fetch_stock_hist(symbol, prefetch_start, end_s, adjust="qfq")
         if raw is None or raw.empty:
-            reason = "cache_miss" if not allow_network_fallback else "no_data"
-            return (symbol, None, reason, time.monotonic() - t0)
-
+            return (symbol, None, "no_data", time.monotonic() - t0)
         df = normalize_hist_from_fetch(raw)
         if df is None or df.empty:
             return (symbol, None, "normalized_empty", time.monotonic() - t0)
@@ -113,12 +83,6 @@ def main() -> int:
     parser.add_argument("--trading-days", type=int, default=320)
     parser.add_argument("--output-dir", default="snapshot_data")
     parser.add_argument("--max-workers", type=int, default=int(os.getenv("BACKTEST_SNAPSHOT_WORKERS", "6")))
-    parser.add_argument(
-        "--allow-network-fallback",
-        action="store_true",
-        default=_bool_env("BACKTEST_SNAPSHOT_ALLOW_NETWORK_FALLBACK", False),
-        help="缓存未命中时允许回退外部数据源（默认关闭）",
-    )
     args = parser.parse_args()
 
     start_s = _as_yyyymmdd(args.start)
@@ -127,10 +91,7 @@ def main() -> int:
     prefetch_start = (start_dt - timedelta(days=int(args.trading_days * 2))).strftime("%Y%m%d")
 
     print(f"[snapshot] 数据区间: {prefetch_start} -> {end_s}")
-    print(
-        "[snapshot] fetch模式: "
-        f"allow_network_fallback={args.allow_network_fallback}, workers={max(int(args.max_workers), 1)}"
-    )
+    print(f"[snapshot] fetch模式: 直取数据源, workers={max(int(args.max_workers), 1)}")
 
     symbols, raw_pool = _load_symbols(args.board, int(args.sample_size))
     if not symbols:
@@ -148,16 +109,7 @@ def main() -> int:
 
     workers = max(int(args.max_workers), 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {
-            ex.submit(
-                _fetch_one,
-                sym,
-                prefetch_start,
-                end_s,
-                allow_network_fallback=bool(args.allow_network_fallback),
-            ): sym
-            for sym in symbols
-        }
+        futs = {ex.submit(_fetch_one, sym, prefetch_start, end_s): sym for sym in symbols}
         for done, ft in enumerate(as_completed(futs), 1):
             sym, df, err, elapsed = ft.result()
             if df is not None:
@@ -236,7 +188,6 @@ def main() -> int:
         "fail": fail,
         "start": prefetch_start,
         "end": end_s,
-        "allow_network_fallback": bool(args.allow_network_fallback),
     }
     (out_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     print(f"[snapshot] Done! 成功率: {ok}/{len(symbols)} ({100 * ok / len(symbols):.1f}%)")

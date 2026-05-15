@@ -674,8 +674,7 @@ def analyze_stock(
     """
     try:
         _ensure_tushare_token(tool_context)
-        from core.stock_cache import _COL_MAP
-        from integrations.stock_hist_repository import get_stock_hist
+        from integrations.stock_hist_repository import _COL_MAP, get_stock_hist
 
         mode = (mode or "diagnose").strip().lower()
         if mode not in ("diagnose", "price"):
@@ -685,7 +684,7 @@ def analyze_stock(
         if mode == "price":
             days = min(max(days, 1), 250)
             start_date = end_date - timedelta(days=int(days * 1.6))
-            df = get_stock_hist(code, start_date, end_date, user_id=_get_user_id(tool_context))
+            df = get_stock_hist(code, start_date, end_date)
             if df is None or df.empty:
                 return {"error": f"无法获取 {code} 的行情数据"}
             hist_hints = _collect_tickflow_limit_hints_from_df(df)
@@ -721,7 +720,7 @@ def analyze_stock(
         from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_text
 
         start_date = end_date - timedelta(days=500)
-        df = get_stock_hist(code, start_date, end_date, user_id=_get_user_id(tool_context))
+        df = get_stock_hist(code, start_date, end_date)
         if df is None or df.empty:
             return {"error": f"无法获取 {code} 的行情数据"}
         hist_hints = _collect_tickflow_limit_hints_from_df(df)
@@ -783,9 +782,7 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
         portfolio_id = build_user_live_portfolio_id(user_id)
         state = None
 
-        from core.cache_whitelist import is_user_in_cache_whitelist
-
-        use_remote = is_user_in_cache_whitelist(user_id) and _has_cloud(tool_context)
+        use_remote = _has_cloud(tool_context)
 
         if use_remote:
             from integrations.supabase_portfolio import load_portfolio_state
@@ -872,7 +869,7 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
             pos_name = pos.get("name", pos_code)
             pos_cost = float(pos.get("cost", pos.get("cost_price", 0)) or 0)
             try:
-                df = get_stock_hist(pos_code, start_date, end_date, user_id=_get_user_id(tool_context))
+                df = get_stock_hist(pos_code, start_date, end_date)
                 if df is None or df.empty:
                     failed_count += 1
                     results.append({"code": pos_code, "name": pos_name, "error": "无行情数据"})
@@ -882,7 +879,7 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
                 for hint in _collect_tickflow_limit_hints_from_df(df):
                     if hint not in hist_tickflow_hints:
                         hist_tickflow_hints.append(hint)
-                from core.stock_cache import _COL_MAP
+                from integrations.stock_hist_repository import _COL_MAP
 
                 df = df.rename(columns=_COL_MAP)
                 d = diagnose_one_stock(pos_code, pos_name, pos_cost, df)

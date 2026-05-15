@@ -71,15 +71,6 @@ export async function fetchTickFlowKey(deps: ToolDeps, userId: string): Promise<
   return keys.tickflow
 }
 
-async function checkWhitelist(deps: ToolDeps, userId: string): Promise<boolean> {
-  const { data } = await deps.supabase
-    .from('whitelist')
-    .select('user_id')
-    .eq('user_id', userId)
-    .limit(1)
-  return Array.isArray(data) && data.length > 0
-}
-
 function normalizeTushareCode(code: string): string {
   const c = code.replace(/\.\w+$/, '')
   if (c.startsWith('6')) return `${c}.SH`
@@ -204,21 +195,8 @@ async function fetchKlineViaTickFlow(deps: ToolDeps, code: string, apiKey: strin
   return parseTickFlowPayload(await batchResp.json(), symbol)
 }
 
-async function fetchKlineFromCache(deps: ToolDeps, code: string, startIso: string, endIso: string): Promise<KlineRow[]> {
-  const { data } = await deps.supabase
-    .from('stock_hist_cache')
-    .select('date,open,high,low,close,volume')
-    .eq('symbol', code)
-    .eq('adjust', 'qfq')
-    .gte('date', startIso)
-    .lte('date', endIso)
-    .order('date', { ascending: false })
-    .limit(250)
-  if (!data || data.length === 0) return []
-  return parseKlineRows(data).reverse()
-}
 
-export async function fetchKlineForAgent(deps: ToolDeps, code: string, keys: { tickflow: string | null; tushare: string | null }, userId: string): Promise<KlineRow[]> {
+export async function fetchKlineForAgent(deps: ToolDeps, code: string, keys: { tickflow: string | null; tushare: string | null }, _userId: string): Promise<KlineRow[]> {
   const end = new Date(); end.setDate(end.getDate() - 1)
   const start = new Date(); start.setDate(start.getDate() - 500)
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
@@ -230,9 +208,7 @@ export async function fetchKlineForAgent(deps: ToolDeps, code: string, keys: { t
   if (isCn && keys.tushare) {
     try { const r = await fetchKlineViaTushare(deps, code, keys.tushare, fmt(start), fmt(end)); if (r.length) return r.sort((a, b) => a.date.localeCompare(b.date)) } catch { /* */ }
   }
-  if (!isCn || !(await checkWhitelist(deps, userId))) return []
-  const toIso = (s: string) => `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`
-  return fetchKlineFromCache(deps, code, toIso(fmt(start)), toIso(fmt(end)))
+  return []
 }
 
 export async function fetchQuotes(

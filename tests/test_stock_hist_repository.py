@@ -1,63 +1,69 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 
 import pandas as pd
 
-from core.stock_cache import CacheMeta
 
-
-def test_get_stock_hist_uses_cache_when_only_tail_non_trading_gap_fails(monkeypatch):
+def test_get_stock_hist_returns_data_from_source(monkeypatch):
     import integrations.stock_hist_repository as repo
 
-    cached = pd.DataFrame(
+    fake_df = pd.DataFrame(
         [
             {
-                "date": "2026-04-29",
-                "open": 10.0,
-                "high": 11.0,
-                "low": 9.8,
-                "close": 10.5,
-                "volume": 1000,
-                "amount": 10000,
-                "pct_chg": 1.0,
+                "日期": "2026-04-29",
+                "开盘": 10.0,
+                "最高": 11.0,
+                "最低": 9.8,
+                "收盘": 10.5,
+                "成交量": 1000,
+                "成交额": 10000,
+                "涨跌幅": 1.0,
             },
             {
-                "date": "2026-04-30",
-                "open": 10.5,
-                "high": 11.2,
-                "low": 10.1,
-                "close": 11.0,
-                "volume": 1200,
-                "amount": 13000,
-                "pct_chg": 4.76,
+                "日期": "2026-04-30",
+                "开盘": 10.5,
+                "最高": 11.2,
+                "最低": 10.1,
+                "收盘": 11.0,
+                "成交量": 1200,
+                "成交额": 13000,
+                "涨跌幅": 4.76,
             },
         ]
     )
+    fake_df.attrs["source"] = "tickflow"
 
-    monkeypatch.setattr(
-        repo,
-        "get_cache_meta",
-        lambda *args, **kwargs: CacheMeta(
-            symbol="000001",
-            adjust="qfq",
-            source="cache",
-            start_date=date(2026, 4, 29),
-            end_date=date(2026, 4, 30),
-            updated_at=datetime(2026, 4, 30, tzinfo=UTC),
-        ),
-    )
-    monkeypatch.setattr(repo, "load_cached_history", lambda *args, **kwargs: cached)
+    monkeypatch.setattr(repo, "fetch_stock_hist_from_source", lambda **kwargs: fake_df)
 
-    def fail_tail_gap(*args, **kwargs):
-        raise RuntimeError("数据拉取全线失败 [标:000001, 范围:20260501..20260501, 复权:qfq]")
-
-    monkeypatch.setattr(repo, "_fetch_gap", fail_tail_gap)
-    monkeypatch.setattr(repo, "upsert_cache_data", lambda *args, **kwargs: None)
-
-    out = repo.get_stock_hist("000001", date(2026, 4, 29), date(2026, 5, 1), context="background")
+    out = repo.get_stock_hist("000001", date(2026, 4, 29), date(2026, 4, 30))
 
     assert len(out) == 2
     assert out.iloc[-1]["日期"] == "2026-04-30"
-    assert out.attrs["cache_status"] == "hit_tail_gap_skipped"
-    assert out.attrs["cached_until"] == "2026-04-30"
+    assert out.attrs["source"] == "realtime"
+    assert out.attrs["upstream_source"] == "tickflow"
+
+
+def test_get_stock_hist_accepts_legacy_kwargs(monkeypatch):
+    """旧调用方可能传 context/cache_only/user_id，确认不报错。"""
+    import integrations.stock_hist_repository as repo
+
+    fake_df = pd.DataFrame(
+        [
+            {
+                "日期": "2026-04-29",
+                "开盘": 10.0,
+                "最高": 11.0,
+                "最低": 9.8,
+                "收盘": 10.5,
+                "成交量": 1000,
+                "成交额": 10000,
+                "涨跌幅": 1.0,
+            }
+        ]
+    )
+    fake_df.attrs["source"] = "test"
+    monkeypatch.setattr(repo, "fetch_stock_hist_from_source", lambda **kwargs: fake_df)
+
+    out = repo.get_stock_hist("000001", "2026-04-29", "2026-04-29", context="background", cache_only=True, user_id="u1")
+    assert len(out) == 1

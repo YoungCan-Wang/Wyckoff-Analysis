@@ -117,9 +117,9 @@ def _parse_board_sample(content: str) -> tuple[str, str]:
 
 def _parse_params(dirname: str) -> tuple[int, int, int, int] | None:
     # Supports both GitHub artifact names and local output dirs:
-    # backtest-grid-h15-sl-6-tp0-tr0-25, h15_sl6_tp0_tr0.
+    # backtest-grid-h15-sl-6-tp0-tr0-25, h15_sl6_tp0_tr0, h10_sl8_tp25 (US, no tr).
     m = re.search(
-        r"h(?P<hold>\d+).*?sl-?(?P<sl>\d+).*?tp(?P<tp>\d+).*?tr-?(?P<tr>\d+)",
+        r"h(?P<hold>\d+).*?sl-?(?P<sl>\d+).*?tp(?P<tp>\d+)(?:.*?tr-?(?P<tr>\d+))?",
         dirname,
     )
     if not m:
@@ -128,7 +128,7 @@ def _parse_params(dirname: str) -> tuple[int, int, int, int] | None:
         int(m.group("hold")),
         int(m.group("sl")),
         int(m.group("tp")),
-        int(m.group("tr")),
+        int(m.group("tr") or 0),
     )
 
 

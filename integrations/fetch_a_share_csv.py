@@ -336,21 +336,11 @@ def _fetch_hist(symbol: str, window: TradingWindow, adjust: str, *, user_id: str
     """个股日线：tickflow 优先（qfq），失败再回退其它数据源"""
     from integrations.stock_hist_repository import get_stock_hist
 
-    context = "auto"
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-        context = "background" if get_script_run_ctx() is None else "web"
-    except Exception:
-        context = "background"
-
     return get_stock_hist(
         symbol=symbol,
         start_date=window.start_trade_date,
         end_date=window.end_trade_date,
         adjust=adjust or "",
-        context=context,
-        user_id=user_id,
     )
 
 

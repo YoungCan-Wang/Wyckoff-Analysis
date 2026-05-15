@@ -613,7 +613,7 @@ data/market_universes/*.json                    （A 股 / 港股 / 美股 / ETF
 tickflow                                        （1 分钟盘中数据，尾盘策略专用）
 ```
 
-日线行情通过统一仓库层读取：先查 Supabase `stock_hist_cache`，缺口按日期补拉并回写，之后 Web 单股/批量、自定义导出、Step3、回测都复用同一缓存窗口。
+日线行情通过统一仓库层 `integrations/stock_hist_repository.py` 直接从数据源拉取（TickFlow 优先，降级 tushare/akshare/baostock）。
 
 `integrations/rag_veto.py` — 新闻否决层：抓取东方财富个股新闻，命中负面关键词则拦截推荐。
 
@@ -625,7 +625,6 @@ tickflow                                        （1 分钟盘中数据，尾盘
 | `portfolio_positions` | 持仓明细 |
 | `trade_orders` | AI 交易建议 |
 | `user_settings` | 用户配置（API Key / Webhook / provider base_url / custom_providers JSON） |
-| `stock_hist_cache` | 日线行情缓存（按 `symbol + adjust + date` 去重，默认滑动保留约 320 个交易日窗口） |
 | `recommendation_tracking` | 威科夫形态复盘 |
 | `signal_pending` | 信号确认池 |
 | `market_signal_daily` | 大盘信号 |
@@ -633,7 +632,7 @@ tickflow                                        （1 分钟盘中数据，尾盘
 
 数据隔离：Web JWT → RLS，CLI access_token → RLS，脚本 service_role_key → 绕过 RLS。
 
-`scripts/db_maintenance.py` 负责清理过期数据：行情缓存约 320 日，形态复盘按表内最新 30 个入选日期保留，订单/信号/净值等短周期表保留 10-30 日区间，避免数据库行数无限增长。
+`scripts/db_maintenance.py` 负责清理过期数据：形态复盘按表内最新 30 个入选日期保留，订单/信号/净值等短周期表保留 10-30 日区间，避免数据库行数无限增长。
 
 ## CLI 命令
 

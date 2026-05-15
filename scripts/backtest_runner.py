@@ -71,12 +71,6 @@ DEFAULT_SELL_FRICTION_PCT = float(os.getenv("BACKTEST_SELL_FRICTION_PCT", "0.5")
 DEFAULT_METRICS_ENGINE = os.getenv("BACKTEST_METRICS_ENGINE", "legacy").strip().lower() or "legacy"
 DEFAULT_WBT_FEE_RATE = float(os.getenv("BACKTEST_WBT_FEE_RATE", "0.0"))
 DEFAULT_WBT_N_JOBS = int(os.getenv("BACKTEST_WBT_N_JOBS", "1"))
-BACKTEST_CACHE_ONLY_FIRST = os.getenv("BACKTEST_CACHE_ONLY_FIRST", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 
 # ── 大盘水温仓位控制：根据 regime 调节每日候选上限，减少逆势开仓。 ──
 REGIME_POSITION_RATIO: dict[str, float] = {
@@ -136,6 +130,8 @@ def _parse_hold_days_list(raw: str) -> list[int]:
 
 def _normalize_backtest_board(board: str) -> str:
     b = str(board or "").strip().lower()
+    if b == "us":
+        return "us"
     # 回测统一口径：all 兼容映射到主板+创业板
     if b in {"", "all"}:
         return "main_chinext"
@@ -152,6 +148,8 @@ def _is_chinext_code(code: str) -> bool:
 
 def _board_match(code: str, board: str) -> bool:
     b = _normalize_backtest_board(board)
+    if b == "us":
+        return True
     c = str(code or "").strip()
     if b == "main":
         return _is_main_code(c)
@@ -163,6 +161,14 @@ def _board_match(code: str, board: str) -> bool:
 
 def _build_universe(board: str, sample_size: int) -> tuple[list[str], dict[str, str]]:
     board_norm = _normalize_backtest_board(board)
+    if board_norm == "us":
+        from scripts.backtest_snapshot_fetch_us import _load_us_symbols
+
+        symbols, name_map = _load_us_symbols()
+        if sample_size > 0:
+            symbols = symbols[:sample_size]
+        return symbols, name_map
+
     if board_norm == "main":
         items = get_stocks_by_board("main")
     elif board_norm == "chinext":
@@ -173,7 +179,6 @@ def _build_universe(board: str, sample_size: int) -> tuple[list[str], dict[str, 
     name_map = {
         str(x.get("code", "")).strip(): str(x.get("name", "")).strip() for x in items if str(x.get("code", "")).strip()
     }
-    # 过滤 ST 后采样（可复现）
     symbols = [
         s
         for s in _normalize_symbols(list(name_map.keys()))
@@ -189,7 +194,9 @@ _HIST_CANDIDATE_COLS = ["symbol", "date", "open", "high", "low", "close", "volum
 
 
 def _process_hist_chunk(chunk: pd.DataFrame, symbols_filter: set[str] | None, out: dict[str, pd.DataFrame]) -> int:
-    chunk["symbol"] = chunk["symbol"].astype(str).str.strip().str.zfill(6)
+    chunk["symbol"] = chunk["symbol"].astype(str).str.strip()
+    cn_mask = ~chunk["symbol"].str.contains(".", regex=False)
+    chunk.loc[cn_mask, "symbol"] = chunk.loc[cn_mask, "symbol"].str.zfill(6)
     if symbols_filter:
         chunk = chunk[chunk["symbol"].isin(symbols_filter)]
     if chunk.empty:
@@ -297,10 +304,18 @@ def _load_snapshot_market_cap_map(snapshot_dir: Path) -> dict[str, float] | None
     return None
 
 
+def _apply_us_cfg(cfg: FunnelConfig) -> None:
+    cfg.require_cn_main_or_chinext = False
+    cfg.enable_rs_filter = False
+    cfg.enable_rs_divergence_channel = False
+    cfg.require_bench_latest_alignment = False
+    cfg.sos_pct_min = 7.0
+    cfg.sos_vol_ratio = 3.0
+    cfg.spring_vol_ratio = 1.3
+    cfg.evr_max_rise = 3.0
+
+
 def _apply_funnel_cfg_overrides(cfg: FunnelConfig) -> None:
-    """
-    与生产漏斗同口径：读取 FUNNEL_CFG_* 环境变量覆盖 FunnelConfig。
-    """
     _shared_apply_funnel_cfg_overrides(cfg)
 
 
@@ -310,44 +325,7 @@ def _fetch_hist_norm(
     end_dt: date,
 ) -> tuple[str, pd.DataFrame | None, str | None]:
     try:
-        # 与生产口径对齐：默认允许 stock_repo 补缺口（cache_only=False）。
-        # 若需提速可设置 BACKTEST_CACHE_ONLY_FIRST=1 优先只读缓存。
-        try:
-            from integrations.stock_hist_repository import get_stock_hist as _cached
-
-            raw = None
-            if BACKTEST_CACHE_ONLY_FIRST:
-                raw = _cached(
-                    symbol=symbol,
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    adjust="qfq",
-                    context="background",
-                    cache_only=True,
-                )
-                if raw is None or raw.empty:
-                    raw = _cached(
-                        symbol=symbol,
-                        start_date=start_dt,
-                        end_date=end_dt,
-                        adjust="qfq",
-                        context="background",
-                        cache_only=False,
-                    )
-            else:
-                raw = _cached(
-                    symbol=symbol,
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    adjust="qfq",
-                    context="background",
-                    cache_only=False,
-                )
-        except Exception:
-            raw = None
-        # 兜底：repo 异常或无数据时直连数据源
-        if raw is None or raw.empty:
-            raw = fetch_stock_hist(symbol, start_dt, end_dt, adjust="qfq")
+        raw = fetch_stock_hist(symbol, start_dt, end_dt, adjust="qfq")
         df = normalize_hist_from_fetch(raw)
         if df is None or df.empty:
             return symbol, None, "empty"
@@ -357,7 +335,7 @@ def _fetch_hist_norm(
         if out.empty:
             return symbol, None, "empty_after_date_parse"
         return symbol, out, None
-    except Exception as exc:  # pragma: no cover - runtime path
+    except Exception as exc:
         return symbol, None, str(exc)
 
 
@@ -501,13 +479,13 @@ def _is_limit_up_locked(row_s: pd.Series) -> bool:
     return False
 
 
-def _open_on_or_after(df: pd.DataFrame, d: date) -> tuple[float | None, date | None]:
+def _open_on_or_after(df: pd.DataFrame, d: date, *, skip_limit_up: bool = True) -> tuple[float | None, date | None]:
     """取目标日期（含）之后首个可成交交易日的开盘价，跳过一字涨停日。"""
     candidates = df[df["date"] >= d].head(5)
     if candidates.empty:
         return None, None
     for _, row_s in candidates.iterrows():
-        if _is_limit_up_locked(row_s):
+        if skip_limit_up and _is_limit_up_locked(row_s):
             continue
         if "open" in candidates.columns:
             v = pd.to_numeric(pd.Series([row_s["open"]]), errors="coerce").dropna()
@@ -611,6 +589,7 @@ def run_backtest(
     trading_days: int,
     max_workers: int,
     snapshot_dir: Path | None = None,
+    benchmark: str = "000001",
     exit_mode: str = DEFAULT_EXIT_MODE,
     stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT,
     take_profit_pct: float = DEFAULT_TAKE_PROFIT_PCT,
@@ -672,12 +651,9 @@ def run_backtest(
         # 从快照的 name_map 派生 symbols（零网络调用）
         name_map = snapshot_name_map
         all_codes = sorted(name_map.keys())
-        # ST 过滤 + 采样，与 _build_universe 保持同口径
-        symbols = [
-            s
-            for s in _normalize_symbols(all_codes)
-            if _board_match(s, board) and "ST" not in name_map.get(s, "").upper()
-        ]
+        is_us = _normalize_backtest_board(board) == "us"
+        normalized = all_codes if is_us else _normalize_symbols(all_codes)
+        symbols = [s for s in normalized if _board_match(s, board) and "ST" not in name_map.get(s, "").upper()]
         if sample_size > 0:
             symbols = symbols[:sample_size]
         logger.info("股票池=%d (快照 name_map, board=%s, sample_size=%s)", len(symbols), board, sample_size)
@@ -727,9 +703,9 @@ def run_backtest(
 
     if bench_df is None or bench_df.empty:
         try:
-            bench_raw = fetch_index_hist("000001", prefetch_start, prefetch_end)
+            bench_raw = fetch_index_hist(benchmark, prefetch_start, prefetch_end)
         except Exception as exc:
-            raise RuntimeError("回测需要大盘交易日历与基准收益，请先配置可用的 TUSHARE_TOKEN。") from exc
+            raise RuntimeError(f"回测需要基准 {benchmark} 的交易日历数据。") from exc
         bench_df = normalize_hist_from_fetch(bench_raw).sort_values("date").copy()
         bench_df["date"] = pd.to_datetime(bench_df["date"], errors="coerce").dt.date
         bench_df = bench_df.dropna(subset=["date"]).reset_index(drop=True)
@@ -763,6 +739,8 @@ def run_backtest(
         sector_map = {}
         logger.info("偏差抑制口径：关闭当前截面市值/行业映射过滤 (L1 市值过滤 + L3 行业共振过滤)")
     base_cfg = FunnelConfig(trading_days=trading_days)
+    if board == "us":
+        _apply_us_cfg(base_cfg)
     _apply_funnel_cfg_overrides(base_cfg)
 
     records: list[TradeRecord] = []
@@ -883,7 +861,9 @@ def run_backtest(
                 continue
             # 核心修正：实盘中信号出现在收盘后，最早只能在次日开盘买入
             # 停牌股可能延后成交，必须用 actual_entry_date 计算持有窗口
-            entry_close, actual_entry_date = _open_on_or_after(full_df, entry_target_date)
+            entry_close, actual_entry_date = _open_on_or_after(
+                full_df, entry_target_date, skip_limit_up=(board != "us")
+            )
             if entry_close is None or entry_close <= 0 or actual_entry_date is None:
                 continue
 
@@ -1137,7 +1117,6 @@ def run_backtest(
         "pending_mode": pending_mode,
         "pending_merge_order": pending_merge_order,
         "pending_confirmed_total": pending_confirmed_total,
-        "cache_only_first": bool(BACKTEST_CACHE_ONLY_FIRST),
         "metrics_engine": metrics_engine,
         "wbt_fee_rate": float(wbt_fee_rate),
         "wbt_n_jobs": int(wbt_n_jobs),
@@ -1828,9 +1807,9 @@ def _build_summary_md(summary: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Wyckoff Funnel 日线轻量回测器")
     _default_end = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-    _default_start = (date.today() - timedelta(days=548)).strftime("%Y-%m-%d")  # ~18 个月
-    parser.add_argument("--start", default=_default_start, help=f"起始日期 (default: {_default_start}，约18个月前)")
-    parser.add_argument("--end", default=_default_end, help=f"结束日期 (default: {_default_end}，T-1)")
+    _default_start = (date.today() - timedelta(days=548)).strftime("%Y-%m-%d")
+    parser.add_argument("--start", default=_default_start, help=f"起始日期 (default: {_default_start})")
+    parser.add_argument("--end", default=_default_end, help=f"结束日期 (default: {_default_end})")
     parser.add_argument(
         "--hold-days",
         type=int,
@@ -1850,9 +1829,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--board",
-        choices=["main_chinext", "all", "main", "chinext"],
+        choices=["main_chinext", "all", "main", "chinext", "us"],
         default="main_chinext",
     )
+    parser.add_argument("--benchmark", default="000001")
     parser.add_argument(
         "--sample-size",
         type=int,
@@ -1918,7 +1898,7 @@ def main() -> int:
     parser.add_argument(
         "--snapshot-dir",
         default="",
-        help="CI 专用：GitHub Actions Phase 1 导出的快照目录（留空则从 Supabase 缓存取数）",
+        help="CI 专用：GitHub Actions Phase 1 导出的快照目录（留空则直接从数据源取数）",
     )
     parser.add_argument(
         "--output-dir",
@@ -2012,6 +1992,7 @@ def main() -> int:
                 trading_days=args.trading_days,
                 max_workers=args.workers,
                 snapshot_dir=Path(args.snapshot_dir).resolve() if str(args.snapshot_dir).strip() else None,
+                benchmark=args.benchmark,
                 exit_mode=args.exit_mode,
                 stop_loss_pct=args.stop_loss,
                 take_profit_pct=args.take_profit,
@@ -2056,8 +2037,6 @@ def main() -> int:
         summary_md = _build_summary_md(summary)
         summary_path.write_text(summary_md + "\n", encoding="utf-8")
         trades_df.to_csv(trades_path, index=False, encoding="utf-8-sig")
-
-        # 输出 NAV 曲线 CSV（便于画图分析）
         nav_df = summary.pop("_nav_df", None)
         if nav_df is not None and not nav_df.empty:
             nav_path = out_dir / f"nav_{stamp}.csv"

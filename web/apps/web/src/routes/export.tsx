@@ -13,30 +13,6 @@ async function getTickFlowKey(userId: string): Promise<string | null> {
   return data?.tickflow_api_key || null
 }
 
-async function checkWhitelist(userId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('whitelist')
-    .select('user_id')
-    .eq('user_id', userId)
-    .limit(1)
-  return Array.isArray(data) && data.length > 0
-}
-
-async function fetchFromCache(code: string, adjustVal: string, start: string, end: string, limit: number): Promise<Record<string, string | number>[] | null> {
-  const startIso = `${start.slice(0, 4)}-${start.slice(4, 6)}-${start.slice(6, 8)}`
-  const endIso = `${end.slice(0, 4)}-${end.slice(4, 6)}-${end.slice(6, 8)}`
-  const { data } = await supabase
-    .from('stock_hist_cache')
-    .select('date,open,high,low,close,volume,amount,pct_chg')
-    .eq('symbol', code)
-    .eq('adjust', adjustVal || 'none')
-    .gte('date', startIso)
-    .lte('date', endIso)
-    .order('date', { ascending: false })
-    .limit(limit)
-  if (!data || data.length === 0) return null
-  return (data as Record<string, string | number>[]).reverse()
-}
 
 export function ExportPage() {
   const user = useAuthStore((s) => s.user)
@@ -71,36 +47,25 @@ export function ExportPage() {
       startDate.setDate(startDate.getDate() - Math.ceil(days * 1.6))
       const start = formatDate(startDate)
 
-      let rows: Record<string, string | number>[] = []
-
-      if (user && await checkWhitelist(user.id)) {
-        const cached = await fetchFromCache(code, adjust, start, end, days)
-        if (cached && cached.length > 0) {
-          rows = cached
-        }
+      const apiKey = user ? await getTickFlowKey(user.id) : null
+      if (!apiKey) {
+        setError(t('export.configureTickflow'))
+        setLoading(false)
+        return
       }
 
-      if (rows.length === 0) {
-        const apiKey = user ? await getTickFlowKey(user.id) : null
-        if (!apiKey) {
-          setError(t('export.configureTickflow'))
-          setLoading(false)
-          return
-        }
+      const toMs = (s: string) => new Date(s.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')).getTime()
+      const params = new URLSearchParams({
+        symbol: code.startsWith('6') ? `${code}.SH` : (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) ? `${code}.BJ` : `${code}.SZ`, period: '1d',
+        adjust: adjust === 'qfq' ? 'forward' : adjust === 'hfq' ? 'backward' : 'none',
+        start_time: String(toMs(start)), end_time: String(toMs(end)), count: String(days),
+      })
+      const resp = await fetch(`/api/llm-proxy/v1/klines?${params}`, {
+        headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
+      })
 
-        const toMs = (s: string) => new Date(s.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')).getTime()
-        const params = new URLSearchParams({
-          symbol: code.startsWith('6') ? `${code}.SH` : (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) ? `${code}.BJ` : `${code}.SZ`, period: '1d',
-          adjust: adjust === 'qfq' ? 'forward' : adjust === 'hfq' ? 'backward' : 'none',
-          start_time: String(toMs(start)), end_time: String(toMs(end)), count: String(days),
-        })
-        const resp = await fetch(`/api/llm-proxy/v1/klines?${params}`, {
-          headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
-        })
-
-        if (!resp.ok) throw new Error(t('export.apiError', { status: resp.status, message: (await resp.text()).slice(0, 200) }))
-        rows = parseTickFlowToRows(await resp.json())
-      }
+      if (!resp.ok) throw new Error(t('export.apiError', { status: resp.status, message: (await resp.text()).slice(0, 200) }))
+      const rows = parseTickFlowToRows(await resp.json())
 
       if (!Array.isArray(rows) || rows.length === 0) {
         throw new Error(t('export.noData'))

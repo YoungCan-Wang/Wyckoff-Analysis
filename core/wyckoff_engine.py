@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 def normalize_hist_from_fetch(df: pd.DataFrame) -> pd.DataFrame:
     """将 fetch_a_share_csv._fetch_hist 返回的 DataFrame 转为筛选器所需格式。"""
-    from core.stock_cache import _COL_MAP
+    from integrations.stock_hist_repository import _COL_MAP
 
     col_map = {**_COL_MAP, "换手率": "turnover", "换手": "turnover"}
     out = df.rename(columns=col_map)

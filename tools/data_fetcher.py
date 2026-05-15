@@ -52,7 +52,9 @@ TICKFLOW_BATCH_ENABLED = os.getenv("FUNNEL_ENABLE_TICKFLOW_BATCH", "1").strip().
 
 
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
-    return normalize_hist_from_fetch(df)
+    out = normalize_hist_from_fetch(df)
+    out.attrs.update(getattr(df, "attrs", {}) or {})
+    return out
 
 
 def _fetch_hist(symbol: str, window, adjust: str, *, direct_source: bool = False) -> pd.DataFrame:
@@ -157,6 +159,7 @@ def _normalize_batch_df(df: pd.DataFrame, target_trade_date: date | None) -> pd.
     if df is None or df.empty:
         return None
     out = _normalize_hist(df)
+    out.attrs.setdefault("source", "tickflow_batch")
     if target_trade_date is None:
         return out
     trimmed = out[pd.to_datetime(out["date"], errors="coerce").dt.date <= target_trade_date].copy()
@@ -261,7 +264,7 @@ def _fetch_all_ohlcv_tickflow_batch(
     missing = max(len(symbols) - len(df_map), 0)
     if failed_batches or missing:
         print(
-            "[funnel] TickFlow 批量日K不完整，回退并行单票链路，避免候选池缩水: "
+            f"[funnel] TickFlow 批量日K不完整，回退单票链路: "
             f"成功={len(df_map)}, 缺失={missing}, 失败批次={failed_batches}"
         )
         return None

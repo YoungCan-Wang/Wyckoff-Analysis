@@ -204,19 +204,6 @@ export async function fetchKlineViaTickFlow(code: string, apiKey: string): Promi
   return []
 }
 
-export async function fetchKlineFromCache(code: string, startIso: string, endIso: string): Promise<KlineData[]> {
-  const { data } = await supabase
-    .from('stock_hist_cache')
-    .select('date,open,high,low,close,volume')
-    .eq('symbol', code)
-    .eq('adjust', 'qfq')
-    .gte('date', startIso)
-    .lte('date', endIso)
-    .order('date', { ascending: false })
-    .limit(320)
-  if (!data || data.length === 0) return []
-  return parseRowArray(data).reverse()
-}
 
 export async function getUserDataKeys(userId: string): Promise<{ tickflow: string | null; tushare: string | null }> {
   const { data } = await supabase
@@ -242,12 +229,11 @@ export async function checkWhitelist(userId: string): Promise<boolean> {
 export async function fetchKline(
   code: string,
   keys: { tickflow: string | null; tushare: string | null },
-  userId: string,
+  _userId: string,
 ): Promise<KlineData[]> {
   const end = new Date(); end.setDate(end.getDate() - 1)
   const start = new Date(); start.setDate(start.getDate() - 500)
   const fmtCompact = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
-  const fmtIso = (d: Date) => d.toISOString().slice(0, 10)
   const isCn = isCnSymbol(code)
   let tickflowError: Error | null = null
 
@@ -260,11 +246,6 @@ export async function fetchKline(
       const r = await fetchKlineViaTushare(code, keys.tushare, fmtCompact(start), fmtCompact(end))
       if (r.length) return r.sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
     } catch { /* fallthrough */ }
-  }
-  if (isCn && await checkWhitelist(userId)) {
-    if (tickflowError) console.warn(`[kline] All live sources failed for ${code}, falling back to cache`)
-    const r = await fetchKlineFromCache(code, fmtIso(start), fmtIso(end))
-    if (r.length) return r
   }
   if (tickflowError) throw tickflowError
   const suffixHint = isCn ? '' : '美股/港股请使用 TickFlow 标准代码（如 AAPL.US / 00700.HK）。'

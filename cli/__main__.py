@@ -929,9 +929,6 @@ def _cmd_tui(_args=None):
                     "refresh_token": session.get("refresh_token", ""),
                 }
             )
-            from core.stock_cache import set_cli_tokens
-
-            set_cli_tokens(session.get("access_token", ""), session.get("refresh_token", ""))
         elif had_session:
             session_expired = True
     except Exception:
