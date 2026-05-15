@@ -24,7 +24,10 @@ with suppress(Exception):
     from dotenv import load_dotenv
 
     load_dotenv()
-from integrations.supabase_recommendation import refresh_tracking_prices_with_tickflow_realtime
+from integrations.supabase_recommendation import (
+    refresh_global_tracking_prices,
+    refresh_tracking_prices_with_tickflow_realtime,
+)
 
 TZ = ZoneInfo("Asia/Shanghai")
 
@@ -45,12 +48,17 @@ def _log(msg: str, logs_path: str | None = None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="形态复盘价格回填任务（Tickflow 实时报价）")
     parser.add_argument("--logs", default="", help="日志文件路径（可选）")
+    parser.add_argument("--market", default="cn", choices=["cn", "us", "hk"], help="市场（默认 cn）")
     args = parser.parse_args()
     logs_path = str(args.logs or "").strip() or None
+    market = args.market
 
-    _log("开始执行 recommendation tracking 回填任务（Tickflow 实时报价）", logs_path)
+    _log(f"开始执行 recommendation tracking 回填任务 market={market}", logs_path)
     try:
-        summary = refresh_tracking_prices_with_tickflow_realtime()
+        if market == "cn":
+            summary = refresh_tracking_prices_with_tickflow_realtime()
+        else:
+            summary = refresh_global_tracking_prices(market)
     except Exception as e:
         _log(f"任务失败: {e}", logs_path)
         return 1

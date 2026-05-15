@@ -2,11 +2,21 @@ import { useCallback, useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { createChart, HistogramSeries, type Time } from 'lightweight-charts'
 import { supabase } from '@/lib/supabase'
+import { checkWhitelist } from '@/lib/kline'
 import { WyckoffLoading } from '@/components/loading'
 import { usePreferences } from '@/lib/preferences'
+import { useAuthStore } from '@/stores/auth'
+
+type MarketTab = 'cn' | 'us' | 'hk'
+
+const MARKET_TABLE: Record<MarketTab, string> = {
+  cn: 'recommendation_tracking',
+  us: 'recommendation_tracking_us',
+  hk: 'recommendation_tracking_hk',
+}
 
 interface Recommendation {
-  code: number
+  code: number | string
   name: string | null
   recommend_date: number
   initial_price: number | null
@@ -33,9 +43,9 @@ type RecommendationWindow = (typeof AVG_WINDOWS)[number]
 type SortBy = 'date' | 'change' | 'score'
 type SortOrder = 'desc' | 'asc'
 
-async function fetchTracking(): Promise<Recommendation[]> {
+async function fetchTracking(market: MarketTab): Promise<Recommendation[]> {
   const { data } = await supabase
-    .from('recommendation_tracking')
+    .from(MARKET_TABLE[market])
     .select('*')
     .order('recommend_date', { ascending: false })
     .limit(2000)
@@ -43,15 +53,27 @@ async function fetchTracking(): Promise<Recommendation[]> {
 }
 
 export function TrackingPage() {
+  const [market, setMarket] = useState<MarketTab>('cn')
   const [search, setSearch] = useState('')
   const [onlyAI, setOnlyAI] = useState(false)
   const [sortBy, setSortBy] = useState<SortBy>('date')
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
   const [selectedWindow, setSelectedWindow] = useState<RecommendationWindow>(30)
 
+  const user = useAuthStore((s) => s.user)
+  const whitelist = useQuery({
+    queryKey: ['whitelist', user?.id],
+    queryFn: () => checkWhitelist(user!.id),
+    enabled: !!user?.id && market !== 'cn',
+  })
+
+  const needsGate = market !== 'cn'
+  const isWhitelisted = !needsGate || whitelist.data === true
+
   const { data = [], isLoading: loading } = useQuery({
-    queryKey: ['tracking'],
-    queryFn: fetchTracking,
+    queryKey: ['tracking', market],
+    queryFn: () => fetchTracking(market),
+    enabled: !needsGate || isWhitelisted,
   })
 
   const latestDates = useMemo(() => getLatestRecommendDates(data, RETENTION_DATES), [data])
@@ -85,13 +107,18 @@ export function TrackingPage() {
     setSortBy(next); setSortOrder('desc')
   }, [sortBy])
 
-  if (loading) {
-    return <WyckoffLoading />
-  }
+  if (needsGate && whitelist.isLoading) return <WyckoffLoading />
 
   return (
     <div className="h-full overflow-auto p-6">
       <TrackingHeader latestDate={latestDate} oldestDate={oldestDate} />
+      <MarketTabs market={market} onMarketChange={setMarket} />
+      {needsGate && !isWhitelisted ? (
+        <BetaLocked />
+      ) : loading ? (
+        <WyckoffLoading />
+      ) : (
+        <>
       <DateWindowFilter
         activeDateCount={activeDates.length}
         activeOldestDate={activeOldestDate}
@@ -114,7 +141,42 @@ export function TrackingPage() {
         onSortByChange={setSortBy}
         onSortOrderChange={setSortOrder}
       />
-      <TrackingTable rows={filtered} sortBy={sortBy} sortOrder={sortOrder} onSortChange={handleSort} />
+      <TrackingTable rows={filtered} sortBy={sortBy} sortOrder={sortOrder} onSortChange={handleSort} market={market} />
+        </>
+      )}
+    </div>
+  )
+}
+
+function MarketTabs({ market, onMarketChange }: { market: MarketTab; onMarketChange: (m: MarketTab) => void }) {
+  const { t } = usePreferences()
+  const tabs: { key: MarketTab; label: string }[] = [
+    { key: 'cn', label: t('tracking.tabCN') },
+    { key: 'us', label: t('tracking.tabUS') },
+    { key: 'hk', label: t('tracking.tabHK') },
+  ]
+  return (
+    <div className="mb-4 flex gap-1 rounded-lg border border-border p-1 w-fit">
+      {tabs.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => onMarketChange(key)}
+          className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${market === key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function BetaLocked() {
+  const { t } = usePreferences()
+  return (
+    <div className="flex flex-col items-center justify-center py-20 text-center">
+      <div className="mb-3 text-4xl">🔒</div>
+      <p className="text-muted-foreground">{t('tracking.betaLocked')}</p>
     </div>
   )
 }
@@ -270,9 +332,11 @@ function TrackingTable({
   sortBy,
   sortOrder,
   onSortChange,
+  market = 'cn',
 }: {
   rows: Recommendation[]
   sortBy: SortBy
+  market?: MarketTab
   sortOrder: SortOrder
   onSortChange: (sortBy: SortBy) => void
 }) {
@@ -320,7 +384,7 @@ function TrackingTable({
                 </td>
               </tr>
             ) : (
-              rows.map((row) => <TrackingRow key={`${row.code}-${row.recommend_date}`} row={row} />)
+              rows.map((row) => <TrackingRow key={`${row.code}-${row.recommend_date}`} row={row} market={market} />)
             )}
           </tbody>
         </table>
@@ -358,13 +422,14 @@ function SortableHeader({
   )
 }
 
-function TrackingRow({ row }: { row: Recommendation }) {
+function TrackingRow({ row, market = 'cn' }: { row: Recommendation; market?: MarketTab }) {
   const vetoed = row.rag_vetoed
   const rowCls = vetoed ? 'border-t border-border hover:bg-muted/20 opacity-60 line-through' : 'border-t border-border hover:bg-muted/20'
+  const codeDisplay = market === 'cn' ? String(row.code).padStart(6, '0') : String(row.code)
   return (
     <tr className={rowCls}>
       <td className="px-3 py-2 font-mono">
-        {String(row.code).padStart(6, '0')}
+        {codeDisplay}
         {vetoed && <span className="ml-1 inline-block h-2 w-2 rounded-full bg-red-500" title="RAG veto" />}
       </td>
       <td className="px-3 py-2">{row.name || '-'}</td>
@@ -467,7 +532,7 @@ function getLatestRecommendDates(rows: Recommendation[], limit: number): number[
 
 function dedupeRecommendations(rows: Recommendation[]): Recommendation[] {
   const sortedRows = [...rows].sort((a, b) => b.recommend_date - a.recommend_date)
-  const byCode = new Map<number, Recommendation>()
+  const byCode = new Map<number | string, Recommendation>()
   for (const row of sortedRows) {
     const existing = byCode.get(row.code)
     if (!existing) {

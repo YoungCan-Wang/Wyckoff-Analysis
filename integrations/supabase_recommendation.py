@@ -13,7 +13,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from core.constants import TABLE_RECOMMENDATION_TRACKING
+from core.constants import (
+    TABLE_RECOMMENDATION_TRACKING,
+    TABLE_RECOMMENDATION_TRACKING_HK,
+    TABLE_RECOMMENDATION_TRACKING_US,
+)
 from integrations.supabase_base import create_admin_client as _get_supabase_admin_client
 from integrations.supabase_base import is_admin_configured as is_supabase_configured
 
@@ -760,6 +764,210 @@ def refresh_tracking_prices_with_tushare_unadjusted() -> dict[str, Any]:
         "codes_total": len(grouped),
         "codes_no_data": codes_no_data,
         "latest_trade_date": latest_trade_date_global,
+    }
+
+
+# ---------------------------------------------------------------------------
+# US / HK 推荐表（独立表，code 为字符串如 AAPL.US / 00700.HK）
+# ---------------------------------------------------------------------------
+
+_MARKET_TABLE_MAP: dict[str, str] = {
+    "us": TABLE_RECOMMENDATION_TRACKING_US,
+    "hk": TABLE_RECOMMENDATION_TRACKING_HK,
+}
+
+
+def _resolve_global_table(market: str) -> str:
+    table = _MARKET_TABLE_MAP.get(market.lower())
+    if not table:
+        raise ValueError(f"unsupported market: {market}, must be 'us' or 'hk'")
+    return table
+
+
+def _fetch_records_from_table(
+    client,
+    table: str,
+    select_expr: str,
+    page_size: int = 1000,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    start = 0
+    page = max(min(int(page_size), 1000), 1)
+    while True:
+        resp = (
+            client.table(table)
+            .select(select_expr)
+            .order("recommend_date", desc=False)
+            .order("id", desc=False)
+            .range(start, start + page - 1)
+            .execute()
+        )
+        batch = resp.data or []
+        records.extend(batch)
+        if len(batch) < page:
+            return records
+        start += page
+
+
+def _upsert_to_table(
+    client,
+    table: str,
+    updates: list[dict[str, Any]],
+    batch_size: int = 500,
+) -> int:
+    written = 0
+    clean = [r for r in updates if r.get("code") and r.get("recommend_date")]
+    for chunk in _chunked(clean, max(min(int(batch_size), 1000), 1)):
+        client.table(table).upsert(chunk, on_conflict="code,recommend_date").execute()
+        written += len(chunk)
+    return written
+
+
+def upsert_global_recommendations(
+    recommend_date: int,
+    candidates: list[dict[str, Any]],
+    market: str,
+) -> bool:
+    table = _resolve_global_table(market)
+    if not is_supabase_configured() or not candidates:
+        return False
+    try:
+        client = _get_supabase_admin_client()
+        payload = []
+        for c in candidates:
+            code = str(c.get("code") or c.get("symbol") or "").strip()
+            if not code:
+                continue
+            price = _extract_price(c)
+            score_val = _extract_score(c)
+            payload.append(
+                {
+                    "code": code,
+                    "name": str(c.get("name", "")).strip(),
+                    "recommend_reason": str(c.get("tag") or c.get("recommend_reason") or "").strip(),
+                    "recommend_date": recommend_date,
+                    "initial_price": price,
+                    "current_price": price,
+                    "change_pct": 0.0,
+                    "funnel_score": score_val,
+                    "is_ai_recommended": False,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        if payload:
+            client.table(table).upsert(
+                payload,
+                on_conflict="code,recommend_date",
+            ).execute()
+        return True
+    except Exception as e:
+        print(f"[supabase_recommendation] upsert_global({market}) failed: {e}")
+        return False
+
+
+def _extract_price(c: dict[str, Any]) -> float:
+    for key in ("initial_price", "latest_close", "current_price", "close"):
+        raw = c.get(key)
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return 0.0
+
+
+def _extract_score(c: dict[str, Any]) -> float | None:
+    for sk in ("funnel_score", "score", "priority_score"):
+        raw = c.get(sk)
+        if raw is None:
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def refresh_global_tracking_prices(market: str) -> dict[str, Any]:
+    table = _resolve_global_table(market)
+    if not is_supabase_configured():
+        raise ValueError("SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 未配置")
+    api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("TICKFLOW_API_KEY 未配置")
+
+    client = _get_supabase_admin_client()
+    records = _fetch_records_from_table(client, table, "id,code,recommend_date")
+    empty = {
+        "rows_total": 0,
+        "rows_updated": 0,
+        "rows_skipped": 0,
+        "codes_total": 0,
+        "codes_no_data": 0,
+        "latest_trade_date": "",
+    }
+    if not records:
+        return empty
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in records:
+        code = str(row.get("code") or "").strip()
+        if code:
+            grouped.setdefault(code, []).append(row)
+
+    symbols = sorted(grouped.keys())
+    batch_size = max(min(int(os.getenv("RECOMMENDATION_TICKFLOW_BATCH_SIZE", "80")), 200), 1)
+    quotes, hist_map = _fetch_tickflow_tracking_market_data(api_key, symbols, batch_size)
+
+    updates: list[dict[str, Any]] = []
+    codes_no_data = 0
+    latest_td = ""
+    now_iso = datetime.now(UTC).isoformat()
+
+    for code, rows in grouped.items():
+        quote = quotes.get(code) or {}
+        cur = _resolve_tickflow_quote_price(quote)
+        qtd = _quote_trade_date_yyyymmdd(quote)
+        if qtd and qtd > latest_td:
+            latest_td = qtd
+        cmap = _close_map_from_tickflow_hist(hist_map.get(code))
+        tdates = sorted(cmap)
+        if cur <= 0 and tdates:
+            cur = float(cmap[tdates[-1]])
+        if tdates and tdates[-1] > latest_td:
+            latest_td = tdates[-1]
+        if cur <= 0 or not tdates:
+            codes_no_data += 1
+            continue
+        for row in rows:
+            rd = _recommend_date_to_yyyymmdd(row.get("recommend_date"))
+            pd_ = _pick_close_on_or_before(tdates, rd)
+            init = float(cmap.get(pd_, 0.0)) if pd_ else 0.0
+            if init <= 0:
+                continue
+            updates.append(
+                {
+                    "id": row.get("id"),
+                    "code": code,
+                    "recommend_date": int(rd) if rd.isdigit() else None,
+                    "initial_price": round(init, 4),
+                    "current_price": round(cur, 4),
+                    "change_pct": round((cur - init) / init * 100.0, 2),
+                    "updated_at": now_iso,
+                }
+            )
+
+    written = _upsert_to_table(client, table, updates)
+    return {
+        "rows_total": len(records),
+        "rows_updated": written,
+        "rows_skipped": max(len(records) - written, 0),
+        "codes_total": len(grouped),
+        "codes_no_data": codes_no_data,
+        "latest_trade_date": latest_td,
     }
 
 

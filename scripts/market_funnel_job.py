@@ -448,6 +448,30 @@ def _require_tickflow_client() -> TickFlowClient:
     return TickFlowClient(api_key=api_key)
 
 
+def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) -> None:
+    if not candidates or market not in ("us", "hk"):
+        return
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+
+    from integrations.supabase_recommendation import upsert_global_recommendations
+
+    today_int = int(_dt.now(_ZI("Asia/Shanghai")).strftime("%Y%m%d"))
+    rows = []
+    for c in candidates:
+        rows.append(
+            {
+                "code": str(c.get("symbol", "")).strip(),
+                "name": str(c.get("name", "")).strip(),
+                "tag": ",".join(c.get("triggers") or []),
+                "score": float(c.get("score") or 0),
+                "latest_close": float(c.get("latest_close") or 0),
+            }
+        )
+    ok = upsert_global_recommendations(today_int, rows, market)
+    print(f"[market-funnel] DB write: market={market}, candidates={len(rows)}, ok={ok}")
+
+
 def run_market_funnel(
     market: str,
     *,
@@ -501,6 +525,8 @@ def run_market_funnel(
     }
     _write_output(runtime.output_path, result)
     _write_report(report_path, result)
+    if os.getenv("MARKET_FUNNEL_WRITE_DB", "").strip().lower() in {"1", "true", "yes"}:
+        _upsert_funnel_to_tracking(result.get("top_candidates") or [], runtime.spec.key)
     print(
         f"[market-funnel] done ok={result['ok']} market={runtime.spec.key} "
         f"quotes={len(quotes)} selected={len(symbols)} fetched={len(df_map)} "

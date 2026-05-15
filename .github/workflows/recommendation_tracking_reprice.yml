@@ -36,9 +36,19 @@ jobs:
       - name: Prepare logs dir
         run: mkdir -p logs
 
-      - name: Run recommendation reprice job
+      - name: Reprice CN
         run: |
-          python -u scripts/recommendation_tracking_reprice_job.py --logs ${{ github.workspace }}/logs/recommendation_reprice.log \
+          python -u scripts/recommendation_tracking_reprice_job.py --market cn --logs ${{ github.workspace }}/logs/recommendation_reprice.log \
+            2>&1 | tee -a ${{ github.workspace }}/logs/recommendation_reprice.console.log
+
+      - name: Reprice US
+        run: |
+          python -u scripts/recommendation_tracking_reprice_job.py --market us --logs ${{ github.workspace }}/logs/recommendation_reprice.log \
+            2>&1 | tee -a ${{ github.workspace }}/logs/recommendation_reprice.console.log
+
+      - name: Reprice HK
+        run: |
+          python -u scripts/recommendation_tracking_reprice_job.py --market hk --logs ${{ github.workspace }}/logs/recommendation_reprice.log \
             2>&1 | tee -a ${{ github.workspace }}/logs/recommendation_reprice.console.log
 
       - name: Upload artifacts

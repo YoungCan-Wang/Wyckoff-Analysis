@@ -89,6 +89,7 @@
   "integrations/supabase_recommendation.py::sync_all_tracking_prices": 150,
   "integrations/supabase_recommendation.py::refresh_tracking_prices_with_tushare_unadjusted": 113,
   "integrations/supabase_recommendation.py::refresh_tracking_prices_with_tickflow_realtime": 55,
+  "integrations/supabase_recommendation.py::refresh_global_tracking_prices": 78,
   "integrations/supabase_signal_pending.py::write_pending_signals": 59,
   "integrations/tickflow_client.py::_request": 78,
   "pages/Portfolio.py::_save_user_live": 87,
@@ -111,7 +112,7 @@
   "scripts/db_maintenance.py::cleanup_unadjusted_cache": 54,
   "scripts/diagnose_holdings.py::main": 141,
   "scripts/market_funnel_job.py::_render_markdown_report": 51,
-  "scripts/market_funnel_job.py::run_market_funnel": 59,
+  "scripts/market_funnel_job.py::run_market_funnel": 61,
   "scripts/param_sensitivity.py::run_sensitivity": 105,
   "scripts/param_sensitivity.py::_build_sensitivity_md": 90,
   "scripts/premarket_risk_job.py::_fetch_a50": 59,
@@ -171,7 +172,7 @@
   "web/apps/web/src/routes/screener.tsx::ScreenerPage": 141,
   "web/apps/web/src/routes/settings.tsx::SettingsPage": 267,
   "web/apps/web/src/routes/tail-buy.tsx::TailBuyPage": 77,
-  "web/apps/web/src/routes/tracking.tsx::TrackingPage": 83,
+  "web/apps/web/src/routes/tracking.tsx::TrackingPage": 95,
   "web/apps/web/src/routes/tracking.tsx::TrackingFilters": 66,
-  "web/apps/web/src/routes/tracking.tsx::TrackingTable": 63
+  "web/apps/web/src/routes/tracking.tsx::TrackingTable": 65
 }
