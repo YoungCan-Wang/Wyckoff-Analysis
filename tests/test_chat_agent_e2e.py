@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import get_type_hints
 
 import pytest
 
@@ -177,38 +178,34 @@ def _make_mock_tool(name: str, return_value):
 
     original = getattr(ct, name, None)
 
-    # 通过 exec 在正确的 globals 环境中动态创建函数，让 get_type_hints 能找到 ToolContext
-    func_globals = dict(ct.__dict__)  # 包含 ToolContext 的 import
-    func_globals["_return_value"] = return_value
-
     # 构建一个与原函数签名一致的 wrapper
     if original:
         import inspect
 
         sig = inspect.signature(original)
-        params = []
-        for pname, param in sig.parameters.items():
-            if pname == "tool_context":
-                continue  # ADK 会自动注入，mock 中去掉避免用户需要传
-            if param.default is inspect.Parameter.empty:
-                params.append(pname)
-            else:
-                params.append(f"{pname}={param.default!r}")
-        param_str = ", ".join(params)
+        params = [param for pname, param in sig.parameters.items() if pname != "tool_context"]
+        mock_sig = sig.replace(parameters=params)
 
-        code = f"def {name}({param_str}):\n"
-        code += f'    """{original.__doc__}"""\n' if original.__doc__ else ""
-        code += "    return _return_value\n"
+        try:
+            hints = get_type_hints(original, globalns=vars(ct), localns=vars(ct))
+        except Exception:
+            hints = dict(getattr(original, "__annotations__", {}))
+        hints.pop("tool_context", None)
 
-        exec(code, func_globals)
-        mock_fn = func_globals[name]
+        def mock_fn(*args, **kwargs):
+            return return_value
+
+        mock_fn.__signature__ = mock_sig
+        mock_fn.__annotations__ = hints
+        mock_fn.__doc__ = original.__doc__
     else:
 
         def mock_fn(**kwargs):
             return return_value
 
-        mock_fn.__name__ = name
-        mock_fn.__qualname__ = name
+    mock_fn.__name__ = name
+    mock_fn.__qualname__ = name
+    mock_fn.__module__ = getattr(original, "__module__", __name__) if original else __name__
 
     return mock_fn
 

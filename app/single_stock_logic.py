@@ -1,4 +1,3 @@
-import ast
 import os
 import platform
 import re
@@ -8,7 +7,6 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
@@ -27,93 +25,7 @@ SINGLE_STOCK_SECTOR_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_SECTOR_TIMEOUT_S
 SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S", "240")), 60)
 SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S", "90")), 15)
 SINGLE_STOCK_PLOT_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_PLOT_TIMEOUT_S", "45")), 10)
-ALLOW_LLM_PLOT_EXEC = os.getenv("ALLOW_LLM_PLOT_EXEC", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-
-SAFE_EXEC_BUILTINS = {
-    "abs": abs,
-    "all": all,
-    "any": any,
-    "bool": bool,
-    "dict": dict,
-    "enumerate": enumerate,
-    "float": float,
-    "int": int,
-    "len": len,
-    "list": list,
-    "max": max,
-    "min": min,
-    "range": range,
-    "reversed": reversed,
-    "round": round,
-    "set": set,
-    "sorted": sorted,
-    "str": str,
-    "sum": sum,
-    "tuple": tuple,
-    "zip": zip,
-}
-
-DISALLOWED_NAMES = {
-    "__import__",
-    "compile",
-    "delattr",
-    "eval",
-    "exec",
-    "getattr",
-    "globals",
-    "help",
-    "input",
-    "locals",
-    "open",
-    "setattr",
-    "vars",
-    "breakpoint",
-    "os",
-    "sys",
-    "subprocess",
-    "shutil",
-    "pathlib",
-    "socket",
-    "requests",
-    "http",
-    "urllib",
-    "importlib",
-    "builtins",
-}
-
-DISALLOWED_ATTRS = {
-    "__bases__",
-    "__class__",
-    "__closure__",
-    "__code__",
-    "__dict__",
-    "__delattr__",
-    "__getattribute__",
-    "__getattr__",
-    "__globals__",
-    "__mro__",
-    "__setattr__",
-    "__subclasses__",
-}
-
-DISALLOWED_AST_NODES = (
-    ast.Import,
-    ast.ImportFrom,
-    ast.Global,
-    ast.Nonlocal,
-    ast.Try,
-    ast.With,
-    ast.AsyncWith,
-    ast.Raise,
-    ast.ClassDef,
-    ast.AsyncFunctionDef,
-)
 
 
 def get_chinese_font_path():
@@ -139,17 +51,6 @@ def get_chinese_font_path():
         for p in paths:
             if os.path.exists(p):
                 return p
-    return None
-
-
-def extract_python_code(text: str) -> str | None:
-    """从 LLM 回复中提取 Python 代码块"""
-    # 匹配 ```python ... ``` 或 ``` ... ```
-    pattern = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL)
-    matches = pattern.findall(text)
-    if matches:
-        # 返回最长的一段，通常是完整代码
-        return max(matches, key=len)
     return None
 
 
@@ -250,69 +151,6 @@ def _run_with_timeout(desc: str, timeout_s: int, fn):
         raise TimeoutError(f"{desc} 超时（>{timeout_s}s）")
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
-
-
-def _validate_plot_code(code_block: str) -> tuple[bool, str]:
-    try:
-        tree = ast.parse(code_block)
-    except Exception as e:
-        return (False, f"代码语法错误: {e}")
-
-    if not any(isinstance(node, ast.FunctionDef) and node.name == "create_plot" for node in tree.body):
-        return (False, "缺少 create_plot(df) 函数")
-
-    allowed_top_level = (ast.FunctionDef, ast.Assign, ast.AnnAssign, ast.Expr)
-    for node in tree.body:
-        if not isinstance(node, allowed_top_level):
-            return (False, f"不允许的顶层语句: {type(node).__name__}")
-        if isinstance(node, ast.Expr) and not isinstance(node.value, ast.Constant):
-            return (False, "仅允许文档字符串作为顶层表达式")
-
-    for node in ast.walk(tree):
-        if isinstance(node, DISALLOWED_AST_NODES):
-            return (False, f"不允许的语句: {type(node).__name__}")
-        if isinstance(node, ast.Name) and node.id in DISALLOWED_NAMES:
-            return (False, f"不允许的标识符: {node.id}")
-        if isinstance(node, ast.Attribute) and (node.attr in DISALLOWED_ATTRS or node.attr.startswith("__")):
-            return (False, f"不允许的属性访问: {node.attr}")
-        if isinstance(node, ast.Call):
-            fn = node.func
-            if isinstance(fn, ast.Name) and fn.id in DISALLOWED_NAMES:
-                return (False, f"不允许的函数调用: {fn.id}")
-            if isinstance(fn, ast.Attribute) and (fn.attr in DISALLOWED_NAMES or fn.attr in DISALLOWED_ATTRS):
-                return (False, f"不允许的方法调用: {fn.attr}")
-    return (True, "")
-
-
-def _run_plot_code_safely(code_block: str, df_hist: pd.DataFrame):
-    ok, reason = _validate_plot_code(code_block)
-    if not ok:
-        raise ValueError(f"安全策略已拦截生成代码: {reason}")
-
-    exec_globals = {
-        "__builtins__": SAFE_EXEC_BUILTINS,
-        "pd": pd,
-        "plt": plt,
-        "fm": fm,
-        "datetime": datetime,
-        "date": date,
-    }
-    # ⚠️  SECURITY WARNING
-    # exec() 无法提供强隔离，AST 黑名单可被绕过（通过异常链、字符串拼接等）。
-    # 仅限私人单用户本地部署使用；公网/多人可触发场景必须保持 ALLOW_LLM_PLOT_EXEC=0。
-    exec(code_block, exec_globals)
-    create_plot = exec_globals.get("create_plot")
-    if not callable(create_plot):
-        raise ValueError("未找到可调用的 create_plot(df) 函数")
-
-    df_plot = _prepare_plot_dataframe(df_hist)
-
-    fig = create_plot(df_plot)
-    if fig is None:
-        fig = plt.gcf()
-    if fig is None or not hasattr(fig, "savefig"):
-        raise ValueError("create_plot(df) 未返回有效图表对象")
-    return fig
 
 
 def _build_safe_structure_plot(df_hist: pd.DataFrame, symbol: str, name: str):
@@ -525,7 +363,7 @@ def _run_analysis(
             f"{stage_info}"
             f"{exit_info}"
             f"\n以下是 CSV 数据：\n```csv\n{csv_text}\n```\n\n"
-            "请开始分析，并生成绘图代码。"
+            "请开始分析。图表由系统固定模板生成，不需要输出绘图代码。"
         )
 
         # 准备图片
@@ -553,61 +391,22 @@ def _run_analysis(
         )
         loading.empty()
 
-        code_block = extract_python_code(response_text)
         report_text = _strip_code_blocks_for_ui(response_text)
         st.markdown("### 📝 威科夫大师研报")
         st.markdown(report_text or "（研报正文已生成）")
 
-        if code_block:
-            st.markdown("### 📊 结构标注图")
-            if not ALLOW_LLM_PLOT_EXEC:
-                st.info("安全模式已启用：当前展示系统自动生成的结构图（未执行模型代码）。")
-                with st.spinner("正在生成结构图..."):
-                    try:
-                        fig = _run_with_timeout(
-                            "结构图生成",
-                            SINGLE_STOCK_PLOT_TIMEOUT_S,
-                            lambda: _build_safe_structure_plot(df_hist, symbol, name),
-                        )
-                        st.pyplot(fig)
-                    except Exception as e:
-                        st.error(f"结构图生成失败：{e}")
-                        st.expander("错误详情").text(traceback.format_exc())
-                return
-            with st.spinner("正在绘制图表..."):
-                try:
-                    fig = _run_with_timeout(
-                        "模型绘图执行",
-                        SINGLE_STOCK_PLOT_TIMEOUT_S,
-                        lambda: _run_plot_code_safely(code_block, df_hist),
-                    )
-                    st.pyplot(fig)
-                except Exception as e:
-                    st.warning(f"模型绘图执行失败，已回退到系统结构图：{e}")
-                    try:
-                        fig = _run_with_timeout(
-                            "回退结构图生成",
-                            SINGLE_STOCK_PLOT_TIMEOUT_S,
-                            lambda: _build_safe_structure_plot(df_hist, symbol, name),
-                        )
-                        st.pyplot(fig)
-                    except Exception:
-                        st.error("结构图生成失败。")
-                        st.expander("错误详情").text(traceback.format_exc())
-        else:
-            st.markdown("### 📊 结构标注图")
-            st.info("未检测到模型绘图代码，已展示系统自动生成的结构图。")
-            with st.spinner("正在生成结构图..."):
-                try:
-                    fig = _run_with_timeout(
-                        "结构图生成",
-                        SINGLE_STOCK_PLOT_TIMEOUT_S,
-                        lambda: _build_safe_structure_plot(df_hist, symbol, name),
-                    )
-                    st.pyplot(fig)
-                except Exception as e:
-                    st.error(f"结构图生成失败：{e}")
-                    st.expander("错误详情").text(traceback.format_exc())
+        st.markdown("### 📊 结构标注图")
+        with st.spinner("正在生成结构图..."):
+            try:
+                fig = _run_with_timeout(
+                    "结构图生成",
+                    SINGLE_STOCK_PLOT_TIMEOUT_S,
+                    lambda: _build_safe_structure_plot(df_hist, symbol, name),
+                )
+                st.pyplot(fig)
+            except Exception as e:
+                st.error(f"结构图生成失败：{e}")
+                st.expander("错误详情").text(traceback.format_exc())
 
     except Exception as e:
         loading.empty()

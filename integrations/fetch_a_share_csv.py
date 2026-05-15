@@ -13,7 +13,6 @@ from tempfile import NamedTemporaryFile
 
 import akshare as ak
 import pandas as pd
-import requests
 
 from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
 
@@ -126,27 +125,6 @@ def _trade_dates() -> list[date]:
             raise RuntimeError("tushare trade_cal parsed empty")
         return dates
 
-    def _fetch_with_timeout(timeout: float) -> list[date]:
-        try:
-            import py_mini_racer
-            from akshare.stock.cons import hk_js_decode
-        except Exception as e:
-            raise RuntimeError(f"missing dependency for trade calendar decode: {e}")
-        url = "https://finance.sina.com.cn/realstock/company/klc_td_sh.txt"
-        r = requests.get(url, timeout=timeout)
-        r.raise_for_status()
-        payload = r.text.split("=")[1].split(";")[0].replace('"', "")
-        js_code = py_mini_racer.MiniRacer()
-        js_code.eval(hk_js_decode)
-        dict_list = js_code.call("d", payload)
-        df = pd.DataFrame(dict_list)
-        df.columns = ["trade_date"]
-        s = pd.to_datetime(df["trade_date"]).dt.date
-        dates = s.tolist()
-        dates.append(date(year=1992, month=5, day=4))
-        dates.sort()
-        return dates
-
     try:
         if cache_path.exists():
             age = time.time() - cache_path.stat().st_mtime
@@ -175,14 +153,7 @@ def _trade_dates() -> list[date]:
                 return dates
         except Exception as e:
             last_err = e
-        try:
-            dates = _fetch_with_timeout(timeout=10)
-            if dates:
-                _write_cache(dates)
-                return dates
-        except Exception as e:
-            last_err = e
-            time.sleep(0.6)
+        time.sleep(0.6)
 
     cached = _read_cache()
     if cached:
