@@ -34,11 +34,11 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _clean_mode(raw: str) -> str:
-    mode = str(raw or "local").strip().lower()
+    mode = str(raw or "remote").strip().lower()
     if mode in {"api", "required"}:
         return "remote"
     if mode not in {"local", "auto", "remote"}:
-        return "local"
+        return "remote"
     return mode
 
 
@@ -46,7 +46,7 @@ def get_strategy_api_config() -> StrategyApiConfig:
     return StrategyApiConfig(
         base_url=str(os.getenv("WYCKOFF_STRATEGY_API_URL", "") or "").strip().rstrip("/"),
         api_key=str(os.getenv("WYCKOFF_STRATEGY_API_KEY", "") or "").strip(),
-        mode=_clean_mode(str(os.getenv("WYCKOFF_STRATEGY_API_MODE", "local") or "local")),
+        mode=_clean_mode(str(os.getenv("WYCKOFF_STRATEGY_API_MODE", "remote") or "remote")),
         timeout_seconds=_env_float("WYCKOFF_STRATEGY_API_TIMEOUT", 30.0),
         poll_interval_seconds=_env_float("WYCKOFF_STRATEGY_API_POLL_INTERVAL", 2.0),
         poll_timeout_seconds=_env_float("WYCKOFF_STRATEGY_API_POLL_TIMEOUT", 600.0),
@@ -322,3 +322,83 @@ def run_backtest_legacy(
         "task_id": task.get("task_id"),
         "strategy_version": result.get("strategy_version"),
     }
+
+
+def score_tail_buy_remote(
+    *,
+    candidates: list[dict[str, Any]],
+    intraday_by_code: dict[str, list[dict[str, Any]]],
+    style: str = "auto",
+) -> dict[str, Any]:
+    cfg = _require_config()
+    return _request(
+        "POST",
+        "/v1/tail-buy/score",
+        json_payload={
+            "strategy_version": cfg.strategy_version,
+            "candidates": candidates,
+            "intraday_by_code": intraday_by_code,
+            "style": style,
+        },
+    )
+
+
+def prepare_tail_buy_remote(
+    *,
+    candidates: list[dict[str, Any]],
+    depth_by_code: dict[str, dict[str, Any]] | None = None,
+    style: str = "auto",
+    max_llm_symbols: int = 20,
+    llm_min_rule_score: float = 60.0,
+    llm_allowed_rule_decisions: list[str] | tuple[str, ...] = ("BUY", "WATCH"),
+) -> dict[str, Any]:
+    cfg = _require_config()
+    return _request(
+        "POST",
+        "/v1/tail-buy/prepare",
+        json_payload={
+            "strategy_version": cfg.strategy_version,
+            "candidates": candidates,
+            "depth_by_code": depth_by_code or {},
+            "style": style,
+            "max_llm_symbols": max(int(max_llm_symbols), 0),
+            "llm_min_rule_score": max(float(llm_min_rule_score), 0.0),
+            "llm_allowed_rule_decisions": [str(x).strip().upper() for x in llm_allowed_rule_decisions if str(x).strip()],
+        },
+    )
+
+
+def finalize_tail_buy_remote(
+    *,
+    candidates: list[dict[str, Any]],
+    llm_outputs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    cfg = _require_config()
+    return _request(
+        "POST",
+        "/v1/tail-buy/finalize",
+        json_payload={
+            "strategy_version": cfg.strategy_version,
+            "candidates": candidates,
+            "llm_outputs": llm_outputs,
+        },
+    )
+
+
+def analyze_tail_buy_holdings_remote(
+    *,
+    holdings: list[dict[str, Any]],
+    style: str = "auto",
+    hard_stop_pct: float = 6.0,
+) -> dict[str, Any]:
+    cfg = _require_config()
+    return _request(
+        "POST",
+        "/v1/tail-buy/holdings",
+        json_payload={
+            "strategy_version": cfg.strategy_version,
+            "holdings": holdings,
+            "style": style,
+            "hard_stop_pct": hard_stop_pct,
+        },
+    )

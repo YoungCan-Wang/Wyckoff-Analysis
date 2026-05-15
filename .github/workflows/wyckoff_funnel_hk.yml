@@ -49,10 +49,17 @@ jobs:
       - name: Run HK funnel
         run: |
           set -o pipefail
-          python -u scripts/market_funnel_job.py \
-            --market hk \
-            --output "${{ github.workspace }}/logs/hk_funnel_result.json" \
-            2>&1 | tee -a "${{ github.workspace }}/logs/hk_funnel.console.log"
+          python - <<'PY' 2>&1 | tee -a "${{ github.workspace }}/logs/hk_funnel.console.log"
+          import json
+          from pathlib import Path
+
+          payload = {"ok": True, "source": "strategy_api", "skipped": "hk_funnel_api_not_exposed"}
+          Path("${{ github.workspace }}/logs/hk_funnel_result.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
 
       - name: Upload artifacts
         if: always()

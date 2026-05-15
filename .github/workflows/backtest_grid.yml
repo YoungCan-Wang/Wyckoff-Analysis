@@ -60,6 +60,9 @@ env:
   BT_SAMPLE_SIZE: ${{ inputs.sample_size || '0' }}
   BT_TRADING_DAYS: ${{ inputs.trading_days || '320' }}
   BT_TRAILING_STOP: ${{ inputs.trailing_stop || '0' }}
+  WYCKOFF_STRATEGY_API_MODE: "remote"
+  WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
+  WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
 
 jobs:
   # ────────────────────────────────────────────────
@@ -202,28 +205,30 @@ jobs:
           OUT_DIR="analysis/backtest_grid_actions/h${HOLD}_sl${STOP_TAG}_tp${TP}_tr${TRAIL_TAG}"
           echo "OUT_DIR=${OUT_DIR}" >> "${GITHUB_ENV}"
           mkdir -p "${OUT_DIR}"
+          export OUT_DIR
 
-          python -u -m scripts.backtest_runner \
-            --start "${BT_START}" \
-            --end "${BT_END}" \
-            --hold-days "${HOLD}" \
-            --top-n "${BT_TOP_N}" \
-            --board "${BT_BOARD}" \
-            --sample-size "${BT_SAMPLE_SIZE}" \
-            --trading-days "${BT_TRADING_DAYS}" \
-            --use-current-meta \
-            --exit-mode sltp \
-            --stop-loss "${STOP}" \
-            --take-profit "${TP}" \
-            --sltp-priority stop_first \
-            --pending-mode both \
-            --pending-merge-order funnel_first \
-            --trailing-stop "${TRAIL}" \
-            --metrics-engine auto \
-            --wbt-n-jobs 2 \
-            --snapshot-dir snapshot_data \
-            --output-dir "${OUT_DIR}" \
-            | tee "${OUT_DIR}/run.log"
+          HOLD="${HOLD}" STOP="${STOP}" TP="${TP}" python - <<'PY' | tee "${OUT_DIR}/run.log"
+          import json
+          import os
+          from pathlib import Path
+
+          from integrations.strategy_api_client import run_backtest_legacy
+
+          take_profit = float(os.environ["TP"])
+          summary = run_backtest_legacy(
+              start=os.environ["BT_START"],
+              end=os.environ["BT_END"],
+              hold_days=int(os.environ["HOLD"]),
+              top_n=int(os.environ["BT_TOP_N"]),
+              board=os.environ["BT_BOARD"],
+              stop_loss_pct=float(os.environ["STOP"]),
+              take_profit_pct=(take_profit if take_profit > 0 else None),
+          )
+          out_dir = Path(os.environ["OUT_DIR"])
+          out_dir.mkdir(parents=True, exist_ok=True)
+          (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
 
       - name: Upload artifacts
         if: always()

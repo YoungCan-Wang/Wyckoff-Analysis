@@ -42,6 +42,9 @@ jobs:
       TAIL_BUY_INTRADAY_BATCH_SIZE: "200"
       TAIL_BUY_PORTFOLIO_ID: ${{ secrets.TAIL_BUY_PORTFOLIO_ID }}
       TAIL_BUY_HOLDING_HARD_STOP_PCT: "6"
+      WYCKOFF_STRATEGY_API_MODE: "remote"
+      WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
+      WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
 
     steps:
       - uses: actions/checkout@v4

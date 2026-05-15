@@ -298,45 +298,26 @@ def _run_analysis(
         except Exception:
             name = symbol
 
-        # 计算该股票的威科夫阶段信息
-        from core.wyckoff_engine import (
-            FunnelConfig,
-            detect_accum_stage,
-            detect_markup_stage,
-            layer5_exit_signals,
-            normalize_hist_from_fetch,
-        )
+        # 通过 Strategy API 获取威科夫阶段和风险信息；主应用不再本地运行量化因子。
+        from integrations.strategy_api_client import StrategyApiError, analyze_stock_legacy
 
-        df_normalized = normalize_hist_from_fetch(df_hist)
-        cfg = FunnelConfig()
-
-        # 检测阶段
         stage_info = ""
-        markup_list = detect_markup_stage([symbol], {symbol: df_normalized}, cfg)
-        accum_map = detect_accum_stage([symbol], {symbol: df_normalized}, cfg)
-        exit_signals = layer5_exit_signals([symbol], {symbol: df_normalized}, accum_map, cfg)
-
-        if symbol in markup_list:
-            stage_info = "✓ **当前阶段**: Markup（上升期）- 已从积累期成功进入上升趋势\n"
-        elif symbol in accum_map:
-            stage = accum_map.get(symbol, "")
-            stage_cn = {
-                "Accum_A": "积累A（下跌停止）",
-                "Accum_B": "积累B（底部振荡）",
-                "Accum_C": "积累C（最后洗盘）",
-            }.get(stage, stage)
-            stage_info = f"✓ **当前阶段**: {stage_cn} - {stage}阶段\n"
-
-        # Exit 信号
         exit_info = ""
-        if symbol in exit_signals:
-            sig = exit_signals[symbol]
-            if sig.get("signal") == "profit_target":
-                exit_info = f"⚠ **Exit提醒**: 已达止盈价位 {sig.get('price', 0):.2f} - {sig.get('reason', '')}\n"
-            elif sig.get("signal") == "stop_loss":
-                exit_info = f"🔴 **Exit提醒**: 触发止损价位 {sig.get('price', 0):.2f} - {sig.get('reason', '')}\n"
-            elif sig.get("signal") == "distribution_warning":
-                exit_info = f"⚠ **Exit提醒**: {sig.get('reason', '检测到Distribution阶段迹象')}\n"
+        try:
+            api_diag = analyze_stock_legacy(
+                symbol,
+                name=name,
+                user_id=st.session_state.get("user", {}).get("id", ""),
+            )
+            phase = str(api_diag.get("ma_pattern") or api_diag.get("track") or api_diag.get("accum_stage") or "").strip()
+            if phase:
+                stage_info = f"✓ **当前阶段**: {phase}\n"
+            risk_notes = [str(x) for x in api_diag.get("health_reasons") or [] if str(x).strip()]
+            if risk_notes:
+                exit_info = "⚠ **风险提醒**: " + "；".join(risk_notes[:2]) + "\n"
+        except StrategyApiError as exc:
+            st.error(f"Strategy API 结构分析失败：{exc}")
+            return
 
         # 转换为 CSV 文本：优先使用标准字段，减少模型绘图代码字段不一致。
         try:

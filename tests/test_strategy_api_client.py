@@ -112,3 +112,39 @@ def test_run_backtest_legacy_polls_task(monkeypatch):
     assert result["source"] == "strategy_api"
     assert result["trades"] == 3
     assert result["sharpe_ratio"] == 1.2
+
+
+def test_tail_buy_remote_calls_score_endpoint(monkeypatch):
+    _configure_remote(monkeypatch)
+
+    def fake_request(method, url, headers, json, timeout):
+        assert method == "POST"
+        assert url == "https://strategy.example/v1/tail-buy/score"
+        assert headers["X-API-Key"] == "secret"
+        assert json["candidates"][0]["code"] == "600519"
+        assert json["intraday_by_code"]["600519"][0]["close"] == 10.0
+        return FakeResponse(
+            200,
+            {
+                "strategy_version": "private-v1",
+                "candidates": [
+                    {
+                        "code": "600519",
+                        "name": "贵州茅台",
+                        "rule_score": 80,
+                        "rule_decision": "BUY",
+                        "final_decision": "BUY",
+                        "priority_score": 80,
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(client.requests, "request", fake_request)
+
+    result = client.score_tail_buy_remote(
+        candidates=[{"code": "600519", "name": "贵州茅台"}],
+        intraday_by_code={"600519": [{"close": 10.0}]},
+    )
+
+    assert result["candidates"][0]["rule_decision"] == "BUY"

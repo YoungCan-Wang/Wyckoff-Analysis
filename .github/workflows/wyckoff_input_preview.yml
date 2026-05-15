@@ -19,6 +19,9 @@ jobs:
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_USER_ID: ${{ secrets.SUPABASE_USER_ID }}
+      WYCKOFF_STRATEGY_API_MODE: "remote"
+      WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
+      WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
       # 预演模式：跳过模型调用，只展示“将发送给模型”的输入文本
       STEP3_SKIP_LLM: "1"
       DEBUG_MODEL_IO: "1"

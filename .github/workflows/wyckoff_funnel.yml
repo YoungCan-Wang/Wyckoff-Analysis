@@ -61,6 +61,9 @@ jobs:
       SUPABASE_USER_ID: ${{ secrets.SUPABASE_USER_ID }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+      WYCKOFF_STRATEGY_API_MODE: "remote"
+      WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
+      WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
       # 实盘风控参数：锁死 -9% 止损 + 单票仓位上限
       STEP4_BUY_HARD_STOP_ENABLED: "1"
       STEP4_BUY_HARD_STOP_PCT: "9.0"

@@ -169,18 +169,7 @@ def market_regime() -> dict:
     返回 regime 枚举（RISK_ON/NEUTRAL/RISK_OFF/CRASH/PANIC_REPAIR）及斜率、3日收益等指标。
     **结果处理**：regime 是核心字段，请据此给出仓位建议。
     """
-    from datetime import date as _date
-    from datetime import timedelta
-
-    from core.wyckoff_engine import FunnelConfig
-    from integrations.data_source import fetch_index_hist
-    from tools.market_regime import analyze_benchmark_and_tune_cfg
-
-    end = _date.today()
-    start = end - timedelta(days=400)
-    bench_df = fetch_index_hist("000001", start, end)
-    smallcap_df = fetch_index_hist("399006", start, end)
-    return analyze_benchmark_and_tune_cfg(bench_df, smallcap_df, FunnelConfig(), breadth=None)
+    return {"error": "market_regime 已迁移到 Strategy API；主应用不再本地执行量化因子。"}
 
 
 @mcp.tool()
@@ -191,42 +180,12 @@ def wyckoff_diagnose(code: str) -> dict:
     返回交易区间(TR)、触发信号(Spring/SOS/LPS/EVR)、阶段和事件分类。
     **结果处理**：trading_range 和 triggers 是核心，请结合阶段判断当前是吸筹/派发/标记。
     """
-    import dataclasses
-    from datetime import date as _date
-    from datetime import timedelta
+    from integrations.strategy_api_client import StrategyApiError, analyze_stock_legacy
 
-    from core.wyckoff_engine import FunnelConfig
-    from core.wyckoff_events import classify_wyckoff_event
-    from core.wyckoff_v2_structure import detect_structure_triggers, identify_trading_range
-    from integrations.stock_hist_repository import get_stock_hist, normalize_hist_df
-
-    end = _date.today()
-    start = end - timedelta(days=500)
-    raw = get_stock_hist(code, start, end)
-    if raw is None or raw.empty:
-        return {"error": f"无法获取 {code} 的行情数据"}
-
-    df = normalize_hist_df(raw)
-    cfg = FunnelConfig()
-    tr = identify_trading_range(df, cfg)
-    result = detect_structure_triggers([code], {code: df}, cfg)
-
-    stock_triggers = []
-    for trig_type in ("spring", "sos", "lps", "evr"):
-        for sym, _score in result.triggers.get(trig_type, []):
-            if sym == code:
-                stock_triggers.append(trig_type)
-
-    stage = result.stage_map.get(code, "")
-    event = classify_wyckoff_event(stock_triggers, stage=stage)
-
-    return {
-        "code": code,
-        "trading_range": dataclasses.asdict(tr) if tr else None,
-        "triggers": stock_triggers,
-        "stage": stage,
-        "event": dataclasses.asdict(event),
-    }
+    try:
+        return analyze_stock_legacy(code)
+    except StrategyApiError as exc:
+        return {"error": str(exc), "source": "strategy_api"}
 
 
 @mcp.tool()
@@ -238,47 +197,19 @@ def run_funnel_simulation(board: Literal["all", "main_chinext"] = "all") -> dict
     **结果处理**：candidates 是最终候选列表，details 含每层的筛选计数和触发信号明细。
     请用专业研报格式输出，不要直接扔原始 JSON。
     """
-    import os
-
     board_name = str(board or "all").strip().lower()
     if board_name == "main_chinext":
         board_name = "all"
     if board_name not in {"all", "main", "chinext"}:
         return {"error": f"不支持的 board 值 '{board}'，可选: all / main_chinext"}
 
-    prev_mode = os.environ.get("FUNNEL_POOL_MODE")
-    prev_board = os.environ.get("FUNNEL_POOL_BOARD")
-    prev_exec = os.environ.get("FUNNEL_EXECUTOR_MODE")
-    os.environ["FUNNEL_POOL_MODE"] = "board"
-    os.environ["FUNNEL_POOL_BOARD"] = board_name
-    os.environ["FUNNEL_EXECUTOR_MODE"] = "thread"
-
-    from scripts.wyckoff_funnel import run as run_funnel
+    from integrations.strategy_api_client import StrategyApiError, screen_stocks_legacy
 
     try:
-        ok, symbols, bench_ctx, details = run_funnel("", notify=False, return_details=True)
-    finally:
-        if prev_mode is None:
-            os.environ.pop("FUNNEL_POOL_MODE", None)
-        else:
-            os.environ["FUNNEL_POOL_MODE"] = prev_mode
-        if prev_board is None:
-            os.environ.pop("FUNNEL_POOL_BOARD", None)
-        else:
-            os.environ["FUNNEL_POOL_BOARD"] = prev_board
-        if prev_exec is None:
-            os.environ.pop("FUNNEL_EXECUTOR_MODE", None)
-        else:
-            os.environ["FUNNEL_EXECUTOR_MODE"] = prev_exec
-
-    if not ok:
-        return {"error": "漏斗运行失败", "details": details}
-    return {
-        "success": True,
-        "candidates": symbols,
-        "regime": bench_ctx,
-        "details": details,
-    }
+        result = screen_stocks_legacy(board=board_name)
+    except StrategyApiError as exc:
+        return {"error": str(exc), "source": "strategy_api"}
+    return {"success": True, "source": "strategy_api", "candidates": result.get("symbols_for_report", []), "details": result}
 
 
 # ---------------------------------------------------------------------------
