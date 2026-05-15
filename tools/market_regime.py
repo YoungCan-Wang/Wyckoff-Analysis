@@ -94,7 +94,14 @@ def _generate_pv_outlook(
         if not api_key:
             return fallback
         user_msg = _build_pv_user_message(
-            regime, close, ma50, ma200, price_zone, vol_ratio_text, volume_state, recent3_cum,
+            regime,
+            close,
+            ma50,
+            ma200,
+            price_zone,
+            vol_ratio_text,
+            volume_state,
+            recent3_cum,
         )
         raw = call_llm(
             provider=provider,
