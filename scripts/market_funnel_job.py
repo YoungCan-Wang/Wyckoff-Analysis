@@ -317,11 +317,20 @@ def _run_layers(
     return triggers, metrics
 
 
-def _latest_close(df: pd.DataFrame | None) -> float | None:
+def _latest_history_snapshot(df: pd.DataFrame | None) -> tuple[float | None, int | None]:
     if df is None or df.empty or "close" not in df.columns:
-        return None
+        return (None, None)
+    if "date" in df.columns:
+        work = df[["date", "close"]].copy()
+        work["date"] = pd.to_datetime(work["date"], errors="coerce")
+        work["close"] = pd.to_numeric(work["close"], errors="coerce")
+        work = work.dropna(subset=["date", "close"])
+        work = work[work["close"] > 0].sort_values("date")
+        if not work.empty:
+            latest = work.iloc[-1]
+            return (float(latest["close"]), int(latest["date"].strftime("%Y%m%d")))
     close = pd.to_numeric(df["close"], errors="coerce").dropna()
-    return float(close.iloc[-1]) if not close.empty else None
+    return (float(close.iloc[-1]), None) if not close.empty else (None, None)
 
 
 def _candidate_rows(
@@ -341,7 +350,10 @@ def _candidate_rows(
             item["triggers"].append(TRIGGER_LABELS.get(trigger, trigger))
     out = list(rows.values())
     for item in out:
-        item["latest_close"] = _latest_close(df_map.get(str(item["symbol"])))
+        latest_close, latest_trade_date = _latest_history_snapshot(df_map.get(str(item["symbol"])))
+        item["latest_close"] = latest_close
+        if latest_trade_date is not None:
+            item["latest_trade_date"] = latest_trade_date
     out.sort(key=lambda item: float(item["score"]), reverse=True)
     return out
 
@@ -448,15 +460,27 @@ def _require_tickflow_client() -> TickFlowClient:
     return TickFlowClient(api_key=api_key)
 
 
+def _candidate_recommend_date(candidates: list[dict[str, Any]]) -> int:
+    dates: list[int] = []
+    for c in candidates:
+        try:
+            date_int = int(c.get("latest_trade_date"))
+        except (TypeError, ValueError):
+            continue
+        if 19000101 <= date_int <= 29991231:
+            dates.append(date_int)
+    if not dates:
+        raise ValueError("cannot resolve recommendation trade date from market histories")
+    return max(dates)
+
+
 def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) -> None:
     if not candidates or market not in ("us", "hk"):
         return
-    from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo as _ZI
 
     from integrations.supabase_recommendation import upsert_global_recommendations
 
-    today_int = int(_dt.now(_ZI("Asia/Shanghai")).strftime("%Y%m%d"))
+    recommend_date = _candidate_recommend_date(candidates)
     rows = []
     for c in candidates:
         rows.append(
@@ -468,8 +492,8 @@ def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) ->
                 "latest_close": float(c.get("latest_close") or 0),
             }
         )
-    ok = upsert_global_recommendations(today_int, rows, market)
-    print(f"[market-funnel] DB write: market={market}, candidates={len(rows)}, ok={ok}")
+    ok = upsert_global_recommendations(recommend_date, rows, market)
+    print(f"[market-funnel] DB write: market={market}, date={recommend_date}, candidates={len(rows)}, ok={ok}")
     if not ok:
         raise RuntimeError(f"DB write failed for market={market}, candidates={len(rows)}")
 
