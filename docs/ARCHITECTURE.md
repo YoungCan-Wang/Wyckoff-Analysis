@@ -331,7 +331,7 @@ claude mcp add wyckoff -- wyckoff-mcp
 
 ## Agent 记忆系统
 
-`cli/memory.py` — 跨会话记忆，存储在 SQLite `agent_memory` 表。
+`cli/memory.py` — 跨会话分层记忆，存储在 SQLite `agent_memory` 表。设计吸收 TencentDB-Agent-Memory 的两条核心原则：高层保留结构，低层保留证据；压缩可以折叠，但必须能下钻。
 
 ### 写入时机
 
@@ -344,41 +344,65 @@ claude mcp add wyckoff -- wyckoff-mcp
 - 消息数 ≥ 4
 - 至少有 1 次工具调用
 
-LLM 从最近 40 条消息中提取关键结论（≤300 字），带 `[偏好]` 前缀的行以 `memory_type='preference'` 存储（永不清理），其余以 `session` 类型存储。
+LLM 从最近 40 条消息中提取 L1 原子记忆（≤300 字），每行必须是 `[股票]` / `[决策]` / `[市场]` / `[偏好]` 前缀。系统按前缀拆成独立记录：
+
+- `[股票]` → `stock_opinion`
+- `[决策]` → `decision`
+- `[市场]` → `market_view`
+- `[偏好]` → `preference`
+
+当本轮产生足够 L1 原子记忆后，系统会再提炼 L2 `scenario` 和 L3 `persona`，用于下一轮更高密度召回。
+
+### 分层与追溯
+
+| 层级 | 载体 | 作用 | 下钻方式 |
+|------|------|------|---------|
+| L0 | `chat_log` / scratchpad / tool result 文件 | 原始对话与工具证据 | `source_ref=chat_log:<session_id>` 或 `result_ref` |
+| L1 | `agent_memory` 原子记忆 | 股票结论、决策、市场观点、偏好 | `wyckoff memory trace <id>` |
+| L2 | `scenario` | 可复用交易/复盘场景 | 关联 L1 原子记忆和股票代码 |
+| L3 | `persona` | 用户画像、稳定风险边界 | 需要细节时回查 L1/L0 |
+
+`agent_memory` 新增 `memory_level`、`source_ref`、`confidence`、`metadata` 字段。TUI 在保存记忆时写入 `source_ref=chat_log:<session_id>`，CLI 可用 `wyckoff memory trace <id>` 查看来源会话片段。
 
 ### 自动清理
 
-TUI 启动时自动执行 `prune_memories()`，清理 90 天前的 `session` 和 `fact` 类型记忆。
+TUI 启动时自动执行 `prune_memories()`，清理 90 天前的普通记忆；`preference` 和 `persona` 保留。
 
 ### 检索注入
 
-每次用户提问前，Hybrid Search 综合检索 + 偏好置顶：
+每次用户提问前，Hybrid Search 综合检索 + 画像/偏好置顶：
 
 1. **FTS5 全文检索**（权重 1.0）：SQLite FTS5 索引，BM25 排序，精准匹配用户问题中的关键词
 2. **股票代码匹配**（权重 0.85）：正则提取 6 位代码，LIKE 匹配
 3. **中文关键词 LIKE**（权重 0.6）：2-gram 分词 + 停用词过滤，补充召回
-4. **时间衰减加权**：30 天半衰期，近期记忆得分更高，`preference` 类型永不衰减
-5. 始终拉取全部 `preference` 类型记忆，置顶显示
+4. **时间衰减加权**：30 天半衰期，近期记忆得分更高，`preference` / `persona` 不衰减
+5. 始终拉取 L3 `persona` 和近期 `preference`，置顶显示
 
 拼成两段注入 system prompt 尾部：
 
 ```
-# 用户偏好
-- 不要推荐 ST 股
+# 用户画像
 - 风险偏好中等，止损 -6%
+- 不要推荐 ST 股
 
-# 历史记忆
-- [04-20] 000001 处于吸筹 Phase C，支撑位 12.50
-- [04-21] 用户关注半导体板块轮动
+# 相关场景
+- #18 [2026-05-15] 000001 吸筹后等待放量确认
+
+# 历史原子记忆
+- #12 [2026-05-15] 000001 处于吸筹 Phase C，支撑位 12.50 | 源:chat_log:abc123
 ```
 
 ### 记忆类型
 
 | 类型 | 说明 | 自动清理 |
 |------|------|---------|
-| `session` | LLM 提取的会话摘要 | 90 天 |
+| `stock_opinion` | 股票级结论 | 90 天 |
+| `decision` | 用户操作意图/决策 | 90 天 |
+| `market_view` | 市场或板块判断 | 90 天 |
+| `scenario` | L2 可复用场景 | 90 天 |
 | `fact` | 用户主动记录的事实 | 90 天 |
 | `preference` | 用户偏好 | 永不清理 |
+| `persona` | L3 用户画像 | 永不清理 |
 
 ## 上下文压缩
 
@@ -401,12 +425,13 @@ TUI 启动时自动执行 `prune_memories()`，清理 90 天前的 `session` 和
 1. **Memory Flush**：压缩前先用 LLM 从待压缩消息中提取用户偏好/重要事实，存入 `preference` 记忆（永不丢失）
 2. 保留最近 4 条消息（`TAIL_KEEP = 4`）原文
 3. 前面的消息用 LLM 总结为 ≤500 字中文摘要
-3. 工具结果做智能摘要而非粗暴截断：
+4. 工具结果做智能摘要而非粗暴截断：
    - `analyze_stock` 诊断模式 → 保留 `code`、`phase`、`health`、`trigger_signals` 等关键字段
    - `analyze_stock` 行情模式 → 保留最近 5 条数据
    - `portfolio` 诊断模式 → 保留 `diagnostics`、`successful_count` 等
    - `portfolio` 查看模式 → 保留 `positions`、`free_cash` 等
    - 通用工具 → 保留 `error`、`message`、`status` 等顶层键
+5. 超大工具结果由 `cli/tool_results.py` 写入 `~/.wyckoff/tool-results/*.json`，上下文只保留 `node_id`、`result_ref`、Mermaid 节点和预览；`index.jsonl` 记录节点到原文文件的映射，便于按 `node_id` 下钻。
 
 ```
 [对话摘要]

@@ -1170,7 +1170,7 @@ def _send_notifications(
     return feishu_ok, tg_ok
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tail Buy Intraday Job")
     parser.add_argument("--max-llm-symbols", type=int, default=int(os.getenv("TAIL_BUY_LLM_TOP_N", "20")))
     parser.add_argument("--deadline-minute", type=int, default=int(os.getenv("TAIL_BUY_TASK_TIMEOUT_MIN", "25")))
@@ -1180,8 +1180,11 @@ def main() -> int:
     )
     parser.add_argument("--logs", default=None, help="日志路径")
     parser.add_argument("--user-id", default=os.getenv("SUPABASE_USER_ID", "").strip(), help="目标用户ID")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def main() -> int:
+    args = _parse_args()
     started_at = _now()
     logs_path = args.logs or os.path.join(
         os.getenv("LOGS_DIR", "logs"),

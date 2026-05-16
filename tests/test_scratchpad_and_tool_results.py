@@ -31,8 +31,12 @@ def test_large_tool_result_is_persisted_with_preview(tmp_path, monkeypatch):
 
     content = format_tool_result_for_context("screen_stocks", "call_1", result, max_chars=1000)
 
-    assert "工具结果已保存到" in content
+    assert "工具结果已卸载为可追溯节点" in content
+    assert "node_id:" in content
+    assert "result_ref:" in content
     assert "预览:" in content
     stored = list((tmp_path / "tool-results").glob("*.json"))
     assert len(stored) == 1
     assert json.loads(stored[0].read_text(encoding="utf-8"))["rows"][0] == "x" * 1000
+    index_lines = (tmp_path / "tool-results" / "index.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(index_lines[0])["tool_call_id"] == "call_1"

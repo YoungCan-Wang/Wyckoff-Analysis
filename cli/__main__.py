@@ -706,6 +706,34 @@ def _cmd_mcp(_args):
 # ---------------------------------------------------------------------------
 
 
+def _memory_id_arg(args) -> str:
+    return args.memory_id or args.keyword
+
+
+def _print_memory_list(memories: list[dict]) -> None:
+    print(f"Agent 记忆 ({len(memories)} 条)")
+    print(f"{'ID':>5} {'类型':<12} {'层级':<4} {'日期':<20} {'内容'}")
+    print("-" * 80)
+    for m in memories:
+        content = m.get("content", "")
+        if len(content) > 60:
+            content = content[:60] + "..."
+        level = m.get("memory_level", "")
+        print(f"{m['id']:>5} {m.get('memory_type', ''):<12} {level:<4} {m.get('created_at', '')[:19]:<20} {content}")
+
+
+def _delete_memory_by_id(memory_id: str) -> None:
+    from integrations.local_db import get_db
+
+    conn = get_db()
+    with conn:
+        cur = conn.execute("DELETE FROM agent_memory WHERE id=?", (memory_id,))
+    if cur.rowcount:
+        print(f"✓ 已删除记忆 #{memory_id}")
+    else:
+        print(f"✗ 记忆 #{memory_id} 不存在")
+
+
 def _cmd_memory(args):
     from integrations.local_db import get_recent_memories, init_db, prune_memories
 
@@ -718,14 +746,7 @@ def _cmd_memory(args):
         if not memories:
             print("暂无记忆记录")
             return
-        print(f"Agent 记忆 ({len(memories)} 条)")
-        print(f"{'ID':>5} {'类型':<12} {'日期':<20} {'内容'}")
-        print("-" * 80)
-        for m in memories:
-            content = m.get("content", "")
-            if len(content) > 60:
-                content = content[:60] + "..."
-            print(f"{m['id']:>5} {m.get('memory_type', ''):<12} {m.get('created_at', '')[:19]:<20} {content}")
+        _print_memory_list(memories)
         return
 
     if sub == "search":
@@ -752,24 +773,61 @@ def _cmd_memory(args):
         return
 
     if sub == "delete":
-        mid = args.memory_id
+        mid = _memory_id_arg(args)
         if not mid:
             print("用法: wyckoff memory delete <id>")
             sys.exit(1)
-        from integrations.local_db import get_db
+        _delete_memory_by_id(mid)
+        return
 
-        conn = get_db()
-        with conn:
-            cur = conn.execute("DELETE FROM agent_memory WHERE id=?", (mid,))
-        if cur.rowcount:
-            print(f"✓ 已删除记忆 #{mid}")
-        else:
-            print(f"✗ 记忆 #{mid} 不存在")
+    if sub == "trace":
+        mid = _memory_id_arg(args)
+        if not mid:
+            print("用法: wyckoff memory trace <id>")
+            sys.exit(1)
+        try:
+            _print_memory_trace(int(mid))
+        except ValueError:
+            print(f"✗ 无效记忆 ID: {mid}")
+            sys.exit(1)
         return
 
     print(f"未知子命令: {sub}")
-    print("用法: wyckoff memory [list|search|clear|delete]")
+    print("用法: wyckoff memory [list|search|clear|delete|trace]")
     sys.exit(1)
+
+
+def _print_memory_trace(memory_id: int) -> None:
+    from integrations.local_db import get_memory_by_id, load_chat_logs
+
+    memory = get_memory_by_id(memory_id)
+    if not memory:
+        print(f"✗ 记忆 #{memory_id} 不存在")
+        return
+    print(f"记忆 #{memory_id}")
+    print(f"类型: {memory.get('memory_type', '')} / {memory.get('memory_level', '')}")
+    print(f"内容: {memory.get('content', '')}")
+    source_ref = str(memory.get("source_ref", "") or "")
+    print(f"来源: {source_ref or '(无)'}")
+    if not source_ref.startswith("chat_log:"):
+        return
+    rows = load_chat_logs(session_id=source_ref.removeprefix("chat_log:"), limit=8)
+    for row in rows:
+        content = str(row.get("content", "") or "").replace("\n", " ")
+        if len(content) > 100:
+            content = content[:100] + "..."
+        print(f"- {row.get('created_at', '')[:19]} {row.get('role', '')}: {content}")
+
+
+def _add_memory_parser(sub) -> None:
+    p_mem = sub.add_parser("memory", help="Agent 记忆管理", aliases=["mem"])
+    p_mem.add_argument("memory_cmd", nargs="?", default="list", help="list/search/clear/delete/trace")
+    p_mem.add_argument("keyword", nargs="?", default="", help="搜索关键词 (search 时)")
+    p_mem.add_argument("memory_id", nargs="?", default="", help="记忆 ID (delete 时)")
+    p_mem.add_argument(
+        "--type", default="", help="过滤类型 (preference/persona/scenario/stock_opinion/decision/market_view)"
+    )
+    p_mem.add_argument("-n", "--limit", type=int, default=20, help="返回条数")
 
 
 # ---------------------------------------------------------------------------
@@ -1161,13 +1219,7 @@ def main():
     # wyckoff mcp
     sub.add_parser("mcp", help="启动 MCP Server")
 
-    # wyckoff memory
-    p_mem = sub.add_parser("memory", help="Agent 记忆管理", aliases=["mem"])
-    p_mem.add_argument("memory_cmd", nargs="?", default="list", help="list/search/clear/delete")
-    p_mem.add_argument("keyword", nargs="?", default="", help="搜索关键词 (search 时)")
-    p_mem.add_argument("memory_id", nargs="?", default="", help="记忆 ID (delete 时)")
-    p_mem.add_argument("--type", default="", help="过滤类型 (session/preference)")
-    p_mem.add_argument("-n", "--limit", type=int, default=20, help="返回条数")
+    _add_memory_parser(sub)
 
     # wyckoff log
     p_log = sub.add_parser("log", help="查看对话日志")

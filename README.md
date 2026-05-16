@@ -186,7 +186,7 @@ wyckoff dashboard
 - **跨市场** — A 股 / 港股 / 美股漏斗独立 workflow
 - **AI 三阵营研报** — 逻辑破产 / 储备营地 / 起跳板，LLM 独立审判
 - **持仓诊断 & 私人决断** — 批量体检 + EXIT/TRIM/HOLD/PROBE/ATTACK 指令
-- **Agent 记忆** — FTS5 全文检索 + 时间衰减混合召回，跨会话记忆
+- **Agent 分层记忆** — L1 原子记忆 + L2 场景 + L3 画像，FTS5/代码/关键词混合召回并保留来源追溯
 - **Skills 扩展** — 内置 `/screen`、`/checkup`、`/report`、`/backtest`，用户可自定义
 - **MCP Server** — 10 个工具通过 MCP 协议对外暴露，Claude Code / Cursor 即插即用
 - **多通道推送** — 飞书 / 企微 / 钉钉 / Telegram
