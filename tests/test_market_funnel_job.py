@@ -76,6 +76,30 @@ class FakeTickFlowClient:
         return {symbol: _daily_frame() for symbol in symbols}
 
 
+class ManyCandidateTickFlowClient:
+    def __init__(self) -> None:
+        self.symbol_count = 0
+
+    def get_quotes(self, symbols=None, *, universes=None):
+        assert universes is None
+        rows = {}
+        for index, symbol in enumerate(symbols or [], start=1):
+            rows[symbol] = {
+                "symbol": symbol,
+                "last_price": 100.0 + index,
+                "amount": 10_000_000.0 + index,
+                "ext": {"name": f"Name {symbol}", "change_pct": 0.0},
+            }
+        self.symbol_count += len(rows)
+        return rows
+
+    def get_klines_batch(self, symbols, *, period, count, adjust):
+        assert period == "1d"
+        assert count == 230
+        assert adjust == "forward"
+        return {symbol: _daily_frame() for symbol in symbols}
+
+
 def test_run_market_funnel_uses_quote_prefilter_and_batch_fetch(tmp_path, monkeypatch):
     symbol_file = tmp_path / "hk_symbols.txt"
     symbol_file.write_text("00700.HK\n00005.HK\n09999.HK\n", encoding="utf-8")
@@ -109,3 +133,36 @@ def test_run_market_funnel_uses_quote_prefilter_and_batch_fetch(tmp_path, monkey
     assert "Wyckoff Funnel 港股 最终报告" in report
     assert "## 漏斗概览" in report
     assert "| 股票池 | 3 |" in report
+
+
+def test_run_market_funnel_writes_all_candidates_to_db(tmp_path, monkeypatch):
+    symbols = [f"S{i:03d}.US" for i in range(55)]
+    symbol_file = tmp_path / "us_symbols.txt"
+    symbol_file.write_text("\n".join(symbols), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run_layers(fetched_symbols, name_map, df_map, runtime):
+        hits = [(symbol, float(index)) for index, symbol in enumerate(fetched_symbols, start=1)]
+        return {"sos": hits}, {"total_hits": len(hits), "by_trigger": {"sos": len(hits)}}
+
+    def fake_upsert(recommend_date, rows, market):
+        captured["rows"] = rows
+        captured["market"] = market
+        return True
+
+    monkeypatch.setenv("MARKET_FUNNEL_SYMBOL_FILE", str(symbol_file))
+    monkeypatch.setenv("MARKET_FUNNEL_MAX_SYMBOLS", "55")
+    monkeypatch.setenv("MARKET_FUNNEL_QUOTE_BATCH_SIZE", "100")
+    monkeypatch.setenv("MARKET_FUNNEL_KLINE_COUNT", "230")
+    monkeypatch.setenv("MARKET_FUNNEL_KLINE_BATCH_SIZE", "100")
+    monkeypatch.setenv("MARKET_FUNNEL_MIN_QUOTE_AMOUNT", "0")
+    monkeypatch.setenv("MARKET_FUNNEL_MIN_HISTORY_ROWS", "220")
+    monkeypatch.setenv("MARKET_FUNNEL_WRITE_DB", "1")
+    monkeypatch.setattr("scripts.market_funnel_job._run_layers", fake_run_layers)
+    monkeypatch.setattr("integrations.supabase_recommendation.upsert_global_recommendations", fake_upsert)
+
+    result = run_market_funnel("us", output=str(tmp_path / "us_result.json"), client=ManyCandidateTickFlowClient())
+
+    assert len(result["top_candidates"]) == 50
+    assert len(captured["rows"]) == 55
+    assert captured["market"] == "us"

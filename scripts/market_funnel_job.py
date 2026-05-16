@@ -474,6 +474,47 @@ def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) ->
         raise RuntimeError(f"DB write failed for market={market}, candidates={len(rows)}")
 
 
+def _build_funnel_result(
+    runtime: RuntimeConfig,
+    universe_symbols: list[str],
+    quotes: dict[str, dict[str, Any]],
+    symbols: list[str],
+    df_map: dict[str, pd.DataFrame],
+    fetch_stats: dict[str, Any],
+    metrics: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    report_path: Path | None,
+) -> dict[str, Any]:
+    return {
+        "ok": bool(quotes and df_map),
+        "market": runtime.spec.key,
+        "label": runtime.spec.label,
+        "universe": runtime.spec.universe,
+        "symbol_file": str(runtime.symbol_path),
+        "report_path": str(report_path) if report_path else "",
+        "universe_symbol_count": len(universe_symbols),
+        "quote_count": len(quotes),
+        "selected_count": len(symbols),
+        "fetched_count": len(df_map),
+        "fetch_stats": fetch_stats,
+        "metrics": metrics,
+        "top_candidates": candidates[:50],
+        "limits": {
+            "max_symbols": runtime.max_symbols,
+            "quote_batch_size": runtime.quote_batch_size,
+            "quote_batch_sleep": runtime.quote_batch_sleep,
+            "kline_batch_size": runtime.kline_batch_size,
+            "kline_batch_sleep": runtime.kline_batch_sleep,
+            "min_quote_amount": runtime.min_quote_amount,
+        },
+    }
+
+
+def _write_tracking_candidates_if_enabled(candidates: list[dict[str, Any]], market: str) -> None:
+    if os.getenv("MARKET_FUNNEL_WRITE_DB", "").strip().lower() in {"1", "true", "yes"}:
+        _upsert_funnel_to_tracking(candidates, market)
+
+
 def run_market_funnel(
     market: str,
     *,
@@ -502,33 +543,21 @@ def run_market_funnel(
     print(f"[market-funnel] {runtime.spec.label} 漏斗筛选 L1~L4 symbols={len(fetched_symbols)}")
     triggers, metrics = _run_layers(fetched_symbols, name_map, df_map, runtime) if df_map else ({}, {})
     report_path = _report_path(runtime.output_path)
-    result = {
-        "ok": bool(quotes and df_map),
-        "market": runtime.spec.key,
-        "label": runtime.spec.label,
-        "universe": runtime.spec.universe,
-        "symbol_file": str(runtime.symbol_path),
-        "report_path": str(report_path) if report_path else "",
-        "universe_symbol_count": len(universe_symbols),
-        "quote_count": len(quotes),
-        "selected_count": len(symbols),
-        "fetched_count": len(df_map),
-        "fetch_stats": fetch_stats,
-        "metrics": metrics,
-        "top_candidates": _candidate_rows(triggers, name_map=name_map, df_map=df_map)[:50],
-        "limits": {
-            "max_symbols": runtime.max_symbols,
-            "quote_batch_size": runtime.quote_batch_size,
-            "quote_batch_sleep": runtime.quote_batch_sleep,
-            "kline_batch_size": runtime.kline_batch_size,
-            "kline_batch_sleep": runtime.kline_batch_sleep,
-            "min_quote_amount": runtime.min_quote_amount,
-        },
-    }
+    candidates = _candidate_rows(triggers, name_map=name_map, df_map=df_map)
+    result = _build_funnel_result(
+        runtime,
+        universe_symbols,
+        quotes,
+        symbols,
+        df_map,
+        fetch_stats,
+        metrics,
+        candidates,
+        report_path,
+    )
     _write_output(runtime.output_path, result)
     _write_report(report_path, result)
-    if os.getenv("MARKET_FUNNEL_WRITE_DB", "").strip().lower() in {"1", "true", "yes"}:
-        _upsert_funnel_to_tracking(result.get("top_candidates") or [], runtime.spec.key)
+    _write_tracking_candidates_if_enabled(candidates, runtime.spec.key)
     print(
         f"[market-funnel] done ok={result['ok']} market={runtime.spec.key} "
         f"quotes={len(quotes)} selected={len(symbols)} fetched={len(df_map)} "
