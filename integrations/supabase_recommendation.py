@@ -102,6 +102,21 @@ def _close_map_from_tickflow_hist(hist: pd.DataFrame | None) -> dict[str, float]
     return {str(d): float(px) for d, px in zip(work["trade_date"], work["close"])}
 
 
+def _ohlc_map_from_tickflow_hist(hist: pd.DataFrame | None) -> dict[str, dict[str, float]]:
+    if hist is None or hist.empty or not {"date", "high", "low", "close"}.issubset(hist.columns):
+        return {}
+    work = hist[["date", "high", "low", "close"]].copy()
+    work["trade_date"] = pd.to_datetime(work["date"], errors="coerce").dt.strftime("%Y%m%d")
+    for col in ("high", "low", "close"):
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+    work = work.dropna(subset=["trade_date", "high", "low", "close"])
+    work = work[(work["high"] > 0) & (work["low"] > 0) & (work["close"] > 0)]
+    return {
+        str(row.trade_date): {"high": float(row.high), "low": float(row.low), "close": float(row.close)}
+        for row in work.itertuples(index=False)
+    }
+
+
 def _fetch_tickflow_tracking_market_data(
     api_key: str,
     symbols: list[str],
@@ -969,6 +984,151 @@ def refresh_global_tracking_prices(market: str) -> dict[str, Any]:
         "codes_no_data": codes_no_data,
         "latest_trade_date": latest_td,
     }
+
+
+def _latest_market_records(records: list[dict[str, Any]], max_dates: int) -> list[dict[str, Any]]:
+    limit = max(int(max_dates), 1)
+    dates = sorted(
+        {d for d in (_recommend_date_to_yyyymmdd(row.get("recommend_date")) for row in records) if d},
+        reverse=True,
+    )[:limit]
+    allowed = set(dates)
+    return [row for row in records if _recommend_date_to_yyyymmdd(row.get("recommend_date")) in allowed]
+
+
+def _build_us_performance_update(
+    row: dict[str, Any],
+    code: str,
+    ohlc: dict[str, dict[str, float]],
+    now_iso: str,
+) -> dict[str, Any] | None:
+    trade_dates = sorted(ohlc)
+    rd = _recommend_date_to_yyyymmdd(row.get("recommend_date"))
+    entry_date = _pick_close_on_or_before(trade_dates, rd)
+    entry = _safe_float(row.get("initial_price"), 0.0)
+    if entry <= 0 and entry_date:
+        entry = _safe_float(ohlc.get(entry_date, {}).get("close"), 0.0)
+    if entry <= 0 or not entry_date:
+        return None
+    window = [(d, ohlc[d]) for d in trade_dates if d >= entry_date]
+    if not window:
+        return None
+    high_date, high_row = max(window, key=lambda item: item[1]["high"])
+    low_date, low_row = min(window, key=lambda item: item[1]["low"])
+    latest_date, latest_row = window[-1]
+    mfe_price = float(high_row["high"])
+    mae_price = float(low_row["low"])
+    current_price = float(latest_row["close"])
+    return {
+        "id": row.get("id"),
+        "code": code,
+        "recommend_date": int(rd) if rd.isdigit() else None,
+        "initial_price": round(entry, 4),
+        "current_price": round(current_price, 4),
+        "change_pct": round((current_price / entry - 1.0) * 100.0, 2),
+        "mfe_pct": round((mfe_price / entry - 1.0) * 100.0, 2),
+        "mae_pct": round((mae_price / entry - 1.0) * 100.0, 2),
+        "range_amp_pct": round((mfe_price / mae_price - 1.0) * 100.0, 2) if mae_price > 0 else 0.0,
+        "mfe_price": round(mfe_price, 4),
+        "mae_price": round(mae_price, 4),
+        "mfe_date": int(high_date),
+        "mae_date": int(low_date),
+        "performance_days": len(window),
+        "performance_updated_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+
+def refresh_us_tracking_performance(max_dates: int = 60, kline_count: int = 160) -> dict[str, Any]:
+    if not is_supabase_configured():
+        raise ValueError("SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 未配置")
+    api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("TICKFLOW_API_KEY 未配置")
+
+    client = _get_supabase_admin_client()
+    table = TABLE_RECOMMENDATION_TRACKING_US
+    records = _fetch_records_from_table(client, table, "id,code,recommend_date,initial_price")
+    records = _latest_market_records(records, max_dates)
+    if not records:
+        return _empty_us_performance_summary()
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in records:
+        code = str(row.get("code") or "").strip()
+        if code:
+            grouped.setdefault(code, []).append(row)
+
+    from integrations.tickflow_client import TickFlowClient
+
+    tf_client = TickFlowClient(api_key=api_key)
+    symbols = sorted(grouped)
+    hist_map = tf_client.get_klines_batch(symbols, period="1d", count=max(int(kline_count), 1), adjust="none")
+    now_iso = datetime.now(UTC).isoformat()
+    updates, codes_no_data, latest_td = _build_us_performance_updates(grouped, hist_map, now_iso)
+    written = _upsert_to_table(client, table, updates)
+    return _us_performance_summary(records, grouped, written, codes_no_data, latest_td, updates)
+
+
+def _build_us_performance_updates(
+    grouped: dict[str, list[dict[str, Any]]],
+    hist_map: dict[str, pd.DataFrame],
+    now_iso: str,
+) -> tuple[list[dict[str, Any]], int, str]:
+    updates: list[dict[str, Any]] = []
+    codes_no_data = 0
+    latest_td = ""
+    for code, rows in grouped.items():
+        ohlc = _ohlc_map_from_tickflow_hist(hist_map.get(code))
+        trade_dates = sorted(ohlc)
+        if not trade_dates:
+            codes_no_data += 1
+            continue
+        latest_td = max(latest_td, trade_dates[-1])
+        for row in rows:
+            update = _build_us_performance_update(row, code, ohlc, now_iso)
+            if update is not None:
+                updates.append(update)
+    return updates, codes_no_data, latest_td
+
+
+def _empty_us_performance_summary() -> dict[str, Any]:
+    return {
+        "rows_total": 0,
+        "rows_updated": 0,
+        "rows_skipped": 0,
+        "codes_total": 0,
+        "codes_no_data": 0,
+        "latest_trade_date": "",
+        "mfe_ge_5": 0,
+        "mfe_ge_10": 0,
+        "mae_le_neg5": 0,
+    }
+
+
+def _us_performance_summary(
+    records: list[dict[str, Any]],
+    grouped: dict[str, list[dict[str, Any]]],
+    written: int,
+    codes_no_data: int,
+    latest_trade_date: str,
+    updates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    summary = _empty_us_performance_summary()
+    summary.update(
+        {
+            "rows_total": len(records),
+            "rows_updated": written,
+            "rows_skipped": max(len(records) - written, 0),
+            "codes_total": len(grouped),
+            "codes_no_data": codes_no_data,
+            "latest_trade_date": latest_trade_date,
+            "mfe_ge_5": sum(_safe_float(row.get("mfe_pct")) >= 5.0 for row in updates),
+            "mfe_ge_10": sum(_safe_float(row.get("mfe_pct")) >= 10.0 for row in updates),
+            "mae_le_neg5": sum(_safe_float(row.get("mae_pct")) <= -5.0 for row in updates),
+        }
+    )
+    return summary
 
 
 def refresh_tracking_prices_with_tickflow_realtime() -> dict[str, Any]:
