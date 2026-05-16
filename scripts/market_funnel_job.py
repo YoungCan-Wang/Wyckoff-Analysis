@@ -74,7 +74,7 @@ MARKET_SPECS = {
         label="美股",
         universe="US_Equity",
         symbol_file="us.txt",
-        default_max_symbols=800,
+        default_max_symbols=1500,
         default_min_quote_amount=5_000_000.0,
     ),
     "etf": MarketSpec(
@@ -515,7 +515,7 @@ def run_market_funnel(
         "fetched_count": len(df_map),
         "fetch_stats": fetch_stats,
         "metrics": metrics,
-        "top_candidates": _candidate_rows(triggers, name_map=name_map, df_map=df_map)[:50],
+        "top_candidates": _candidate_rows(triggers, name_map=name_map, df_map=df_map)[:100],
         "limits": {
             "max_symbols": runtime.max_symbols,
             "quote_batch_size": runtime.quote_batch_size,
