@@ -18,9 +18,9 @@ from datetime import datetime
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.constants import TABLE_RECOMMENDATION_TRACKING
 from integrations._llm_types import DEFAULT_GEMINI_MODEL
 from integrations.supabase_base import close_client, create_admin_client
-from core.constants import TABLE_RECOMMENDATION_TRACKING
 from scripts.daily_job import TZ, _latest_trade_date_str, _load_step4_target, _log, _run_step4_pipeline
 
 
