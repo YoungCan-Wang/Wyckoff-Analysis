@@ -1005,10 +1005,12 @@ def _build_us_performance_update(
     trade_dates = sorted(ohlc)
     rd = _recommend_date_to_yyyymmdd(row.get("recommend_date"))
     entry_date = _pick_close_on_or_before(trade_dates, rd)
-    entry = _safe_float(row.get("initial_price"), 0.0)
-    if entry <= 0 and entry_date:
-        entry = _safe_float(ohlc.get(entry_date, {}).get("close"), 0.0)
-    if entry <= 0 or not entry_date:
+    if not entry_date:
+        return None
+    entry = _safe_float(ohlc.get(entry_date, {}).get("close"), 0.0)
+    if entry <= 0:
+        entry = _safe_float(row.get("initial_price"), 0.0)
+    if entry <= 0:
         return None
     window = [(d, ohlc[d]) for d in trade_dates if d >= entry_date]
     if not window:
@@ -1063,7 +1065,7 @@ def refresh_us_tracking_performance(max_dates: int = 60, kline_count: int = 160)
 
     tf_client = TickFlowClient(api_key=api_key)
     symbols = sorted(grouped)
-    hist_map = tf_client.get_klines_batch(symbols, period="1d", count=max(int(kline_count), 1), adjust="none")
+    hist_map = tf_client.get_klines_batch(symbols, period="1d", count=max(int(kline_count), 1), adjust="forward")
     now_iso = datetime.now(UTC).isoformat()
     updates, codes_no_data, latest_td = _build_us_performance_updates(grouped, hist_map, now_iso)
     written = _upsert_to_table(client, table, updates)

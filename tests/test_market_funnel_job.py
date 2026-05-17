@@ -74,6 +74,29 @@ def test_upsert_funnel_to_tracking_uses_market_trade_date(monkeypatch):
     assert captured["market"] == "us"
 
 
+def test_upsert_funnel_to_tracking_groups_by_trade_date(monkeypatch):
+    calls: list[tuple[int, list[dict[str, object]], str]] = []
+
+    def fake_upsert(recommend_date, rows, market):
+        calls.append((recommend_date, rows, market))
+        return True
+
+    monkeypatch.setattr("integrations.supabase_recommendation.upsert_global_recommendations", fake_upsert)
+
+    _upsert_funnel_to_tracking(
+        [
+            {"symbol": "HALT.US", "latest_close": 10.0, "latest_trade_date": 20260513},
+            {"symbol": "AAPL.US", "latest_close": 213.0, "latest_trade_date": 20260514},
+        ],
+        "us",
+    )
+
+    assert [(date, [row["code"] for row in rows], market) for date, rows, market in calls] == [
+        (20260513, ["HALT.US"], "us"),
+        (20260514, ["AAPL.US"], "us"),
+    ]
+
+
 def test_upsert_funnel_to_tracking_requires_trade_date(monkeypatch):
     def fake_upsert(recommend_date, rows, market):
         raise AssertionError("upsert should not run without a trade date")

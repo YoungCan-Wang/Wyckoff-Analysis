@@ -460,18 +460,12 @@ def _require_tickflow_client() -> TickFlowClient:
     return TickFlowClient(api_key=api_key)
 
 
-def _candidate_recommend_date(candidates: list[dict[str, Any]]) -> int:
-    dates: list[int] = []
-    for c in candidates:
-        try:
-            date_int = int(c.get("latest_trade_date"))
-        except (TypeError, ValueError):
-            continue
-        if 19000101 <= date_int <= 29991231:
-            dates.append(date_int)
-    if not dates:
-        raise ValueError("cannot resolve recommendation trade date from market histories")
-    return max(dates)
+def _candidate_trade_date(candidate: dict[str, Any]) -> int | None:
+    try:
+        date_int = int(candidate.get("latest_trade_date"))
+    except (TypeError, ValueError):
+        return None
+    return date_int if 19000101 <= date_int <= 29991231 else None
 
 
 def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) -> None:
@@ -480,10 +474,14 @@ def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) ->
 
     from integrations.supabase_recommendation import upsert_global_recommendations
 
-    recommend_date = _candidate_recommend_date(candidates)
-    rows = []
+    rows_by_date: dict[int, list[dict[str, Any]]] = {}
+    skipped = 0
     for c in candidates:
-        rows.append(
+        recommend_date = _candidate_trade_date(c)
+        if recommend_date is None:
+            skipped += 1
+            continue
+        rows_by_date.setdefault(recommend_date, []).append(
             {
                 "code": str(c.get("symbol", "")).strip(),
                 "name": str(c.get("name", "")).strip(),
@@ -492,10 +490,15 @@ def _upsert_funnel_to_tracking(candidates: list[dict[str, Any]], market: str) ->
                 "latest_close": float(c.get("latest_close") or 0),
             }
         )
-    ok = upsert_global_recommendations(recommend_date, rows, market)
-    print(f"[market-funnel] DB write: market={market}, date={recommend_date}, candidates={len(rows)}, ok={ok}")
-    if not ok:
-        raise RuntimeError(f"DB write failed for market={market}, candidates={len(rows)}")
+    if not rows_by_date:
+        raise ValueError("cannot resolve recommendation trade date from market histories")
+    for recommend_date, rows in sorted(rows_by_date.items()):
+        ok = upsert_global_recommendations(recommend_date, rows, market)
+        print(f"[market-funnel] DB write: market={market}, date={recommend_date}, candidates={len(rows)}, ok={ok}")
+        if not ok:
+            raise RuntimeError(f"DB write failed for market={market}, candidates={len(rows)}")
+    if skipped:
+        print(f"[market-funnel] DB write skipped candidates without trade date: {skipped}/{len(candidates)}")
 
 
 def _build_funnel_result(
