@@ -55,9 +55,7 @@ def test_build_us_performance_updates_reprices_stale_initial_price():
             "close": [25.0, 30.0],
         }
     )
-    grouped = {
-        "SPLT.US": [{"id": 1, "code": "SPLT.US", "recommend_date": 20260515, "initial_price": 100.0}]
-    }
+    grouped = {"SPLT.US": [{"id": 1, "code": "SPLT.US", "recommend_date": 20260515, "initial_price": 100.0}]}
 
     updates, _, _ = _build_us_performance_updates(grouped, {"SPLT.US": hist}, "now")
 
@@ -79,20 +77,14 @@ def test_refresh_us_tracking_performance_fetches_forward_adjusted_hist(monkeypat
             assert symbols == ["SPLT.US"]
             assert period == "1d"
             assert count == 5
-            return {
-                "SPLT.US": pd.DataFrame(
-                    {"date": ["2026-05-15"], "high": [26.0], "low": [24.0], "close": [25.0]}
-                )
-            }
+            return {"SPLT.US": pd.DataFrame({"date": ["2026-05-15"], "high": [26.0], "low": [24.0], "close": [25.0]})}
 
     monkeypatch.setenv("TICKFLOW_API_KEY", "key")
     monkeypatch.setattr("integrations.supabase_recommendation.is_supabase_configured", lambda: True)
     monkeypatch.setattr("integrations.supabase_recommendation._get_supabase_admin_client", lambda: object())
     monkeypatch.setattr(
         "integrations.supabase_recommendation._fetch_records_from_table",
-        lambda *_args: [
-            {"id": 1, "code": "SPLT.US", "recommend_date": 20260515, "initial_price": 100.0}
-        ],
+        lambda *_args: [{"id": 1, "code": "SPLT.US", "recommend_date": 20260515, "initial_price": 100.0}],
     )
     monkeypatch.setattr("integrations.supabase_recommendation._upsert_to_table", lambda *_args: 1)
     monkeypatch.setattr("integrations.tickflow_client.TickFlowClient", FakeTickFlowClient)
