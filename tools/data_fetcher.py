@@ -262,16 +262,17 @@ def _fetch_all_ohlcv_tickflow_batch(
     if not df_map:
         return None
     missing = max(len(symbols) - len(df_map), 0)
-    if failed_batches or missing:
-        print(
-            f"[funnel] TickFlow 批量日K不完整，回退单票链路: "
-            f"成功={len(df_map)}, 缺失={missing}, 失败批次={failed_batches}"
-        )
-        return None
     stats = _tickflow_fetch_stats(len(symbols), df_map, fetch_spot_patched, started)
-    print(
-        f"[funnel] TickFlow 批量日K完成: 成功={stats['fetch_ok']}, 失败={stats['fetch_fail']}, 耗时={stats['fetch_elapsed_s']}s"
-    )
+    if failed_batches or missing:
+        missing_sample = ",".join([s for s in symbols if s not in df_map][:8])
+        print(
+            f"[funnel] TickFlow 批量日K部分完成: 成功={stats['fetch_ok']}, 缺失={missing}, "
+            f"失败批次={failed_batches}, sample_missing={missing_sample or '-'}, 耗时={stats['fetch_elapsed_s']}s"
+        )
+    else:
+        print(
+            f"[funnel] TickFlow 批量日K完成: 成功={stats['fetch_ok']}, 失败={stats['fetch_fail']}, 耗时={stats['fetch_elapsed_s']}s"
+        )
     return df_map, stats
 
 

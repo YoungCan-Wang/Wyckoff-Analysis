@@ -177,7 +177,7 @@ class TestDataFetcher:
         result = latest_trade_date_from_hist(df)
         assert result == date(2025, 1, 2)
 
-    def test_tickflow_batch_partial_returns_none(self, monkeypatch):
+    def test_tickflow_batch_partial_keeps_available_frames(self, monkeypatch):
         import tools.data_fetcher as dfetcher
 
         class FakeTickFlowClient:
@@ -205,7 +205,11 @@ class TestDataFetcher:
 
         result = dfetcher._fetch_all_ohlcv_tickflow_batch(["000001", "000002"], window, False, 200, 0)
 
-        assert result is None
+        assert result is not None
+        df_map, stats = result
+        assert list(df_map) == ["000001"]
+        assert stats["fetch_ok"] == 1
+        assert stats["fetch_fail"] == 1
 
     def test_fetch_hist_direct_source_bypasses_cached_repository(self, monkeypatch):
         import integrations.data_source as data_source
