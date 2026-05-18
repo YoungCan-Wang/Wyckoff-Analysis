@@ -67,7 +67,7 @@ interface TrackingReadyContentProps {
 const RETENTION_DATES = 30
 const AVG_WINDOWS = [5, 10, 15, 20, 25, 30] as const
 type RecommendationWindow = (typeof AVG_WINDOWS)[number]
-type SortBy = 'date' | 'change' | 'score' | 'mfe' | 'mae'
+type SortBy = 'date' | 'change' | 'score' | 'count' | 'mfe' | 'mae'
 type SortOrder = 'desc' | 'asc'
 
 async function fetchTracking(market: MarketTab): Promise<Recommendation[]> {
@@ -400,6 +400,7 @@ function TrackingSortControls({
         {market === 'us' && <option value="mfe">{t('tracking.sortMfe')}</option>}
         {market === 'us' && <option value="mae">{t('tracking.sortMae')}</option>}
         <option value="score">{t('tracking.sortScore')}</option>
+        <option value="count">{t('tracking.sortRecommendCount')}</option>
       </select>
       <select value={sortOrder} onChange={(event) => onSortOrderChange(event.target.value as SortOrder)} className="rounded-lg border border-border px-2 py-1.5 text-sm">
         <option value="desc">{t('tracking.sortDesc')}</option>
@@ -464,6 +465,7 @@ function TrackingTableHead({
         <th className="px-3 py-2 text-left font-medium">{t('common.code')}</th>
         <th className="px-3 py-2 text-left font-medium">{t('common.name')}</th>
         <SortableHeader align="right" active={sortBy === 'date'} label={t('tracking.recommendDate')} order={sortOrder} onClick={() => onSortChange('date')} />
+        <SortableHeader align="right" active={sortBy === 'count'} label={t('tracking.recommendCount')} order={sortOrder} onClick={() => onSortChange('count')} />
         <th className="px-3 py-2 text-right font-medium">{t('tracking.initialPrice')}</th>
         <th className="px-3 py-2 text-right font-medium">{t('tracking.currentPrice')}</th>
         <SortableHeader align="right" active={sortBy === 'change'} label={t('tracking.changePct')} order={sortOrder} onClick={() => onSortChange('change')} />
@@ -537,6 +539,7 @@ function TrackingRow({ row, market = 'cn' }: { row: Recommendation; market?: Mar
       </td>
       <td className="px-3 py-2">{row.name || '-'}</td>
       <td className="px-3 py-2 text-right text-muted-foreground">{formatDate(row.recommend_date)}</td>
+      <td className="px-3 py-2 text-right font-medium">{recommendationCount(row.recommend_count)}</td>
       <td className="px-3 py-2 text-right">{row.initial_price?.toFixed(2) || '-'}</td>
       <td className="px-3 py-2 text-right">{row.current_price?.toFixed(2) || '-'}</td>
       <td className={`px-3 py-2 text-right font-medium ${pctColor(row.change_pct)}`}>{formatPct(row.change_pct)}</td>
@@ -722,6 +725,7 @@ function sortRecommendations(rows: Recommendation[], sortBy: SortBy, sortOrder: 
     if (sortBy === 'change') return nullableNumberCompare(a.change_pct, b.change_pct, direction)
     if (sortBy === 'mfe') return nullableNumberCompare(a.mfe_pct, b.mfe_pct, direction)
     if (sortBy === 'mae') return nullableNumberCompare(a.mae_pct, b.mae_pct, direction)
+    if (sortBy === 'count') return nullableNumberCompare(recommendationCount(a.recommend_count), recommendationCount(b.recommend_count), direction)
     return nullableNumberCompare(a.funnel_score, b.funnel_score, direction)
   })
 }

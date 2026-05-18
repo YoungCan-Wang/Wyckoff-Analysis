@@ -212,11 +212,12 @@ describe('execQueryRecommendations', () => {
   it('formats recommendation entries', async () => {
     const deps = createMockDeps({
       recommendation_tracking: [
-        { code: 600519, name: '贵州茅台', recommend_date: 20240101, initial_price: 1800, current_price: 1900, change_pct: 5.56, is_ai_recommended: true },
+        { code: 600519, name: '贵州茅台', recommend_date: 20240101, recommend_count: 3, initial_price: 1800, current_price: 1900, change_pct: 5.56, is_ai_recommended: true },
       ],
     })
     const result = await execQueryRecommendations(deps, 10)
     expect(result).toContain('600519')
+    expect(result).toContain('推荐3次')
     expect(result).toContain('+5.56%')
     expect(result).toContain('[AI]')
   })
