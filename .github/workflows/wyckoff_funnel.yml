@@ -68,8 +68,8 @@ jobs:
       STEP4_PROBE_BUDGET_LIMIT: "0.10"
       STEP4_ATTACK_BUDGET_LIMIT: "0.20"
       STEP4_BUY_BLOCK_REGIMES: "CRASH,BLACK_SWAN,RISK_OFF"
-      # AI 候选配额：偏 Accum（回测夏普 1.77 vs Trend 0.14）
-      FUNNEL_AI_SELECTION_MODE: "modern"
+      # AI 候选选择：正式 L4 全量进入 Step3，Trend/Accum 仅用于分轨研报。
+      FUNNEL_AI_SELECTION_MODE: "all_formal_l4"
       FUNNEL_AI_TOTAL_CAP: "8"
       FUNNEL_AI_RISK_ON_TREND: "3"
       FUNNEL_AI_RISK_ON_ACCUM: "5"
