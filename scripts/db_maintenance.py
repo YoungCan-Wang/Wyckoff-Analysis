@@ -17,6 +17,8 @@ from core.constants import (
     TABLE_DAILY_NAV,
     TABLE_MARKET_SIGNAL_DAILY,
     TABLE_RECOMMENDATION_TRACKING,
+    TABLE_RECOMMENDATION_TRACKING_HK,
+    TABLE_RECOMMENDATION_TRACKING_US,
     TABLE_SIGNAL_PENDING,
     TABLE_TAIL_BUY_HISTORY,
     TABLE_TRADE_ORDERS,
@@ -36,6 +38,11 @@ CLEANUP_RULES: list[tuple[str, str, int, str]] = [
 ]
 RECOMMENDATION_KEEP_DATES = 30
 RECOMMENDATION_DATE_PAGE_SIZE = 1000
+RECOMMENDATION_TRACKING_TABLES = (
+    TABLE_RECOMMENDATION_TRACKING,
+    TABLE_RECOMMENDATION_TRACKING_US,
+    TABLE_RECOMMENDATION_TRACKING_HK,
+)
 
 
 def _cutoff_value(ttl_days: int, kind: str) -> str | int:
@@ -72,18 +79,13 @@ def _to_int_date(value: object) -> int | None:
         return None
 
 
-def _latest_recommend_dates(client, keep_dates: int, page_size: int) -> list[int]:
+def _latest_recommend_dates(client, table: str, keep_dates: int, page_size: int) -> list[int]:
     dates: list[int] = []
     seen: set[int] = set()
     before_date: int | None = None
 
     while len(dates) < keep_dates:
-        query = (
-            client.table(TABLE_RECOMMENDATION_TRACKING)
-            .select("recommend_date")
-            .order("recommend_date", desc=True)
-            .limit(page_size)
-        )
+        query = client.table(table).select("recommend_date").order("recommend_date", desc=True).limit(page_size)
         if before_date is not None:
             query = query.lt("recommend_date", before_date)
 
@@ -105,8 +107,9 @@ def _latest_recommend_dates(client, keep_dates: int, page_size: int) -> list[int
     return dates
 
 
-def cleanup_recommendation_tracking(
+def cleanup_recommendation_table(
     client,
+    table: str,
     *,
     keep_dates: int = RECOMMENDATION_KEEP_DATES,
     page_size: int = RECOMMENDATION_DATE_PAGE_SIZE,
@@ -114,7 +117,7 @@ def cleanup_recommendation_tracking(
 ) -> tuple[str, int | None]:
     keep_dates = max(int(keep_dates), 1)
     page_size = max(int(page_size), 1)
-    dates = _latest_recommend_dates(client, keep_dates, page_size)
+    dates = _latest_recommend_dates(client, table, keep_dates, page_size)
     if len(dates) < keep_dates:
         count = 0 if dry_run else None
         return f"keep_all, keep_dates={keep_dates}, distinct_dates={len(dates)}", count
@@ -122,18 +125,28 @@ def cleanup_recommendation_tracking(
     cutoff = dates[keep_dates - 1]
     try:
         if dry_run:
-            resp = (
-                client.table(TABLE_RECOMMENDATION_TRACKING)
-                .select("*", count="exact")
-                .lt("recommend_date", cutoff)
-                .limit(0)
-                .execute()
-            )
+            resp = client.table(table).select("*", count="exact").lt("recommend_date", cutoff).limit(0).execute()
             return f"dry_run, keep_dates={keep_dates}, cutoff={cutoff}", resp.count or 0
-        client.table(TABLE_RECOMMENDATION_TRACKING).delete().lt("recommend_date", cutoff).execute()
+        client.table(table).delete().lt("recommend_date", cutoff).execute()
         return f"ok, keep_dates={keep_dates}, cutoff={cutoff}", None
     except Exception as e:
         return f"error: {e}", None
+
+
+def cleanup_recommendation_tracking(
+    client,
+    *,
+    keep_dates: int = RECOMMENDATION_KEEP_DATES,
+    page_size: int = RECOMMENDATION_DATE_PAGE_SIZE,
+    dry_run: bool = False,
+) -> tuple[str, int | None]:
+    return cleanup_recommendation_table(
+        client,
+        TABLE_RECOMMENDATION_TRACKING,
+        keep_dates=keep_dates,
+        page_size=page_size,
+        dry_run=dry_run,
+    )
 
 
 def main() -> int:
@@ -158,11 +171,12 @@ def main() -> int:
         if status.startswith("error"):
             all_ok = False
 
-    status, count = cleanup_recommendation_tracking(client, dry_run=args.dry_run)
-    suffix = f" ({count} rows)" if count is not None else ""
-    print(f"[db_maintenance] {TABLE_RECOMMENDATION_TRACKING}: {status}{suffix}")
-    if status.startswith("error"):
-        all_ok = False
+    for table in RECOMMENDATION_TRACKING_TABLES:
+        status, count = cleanup_recommendation_table(client, table, dry_run=args.dry_run)
+        suffix = f" ({count} rows)" if count is not None else ""
+        print(f"[db_maintenance] {table}: {status}{suffix}")
+        if status.startswith("error"):
+            all_ok = False
 
     return 0 if all_ok else 1
 
