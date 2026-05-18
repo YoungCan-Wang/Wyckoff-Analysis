@@ -5,10 +5,12 @@ import pandas as pd
 import scripts.wyckoff_funnel as funnel
 from scripts.wyckoff_funnel import (
     _append_etf_section,
+    _append_formal_l4_sections,
     _merge_trigger_maps,
     _promote_l2_bypass_for_ai,
     _rank_etf_candidates,
     _rank_l2_bypass_pool,
+    _split_selected_tracks,
 )
 
 
@@ -61,6 +63,42 @@ def test_append_etf_section_renders_compact_rows():
     assert "ETF强势池" in text
     assert "512480 半导体ETF" in text
     assert "3日+2.1%" in text
+
+
+def test_append_formal_l4_sections_renders_all_hits_and_marks_ai():
+    lines: list[str] = []
+    scores = {"000001": 6.0, "000002": 3.0, "000003": 12.0}
+
+    _append_formal_l4_sections(
+        lines,
+        ["000003", "000001", "000002"],
+        ["000002"],
+        {"000001": "平安银行", "000002": "万科A", "000003": "国农科技"},
+        {"000001": ["sos"], "000002": ["lps"], "000003": ["sos", "evr"]},
+        lambda code: scores[code],
+    )
+
+    text = "\n".join(lines)
+    assert "【🔥 多信号共振】1 只" in text
+    assert "【⚡ SOS 量价点火】1 只" in text
+    assert "【🔄 LPS 缩量回踩】1 只" in text
+    assert "000001 平安银行" in text
+    assert "000002 万科A  3.00  →AI" in text
+
+
+def test_split_selected_tracks_preserves_order_and_accum_only_hits():
+    trend, accum = _split_selected_tracks(
+        ["000001", "000002", "000003", "000004"],
+        {
+            "000001": ["sos"],
+            "000002": ["lps"],
+            "000003": ["spring", "evr"],
+            "000004": ["compression"],
+        },
+    )
+
+    assert trend == ["000001", "000003", "000004"]
+    assert accum == ["000002"]
 
 
 def test_merge_trigger_maps_keeps_bypass_l4_hits():

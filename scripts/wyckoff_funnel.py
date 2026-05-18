@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
@@ -549,9 +550,67 @@ def _merge_trigger_maps(*trigger_maps: dict[str, list[tuple[str, float]]]) -> di
     return merged
 
 
+def _score_star(score: float) -> str:
+    if score >= 10:
+        return "★★"
+    if score >= 5:
+        return "★ "
+    return "  "
+
+
+def _append_formal_l4_sections(
+    lines: list[str],
+    formal_codes: list[str],
+    selected_codes: list[str],
+    name_map: dict[str, str],
+    code_to_trigger_keys: dict[str, list[str]],
+    display_score: Callable[[str], float],
+) -> None:
+    selected_set = set(selected_codes)
+
+    def _append_row(code: str, extra: str = "") -> None:
+        score = float(display_score(code))
+        ai_mark = "  →AI" if code in selected_set else ""
+        lines.append(f"{_score_star(score)} {code} {name_map.get(code, code)}  {score:.2f}{ai_mark}{extra}")
+
+    multi_signal = [c for c in formal_codes if len(code_to_trigger_keys.get(c, [])) > 1]
+    if multi_signal:
+        lines.append(f"**【🔥 多信号共振】{len(multi_signal)} 只**")
+        for code in sorted(multi_signal, key=lambda c: -float(display_score(c))):
+            short = "+".join(TRIGGER_SHORT_LABELS.get(k, k) for k in code_to_trigger_keys.get(code, []))
+            _append_row(code, f"  {short}")
+        lines.append("")
+
+    multi_signal_set = set(multi_signal)
+    single_signal_codes = [c for c in formal_codes if c not in multi_signal_set and code_to_trigger_keys.get(c)]
+    code_primary_key = {code: code_to_trigger_keys.get(code, [""])[0] for code in single_signal_codes}
+    for group_key in TRIGGER_GROUP_ORDER:
+        group_codes = [c for c in single_signal_codes if code_primary_key.get(c) == group_key]
+        if not group_codes:
+            continue
+        lines.append(f"**【{TRIGGER_GROUP_TITLES.get(group_key, group_key)}】{len(group_codes)} 只**")
+        for code in sorted(group_codes, key=lambda c: -float(display_score(c))):
+            _append_row(code)
+        lines.append("")
+
+
 def _is_accum_trigger(keys: list[str]) -> bool:
     key_set = {str(k).strip().lower() for k in keys}
     return bool(key_set & {"spring", "lps"}) and not bool(key_set & {"sos", "evr", "compression"})
+
+
+def _split_selected_tracks(
+    selected_codes: list[str],
+    code_to_trigger_keys: dict[str, list[str]],
+) -> tuple[list[str], list[str]]:
+    trend_selected: list[str] = []
+    accum_selected: list[str] = []
+    for code in selected_codes:
+        if _is_accum_trigger(code_to_trigger_keys.get(code, [])):
+            accum_selected.append(code)
+        else:
+            trend_selected.append(code)
+    return trend_selected, accum_selected
 
 
 def _rank_l2_bypass_pool(l2_bypass_pool: list[str], code_to_total_score: dict[str, float]) -> list[str]:
@@ -942,6 +1001,12 @@ def run(
     unique_hit_count = len(formal_hit_set)
     review_unique_count = len(sorted_codes)
     l2_bypass_ranked = _rank_l2_bypass_pool(l2_bypass_pool, code_to_total_score)
+    use_full_formal_l4_selection = FUNNEL_AI_SELECTION_MODE in {
+        "all_formal_l4",
+        "all_l4",
+        "full_formal_l4",
+        "full_l4",
+    }
     use_legacy_selection = FUNNEL_AI_SELECTION_MODE in {
         "legacy_full_hits",
         "legacy_hits",
@@ -966,22 +1031,24 @@ def run(
     etf_candidates = metrics.get("etf_candidates", []) or []
     # 策略：大盘水温驱动的双轨制（Top-Down 择时顺势策略）
     regime = benchmark_context.get("regime", "NEUTRAL")
-    if use_legacy_selection:
-        trend_selected = []
-        accum_selected = []
+    if use_full_formal_l4_selection or use_legacy_selection:
+        selected_for_ai = list(formal_sorted_codes)
+        trend_selected, accum_selected = _split_selected_tracks(selected_for_ai, code_to_trigger_keys)
         score_map = {c: float(code_to_best_score.get(c, 0.0)) for c in formal_sorted_codes}
         ai_policy = {
             "total_cap": len(formal_sorted_codes),
-            "trend_quota": 0,
-            "accum_quota": 0,
-            "requested_trend_quota": 0,
-            "requested_accum_quota": 0,
-            "quota_family": "LEGACY_FULL_HITS",
+            "trend_quota": len(trend_selected),
+            "accum_quota": len(accum_selected),
+            "requested_trend_quota": len(trend_selected),
+            "requested_accum_quota": len(accum_selected),
+            "quota_family": "FULL_FORMAL_L4",
             "max_trend_l3_fill": 0,
             "max_accum_l3_fill": 0,
         }
-        selected_for_ai = list(formal_sorted_codes)
-        print(f"[funnel] AI候选分配完成(legacy_full_hits): total={len(selected_for_ai)}")
+        print(
+            f"[funnel] AI候选分配完成(full_formal_l4): "
+            f"Trend={len(trend_selected)}, Accum={len(accum_selected)}, total={len(selected_for_ai)}"
+        )
     else:
         mock_result = FunnelResult(
             layer1_symbols=[],
@@ -1278,7 +1345,8 @@ def run(
         (
             f"**候选分层**: 正式L4命中{unique_hit_count}只 / L2明珠池{len(l2_bypass_pool)}只 "
             f"-> AI输入{len(selected_for_ai)}只 "
-            f"(Trend {len(trend_selected)} / Accum {len(accum_selected)}; "
+            f"(配额 {quota_family}: Trend {len(trend_selected)}/{trend_quota}, "
+            f"Accum {len(accum_selected)}/{accum_quota}; "
             f"正式L4 {hit_selected_count} / L3补充{l3_only_count} / "
             f"L2明珠 {bypass_selected_count}; 旁路预算 {FUNNEL_L2_BYPASS_AI_CAP or 'unlimited'})"
         ),
@@ -1289,43 +1357,22 @@ def run(
     if etf_metrics or etf_candidates:
         lines.append("")
 
-    def _score_star(s: float) -> str:
-        if s >= 10:
-            return "★★"
-        if s >= 5:
-            return "★ "
-        return "  "
-
     def _display_score(code: str) -> float:
         trigger_score = float(code_to_total_score.get(code, 0.0) or 0.0)
         return trigger_score if trigger_score > 0 else float(score_map.get(code, 0.0) or 0.0)
 
-    multi_signal = [c for c in selected_for_ai if len(code_to_trigger_keys.get(c, [])) > 1]
-    if multi_signal:
-        lines.append(f"**【🔥 多信号共振】{len(multi_signal)} 只**")
-        for code in sorted(multi_signal, key=lambda c: -_display_score(c)):
-            name = name_map.get(code, code)
-            short = "+".join(TRIGGER_SHORT_LABELS.get(k, k) for k in code_to_trigger_keys.get(code, []))
-            score = _display_score(code)
-            lines.append(f"{_score_star(score)} {code} {name}  {score:.2f}  {short}")
-        lines.append("")
+    if formal_sorted_codes:
+        lines.append("**正式L4展开**: 以下列出全部正式L4；标记 →AI 的进入 Step3 研报")
+        _append_formal_l4_sections(
+            lines,
+            formal_sorted_codes,
+            selected_for_ai,
+            name_map,
+            code_to_trigger_keys,
+            _display_score,
+        )
 
-    grouped_codes = set(multi_signal)
-    single_signal_codes = [c for c in selected_for_ai if c not in grouped_codes and code_to_trigger_keys.get(c)]
-    code_primary_key = {code: code_to_trigger_keys.get(code, [""])[0] for code in single_signal_codes}
-    for group_key in TRIGGER_GROUP_ORDER:
-        group_codes = [c for c in single_signal_codes if code_primary_key.get(c) == group_key]
-        if not group_codes:
-            continue
-        group_title = TRIGGER_GROUP_TITLES.get(group_key, group_key)
-        lines.append(f"**【{group_title}】{len(group_codes)} 只**")
-        for code in sorted(group_codes, key=lambda c: -_display_score(c)):
-            name = name_map.get(code, code)
-            score = _display_score(code)
-            lines.append(f"{_score_star(score)} {code} {name}  {score:.2f}")
-        lines.append("")
-
-    fill_codes = [c for c in selected_for_ai if c not in grouped_codes and not code_to_trigger_keys.get(c)]
+    fill_codes = [c for c in selected_for_ai if c not in formal_hit_set and c not in l2_bypass_set]
     if fill_codes:
         lines.append(f"**【🧭 L3/阶段补位】{len(fill_codes)} 只**")
         for code in sorted(fill_codes, key=lambda c: -_display_score(c)):

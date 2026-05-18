@@ -255,6 +255,89 @@ def _resolve_initial_price_from_history(code_str: str, rec_date: date) -> float:
         return 0.0
 
 
+def _load_existing_recommendation_history(client) -> tuple[dict[int, int], dict[int, set[int]]]:
+    existing_counts: dict[int, int] = {}
+    existing_code_dates: dict[int, set[int]] = {}
+    all_rows = _fetch_all_tracking_records(client, "code,recommend_count,recommend_date")
+    for row in all_rows:
+        try:
+            code_int = int(row.get("code"))
+        except (TypeError, ValueError):
+            continue
+        cnt = int(row.get("recommend_count") or 1) if row.get("recommend_count") else 1
+        existing_counts[code_int] = max(existing_counts.get(code_int, 0), cnt)
+        try:
+            d = int(row.get("recommend_date"))
+            existing_code_dates.setdefault(code_int, set()).add(d)
+        except (TypeError, ValueError):
+            logger.debug("invalid recommend_date for code %s", row.get("code"), exc_info=True)
+    return existing_counts, existing_code_dates
+
+
+def _extract_recommendation_code(raw_code: Any) -> int | None:
+    code_str = "".join(filter(str.isdigit, str(raw_code or "").strip()))
+    return int(code_str) if code_str else None
+
+
+def _extract_recommendation_price(row: dict[str, Any]) -> float:
+    for key in ("initial_price", "current_price", "price", "latest_price", "close"):
+        raw_price = row.get(key)
+        if raw_price is None or raw_price == "":
+            continue
+        try:
+            parsed = float(raw_price)
+        except Exception:
+            continue
+        if parsed > 0:
+            return parsed
+    return 0.0
+
+
+def _extract_recommendation_score(row: dict[str, Any]) -> float | None:
+    for score_key in ("funnel_score", "score", "priority_score"):
+        raw_score = row.get(score_key)
+        if raw_score is None or raw_score == "":
+            continue
+        try:
+            return float(raw_score)
+        except Exception:
+            continue
+    return None
+
+
+def _build_recommendation_payload(
+    recommend_date: int,
+    symbols_info: list[dict[str, Any]],
+    existing_counts: dict[int, int],
+    existing_code_dates: dict[int, set[int]],
+) -> list[dict[str, Any]]:
+    payload = []
+    for item in symbols_info:
+        code_int = _extract_recommendation_code(item.get("code"))
+        if code_int is None:
+            continue
+        old_cnt = existing_counts.get(code_int, 0)
+        seen_dates = existing_code_dates.get(code_int, set())
+        new_cnt = old_cnt if recommend_date in seen_dates else max(old_cnt, 0) + 1
+        price = _extract_recommendation_price(item)
+        payload.append(
+            {
+                "code": code_int,
+                "name": str(item.get("name", "")).strip(),
+                "recommend_reason": str(item.get("tag", "")).strip(),
+                "recommend_date": recommend_date,
+                "initial_price": price,
+                "current_price": price,
+                "change_pct": 0.0,
+                "recommend_count": new_cnt,
+                "funnel_score": _extract_recommendation_score(item),
+                "is_ai_recommended": False,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+    return payload
+
+
 def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any]]) -> bool:
     """
     将每日选出的股票存入形态复盘表
@@ -265,84 +348,18 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
     try:
         client = _get_supabase_admin_client()
 
-        existing_counts: dict[int, int] = {}
-        existing_code_dates: dict[int, set[int]] = {}
         try:
-            all_rows = _fetch_all_tracking_records(client, "code,recommend_count,recommend_date")
-            for row in all_rows:
-                try:
-                    code_int = int(row.get("code"))
-                except (TypeError, ValueError):
-                    continue
-                cnt = int(row.get("recommend_count") or 1) if row.get("recommend_count") else 1
-                existing_counts[code_int] = max(existing_counts.get(code_int, 0), cnt)
-                try:
-                    d = int(row.get("recommend_date"))
-                    existing_code_dates.setdefault(code_int, set()).add(d)
-                except (TypeError, ValueError):
-                    logger.debug("invalid recommend_date for code %s", row.get("code"), exc_info=True)
-        except Exception:
-            existing_counts = {}
-            existing_code_dates = {}
+            existing_counts, existing_code_dates = _load_existing_recommendation_history(client)
+        except Exception as e:
+            logger.warning("[supabase_recommendation] skip upsert: failed to load recommendation history: %s", e)
+            return False
 
-        payload = []
-        for s in symbols_info:
-            raw_code = str(s.get("code", "")).strip()
-            # 提取纯数字部分 (比如 "000001.SZ" -> "000001")
-            code_str = "".join(filter(str.isdigit, raw_code))
-            if not code_str:
-                continue
-
-            # price 优先使用 step2 传入的 initial_price，并做多字段兜底
-            price = 0.0
-            for key in ("initial_price", "current_price", "price", "latest_price", "close"):
-                raw_price = s.get(key)
-                if raw_price is None or raw_price == "":
-                    continue
-                try:
-                    parsed = float(raw_price)
-                except Exception:
-                    continue
-                if parsed > 0:
-                    price = parsed
-                    break
-
-            score_val: float | None = None
-            for score_key in ("funnel_score", "score", "priority_score"):
-                raw_score = s.get(score_key)
-                if raw_score is None or raw_score == "":
-                    continue
-                try:
-                    score_val = float(raw_score)
-                    break
-                except Exception:
-                    continue
-
-            code_int = int(code_str)
-            old_cnt = existing_counts.get(code_int, 0)
-            seen_dates = existing_code_dates.get(code_int, set())
-            if old_cnt <= 0:
-                new_cnt = 1
-            elif recommend_date in seen_dates:
-                new_cnt = old_cnt
-            else:
-                new_cnt = old_cnt + 1
-
-            payload.append(
-                {
-                    "code": code_int,  # 存为 INT，首位0会消失
-                    "name": str(s.get("name", "")).strip(),
-                    "recommend_reason": str(s.get("tag", "")).strip(),
-                    "recommend_date": recommend_date,
-                    "initial_price": price,
-                    "current_price": price,  # 初始时当前价等于加入价
-                    "change_pct": 0.0,  # 初始涨跌幅为 0
-                    "recommend_count": new_cnt,
-                    "funnel_score": score_val,
-                    "is_ai_recommended": False,
-                    "updated_at": datetime.now(UTC).isoformat(),
-                }
-            )
+        payload = _build_recommendation_payload(
+            recommend_date,
+            symbols_info,
+            existing_counts,
+            existing_code_dates,
+        )
 
         if payload:
             # 使用 upsert，基于 (code, recommend_date) 唯一约束：

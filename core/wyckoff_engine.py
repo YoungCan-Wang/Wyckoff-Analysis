@@ -867,8 +867,8 @@ def _rank_and_filter_sectors(
     hot_concepts: list[str] | None,
 ) -> tuple[list[str], list[str]]:
     """从板块 counts 中选出 keep_sectors 和 top_sectors。"""
-    threshold, pass_threshold, strength_threshold, super_threshold, pass_ratio_map = (
-        _compute_sector_thresholds(counts, base_counts, sector_strength_map, cfg)
+    threshold, pass_threshold, strength_threshold, super_threshold, pass_ratio_map = _compute_sector_thresholds(
+        counts, base_counts, sector_strength_map, cfg
     )
     ranked = sorted(counts.items(), key=lambda x: -x[1])
     min_count = max(int(cfg.sector_min_count), 1)
