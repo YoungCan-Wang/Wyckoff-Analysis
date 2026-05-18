@@ -1259,12 +1259,28 @@ def fetch_market_cap_map() -> dict[str, float]:
 
 # --- 概念板块映射（东财 datacenter-web + 同花顺） ---
 
-_CONCEPT_NOISE = frozenset([
-    "昨日涨停", "昨日连板", "注册制次新股", "新股与次新股", "科创次新股",
-    "融资融券", "沪股通", "深股通", "北交所概念", "MSCI概念",
-    "ST板块", "转债标的", "高管增持", "股权激励", "员工持股",
-    "昨日触板", "创业板重组松绑", "送转预期",
-])
+_CONCEPT_NOISE = frozenset(
+    [
+        "昨日涨停",
+        "昨日连板",
+        "注册制次新股",
+        "新股与次新股",
+        "科创次新股",
+        "融资融券",
+        "沪股通",
+        "深股通",
+        "北交所概念",
+        "MSCI概念",
+        "ST板块",
+        "转债标的",
+        "高管增持",
+        "股权激励",
+        "员工持股",
+        "昨日触板",
+        "创业板重组松绑",
+        "送转预期",
+    ]
+)
 
 _CONCEPT_REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 _CONCEPT_REQ_TIMEOUT = 30
@@ -1383,12 +1399,14 @@ def _fetch_concept_heat_from_ths() -> list[dict[str, Any]]:
         name = item.get("platename", "")
         if not name or name in _CONCEPT_NOISE:
             continue
-        items.append({
-            "name": name,
-            "pct": float(item.get("199112", 0)),
-            "net_inflow": float(item.get("zjjlr", 0)),
-            "cid": str(item.get("cid", "")),
-        })
+        items.append(
+            {
+                "name": name,
+                "pct": float(item.get("199112", 0)),
+                "net_inflow": float(item.get("zjjlr", 0)),
+                "cid": str(item.get("cid", "")),
+            }
+        )
     items.sort(key=lambda x: x["pct"], reverse=True)
     return items
 
