@@ -671,7 +671,7 @@ function getLatestRecommendDates(rows: Recommendation[], limit: number): number[
 }
 
 function dedupeRecommendations(rows: Recommendation[]): Recommendation[] {
-  const sortedRows = [...rows].sort((a, b) => b.recommend_date - a.recommend_date)
+  const sortedRows = [...rows].sort((a, b) => a.recommend_date - b.recommend_date)
   const byCode = new Map<number | string, Recommendation>()
   for (const row of sortedRows) {
     const existing = byCode.get(row.code)
