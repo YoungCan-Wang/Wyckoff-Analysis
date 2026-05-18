@@ -88,15 +88,11 @@ def _load_recommendations(recommend_date: int) -> tuple[list[dict], list[str]]:
 
 def _build_external_report(recommend_date: int, symbols_info: list[dict], ai_codes: list[str]) -> str:
     ai_set = set(ai_codes)
-    lines = [
-        f"Supabase复用今日Step3起跳板候选，recommend_date={recommend_date}，候选={', '.join(ai_codes)}。"
-    ]
+    lines = [f"Supabase复用今日Step3起跳板候选，recommend_date={recommend_date}，候选={', '.join(ai_codes)}。"]
     for item in symbols_info:
         if item["code"] not in ai_set:
             continue
-        lines.append(
-            f"- {item['code']} {item['name']} | {item.get('tag') or '-'} | score={item.get('funnel_score')}"
-        )
+        lines.append(f"- {item['code']} {item['name']} | {item.get('tag') or '-'} | score={item.get('funnel_score')}")
     return "\n".join(lines)
 
 

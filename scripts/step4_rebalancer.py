@@ -103,6 +103,7 @@ def _resolve_step4_trade_context() -> tuple[date, TradingWindow, str]:
     window = _resolve_trading_window(end_calendar_day=end_day, trading_days=TRADING_DAYS)
     return end_day, window, window.end_trade_date.isoformat()
 
+
 # --- OMS 防追高与滑点保护配置 ---
 STEP4_MAX_GAP_UP_PCT = float(os.getenv("STEP4_MAX_GAP_UP_PCT", "3.0"))  # 最大允许跳空/追高幅度(%)
 STEP4_MAX_GAP_UP_ATR_MULT = float(os.getenv("STEP4_MAX_GAP_UP_ATR_MULT", "1.5"))  # 最大允许追高 ATR 倍数
