@@ -181,51 +181,6 @@ def _dollar_volume(row: pd.Series) -> float:
     return _safe_float(row.get("close")) * _volume(row)
 
 
-def _candidate_from_slice(
-    code: str,
-    name: str,
-    tail: pd.DataFrame,
-    signal_date: date,
-    entry_date: date,
-) -> SignalCandidate | None:
-    row = tail.iloc[-1]
-    close = _safe_float(row.get("close"))
-    prev_close = _safe_float(tail.iloc[-2].get("close")) if len(tail) >= 2 else 0.0
-    if prev_close <= 0:
-        return None
-    stats = _signal_stats(tail, close, prev_close)
-    triggers, score = _signal_triggers(stats)
-    if not triggers:
-        return None
-    return SignalCandidate(
-        signal_date=signal_date.isoformat(),
-        entry_date=entry_date.isoformat(),
-        code=code,
-        name=name,
-        entry_close=round(close, 4),
-        trigger="+".join(triggers),
-        score=round(score, 4),
-    )
-
-
-def _signal_stats(tail: pd.DataFrame, close: float, prev_close: float) -> dict[str, float]:
-    prev_window = tail.iloc[:-1].tail(20)
-    high_20 = _safe_float(prev_window["high"].max())
-    low_20 = _safe_float(tail.tail(20)["low"].min())
-    vol_mean = _safe_float(prev_window["volume"].mean())
-    vol_ratio = _volume(tail.iloc[-1]) / vol_mean if vol_mean > 0 else 1.0
-    range_width = max(high_20 - low_20, close * 0.01)
-    return {
-        "pct": (close / prev_close - 1.0) * 100.0,
-        "vol_ratio": vol_ratio,
-        "range_pos": (close - low_20) / range_width,
-        "breakout_ratio": close / high_20 if high_20 > 0 else 0.0,
-        "ma20": _safe_float(tail.tail(20)["close"].mean()),
-        "ma50": _safe_float(tail.tail(50)["close"].mean()),
-        "pullback_from_high": (high_20 - close) / high_20 if high_20 > 0 else 0.0,
-    }
-
-
 def _signal_triggers(stats: dict[str, float]) -> tuple[list[str], float]:
     triggers: list[str] = []
     score = stats["pct"] * 1.2 + min(stats["vol_ratio"], 8.0) * 5.0 + stats["range_pos"] * 18.0
@@ -278,6 +233,56 @@ def _is_splitlike_row(row: pd.Series, prev_close: float) -> bool:
     )
 
 
+def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame:
+        return pd.Series(0.0, index=frame.index)
+    return pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+
+
+def _splitlike_mask(open_px: pd.Series, close: pd.Series, prev_close: pd.Series, pct: pd.Series) -> pd.Series:
+    valid = prev_close > 0
+    open_ratio = open_px.where(open_px > 0, prev_close) / prev_close.where(valid, 1.0)
+    close_ratio = close.where(close > 0, prev_close) / prev_close.where(valid, 1.0)
+    return (pct.abs() > MAX_SPLITLIKE_DAILY_PCT) | (
+        valid
+        & (
+            (open_ratio > MAX_SPLITLIKE_PRICE_RATIO)
+            | (close_ratio > MAX_SPLITLIKE_PRICE_RATIO)
+            | (open_ratio < 1.0 / MAX_SPLITLIKE_PRICE_RATIO)
+            | (close_ratio < 1.0 / MAX_SPLITLIKE_PRICE_RATIO)
+        )
+    )
+
+
+def _symbol_feature_frame(candles: pd.DataFrame) -> pd.DataFrame:
+    close = _numeric_series(candles, "close")
+    high = _numeric_series(candles, "high")
+    low = _numeric_series(candles, "low")
+    volume = _numeric_series(candles, "volume")
+    amount = _numeric_series(candles, "amount")
+    prev_close = close.shift(1)
+    high_20 = high.shift(1).rolling(20, min_periods=20).max()
+    low_20 = low.rolling(20, min_periods=20).min()
+    vol_mean = volume.shift(1).rolling(20, min_periods=20).mean()
+    range_width = pd.concat([(high_20 - low_20), close * 0.01], axis=1).max(axis=1)
+    pct = (close / prev_close - 1.0) * 100.0
+    return pd.DataFrame(
+        {
+            "date": candles["date"],
+            "close": close,
+            "pct": pct,
+            "vol_ratio": volume / vol_mean,
+            "range_pos": (close - low_20) / range_width,
+            "breakout_ratio": close / high_20,
+            "ma20": close.rolling(20, min_periods=20).mean(),
+            "ma50": close.rolling(50, min_periods=50).mean(),
+            "pullback_from_high": (high_20 - close) / high_20,
+            "dollar_volume": amount.where(amount > 0, close * volume),
+            "splitlike": _splitlike_mask(_numeric_series(candles, "open"), close, prev_close, pct),
+        }
+    )
+
+
 def _generate_signal_rows(
     hist_map: dict[str, pd.DataFrame],
     name_map: dict[str, str],
@@ -309,27 +314,46 @@ def _collect_symbol_candidates(
     end: date,
     by_day: dict[date, list[SignalCandidate]],
 ) -> None:
-    for pos in range(MIN_LOOKBACK_ROWS - 1, len(candles)):
-        signal_date = candles.iloc[pos]["date"]
-        if not start <= signal_date < end:
-            continue
+    features = _symbol_feature_frame(candles)
+    mask = (
+        (features.index >= MIN_LOOKBACK_ROWS - 1)
+        & (features["date"] >= start)
+        & (features["date"] < end)
+        & features["close"].between(MIN_PRICE, MAX_PRICE)
+        & (features["dollar_volume"] >= MIN_DOLLAR_VOLUME)
+        & ~features["splitlike"]
+    )
+    for _, row in features[mask].dropna().iterrows():
+        signal_date = row["date"]
         entry_date = next_by_date.get(signal_date)
         if entry_date is None or entry_date > end:
             continue
-        row = candles.iloc[pos]
-        prev_close = _safe_float(candles.iloc[pos - 1].get("close")) if pos > 0 else 0.0
-        close = _safe_float(row.get("close"))
-        if (
-            not MIN_PRICE <= close <= MAX_PRICE
-            or prev_close <= 0
-            or _dollar_volume(row) < MIN_DOLLAR_VOLUME
-            or _is_splitlike_row(row, prev_close)
-        ):
-            continue
-        tail = candles.iloc[pos - MIN_LOOKBACK_ROWS + 1 : pos + 1]
-        candidate = _candidate_from_slice(code, name, tail, signal_date, entry_date)
-        if candidate is not None:
-            by_day.setdefault(signal_date, []).append(candidate)
+        stats = _stats_from_feature_row(row)
+        triggers, score = _signal_triggers(stats)
+        if triggers:
+            by_day.setdefault(signal_date, []).append(
+                SignalCandidate(
+                    signal_date=signal_date.isoformat(),
+                    entry_date=entry_date.isoformat(),
+                    code=code,
+                    name=name,
+                    entry_close=round(_safe_float(row["close"]), 4),
+                    trigger="+".join(triggers),
+                    score=round(score, 4),
+                )
+            )
+
+
+def _stats_from_feature_row(row: pd.Series) -> dict[str, float]:
+    return {
+        "pct": _safe_float(row["pct"]),
+        "vol_ratio": _safe_float(row["vol_ratio"]),
+        "range_pos": _safe_float(row["range_pos"]),
+        "breakout_ratio": _safe_float(row["breakout_ratio"]),
+        "ma20": _safe_float(row["ma20"]),
+        "ma50": _safe_float(row["ma50"]),
+        "pullback_from_high": _safe_float(row["pullback_from_high"]),
+    }
 
 
 def _entry(strategy: StrategySpec, candles: pd.DataFrame, idx: int, base_price: float) -> tuple[int, float] | None:
